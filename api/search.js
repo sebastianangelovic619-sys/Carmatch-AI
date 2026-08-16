@@ -120,6 +120,7 @@ Return ONLY valid JSON in this structure:
 
     return res.status(200).json(result);
 
+    
   } catch (error) {
 
     console.error(error);
