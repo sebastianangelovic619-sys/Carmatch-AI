@@ -1,0 +1,336 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f4f5f7;
+  color: #111;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+header {
+  height: 72px;
+  background: #111;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 max(22px, calc((100% - 1180px) / 2));
+}
+
+.brand {
+  font-size: 25px;
+  font-weight: 900;
+  letter-spacing: -1.2px;
+}
+
+.brand span {
+  font-weight: 400;
+}
+
+.brand b {
+  font-size: 14px;
+  margin-left: 4px;
+}
+
+.tagline {
+  font-size: 13px;
+  color: #bbb;
+}
+
+main {
+  max-width: 1180px;
+  margin: auto;
+  padding: 36px 18px 60px;
+}
+
+.hero {
+  padding: 20px 4px 30px;
+}
+
+.eyebrow {
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  color: #666;
+}
+
+.hero h1 {
+  font-size: 52px;
+  line-height: 1.02;
+  margin: 12px 0;
+}
+
+.hero h1 em {
+  font-style: normal;
+  color: #555;
+}
+
+.hero p {
+  max-width: 700px;
+  color: #666;
+  font-size: 17px;
+  line-height: 1.6;
+}
+
+.panel {
+  background: white;
+  border-radius: 24px;
+  padding: 28px;
+  box-shadow: 0 12px 35px #0000000d;
+}
+
+.panel h2 {
+  margin-top: 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 15px;
+}
+
+label {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+small {
+  font-weight: 400;
+  color: #888;
+}
+
+input,
+select {
+  display: block;
+  width: 100%;
+  margin-top: 7px;
+  border: 1px solid #ddd;
+  border-radius: 11px;
+  padding: 13px;
+  background: white;
+  font-size: 15px;
+}
+
+.wide {
+  grid-column: 1 / -1;
+}
+
+.find {
+  width: 100%;
+  margin-top: 18px;
+  border: 0;
+  border-radius: 13px;
+  padding: 15px;
+  background: #111;
+  color: white;
+  font-size: 15px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.find:hover {
+  background: #292929;
+}
+
+.find span {
+  float: right;
+  font-size: 20px;
+}
+
+.title {
+  margin: 38px 0 15px;
+}
+
+.results {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 17px;
+}
+
+.car {
+  background: white;
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 10px 28px #0000000d;
+}
+
+.car-image {
+  width: 100%;
+  height: 210px;
+  object-fit: cover;
+  display: block;
+  background: #e9eaec;
+}
+
+.image-loading {
+  height: 210px;
+  background: #e9eaec;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #777;
+  font-size: 13px;
+}
+
+.body {
+  padding: 18px;
+}
+
+.rank {
+  font-size: 12px;
+  font-weight: 900;
+  color: #777;
+}
+
+.name {
+  font-size: 21px;
+  font-weight: 900;
+  margin: 6px 0;
+}
+
+.year {
+  color: #777;
+  font-size: 13px;
+}
+
+.score {
+  font-size: 29px;
+  font-weight: 900;
+  margin: 10px 0;
+}
+
+.score-label {
+  font-size: 12px;
+  color: #777;
+  font-weight: 700;
+}
+
+.spec {
+  color: #555;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.tag {
+  display: inline-block;
+  padding: 6px 9px;
+  border-radius: 20px;
+  background: #eee;
+  font-size: 11px;
+  margin: 4px 4px 0 0;
+}
+
+.reason {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.pros,
+.cons,
+.maintenance {
+  margin-top: 16px;
+  padding-top: 13px;
+  border-top: 1px solid #eee;
+}
+
+.pros strong {
+  color: #176b32;
+}
+
+.cons strong {
+  color: #9b3030;
+}
+
+.maintenance strong {
+  color: #444;
+}
+
+.pros ul,
+.cons ul {
+  padding-left: 20px;
+  margin-bottom: 0;
+}
+
+.configure {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  background: #111;
+  color: white;
+  padding: 12px;
+  border-radius: 11px;
+  margin-top: 18px;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.configure:hover {
+  background: #333;
+}
+
+.compare {
+  background: white;
+  border-radius: 20px;
+  margin-top: 20px;
+  padding: 20px;
+  overflow-x: auto;
+}
+
+.compare table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.compare th,
+.compare td {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.compare th {
+  font-weight: 900;
+}
+
+.info {
+  background: #fff;
+  border-radius: 18px;
+  padding: 18px;
+  margin-top: 18px;
+  color: #555;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+footer {
+  text-align: center;
+  color: #888;
+  font-size: 12px;
+  padding: 20px;
+}
+
+@media (max-width: 850px) {
+
+  .results {
+    grid-template-columns: 1fr;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wide {
+    grid-column: auto;
+  }
+
+  .hero h1 {
+    font-size: 40px;
+  }
+
+  .tagline {
+    display: none;
+  }
+}
