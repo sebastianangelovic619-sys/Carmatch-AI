@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="sk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CARMATCH AI</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<header>
+  <div class="brand">CAR<span>MATCH</span><b> AI</b></div>
+  <div class="tagline">Auto vybrané podľa teba.</div>
+</header>
+
+<main>
+
+<section class="hero">
+  <div>
+    <div class="eyebrow">INTELIGENTNÝ VÝBER AUTA</div>
+
+    <h1>
+      Nájdi auto, ktoré<br>
+      <em>sedí práve tebe.</em>
+    </h1>
+
+    <p>
+      Zadaj svoje požiadavky. CARMATCH AI porovná dostupné modely
+      a vyberie autá s najvyššou zhodou.
+    </p>
+  </div>
+</section>
+
+<section class="panel">
+
+  <h2>Čo od auta potrebuješ?</h2>
+
+  <div class="grid">
+
+    <label>
+      Rozpočet (€)
+      <input id="budget" type="number" value="100000" min="0">
+    </label>
+
+    <label>
+      Počet miest
+      <input id="seats" type="number" value="5" min="1">
+    </label>
+
+    <label>
+      Min. kufor (l)
+      <input id="trunk" type="number" value="400" min="0">
+    </label>
+
+    <label>
+      Min. výkon (kW)
+      <input id="power" type="number" value="150" min="0">
+    </label>
+
+    <label>
+      Max. dĺžka (m)
+      <input id="length" type="number" value="5" min="0" step="0.01">
+    </label>
+
+    <label>
+      Pohon
+      <select id="drive">
+        <option>Ľubovoľný</option>
+        <option>4x4</option>
+        <option>4x2</option>
+      </select>
+    </label>
+
+    <label>
+      Typ pohonu
+      <select id="fuel">
+        <option>Ľubovoľný</option>
+        <option>Benzín</option>
+        <option>Diesel</option>
+        <option>Hybrid</option>
+        <option>Elektrické</option>
+      </select>
+    </label>
+
+    <label>
+      Karoséria
+      <select id="body">
+        <option>Ľubovoľná</option>
+        <option>SUV</option>
+        <option>Kombi</option>
+        <option>Sedan</option>
+        <option>Hatchback</option>
+        <option>Kupé</option>
+        <option>Roadster</option>
+        <option>Superšport</option>
+      </select>
+    </label>
+
+    <label>
+      Vzhľad
+      <select id="style">
+        <option>Ľubovoľný</option>
+        <option>Športový</option>
+        <option>Elegantný</option>
+        <option>Luxusný</option>
+      </select>
+    </label>
+
+    <label>
+      Rok
+      <select id="year">
+        <option>Najnovší</option>
+        <option>2026</option>
+        <option>2025</option>
+        <option>2024</option>
+      </select>
+    </label>
+
+    <label class="wide">
+      Nechcené značky
+      <small>(napr. BMW, Dacia)</small>
+      <input id="avoid" placeholder="Napíš značky oddelené čiarkou">
+    </label>
+
+  </div>
+
+  <button class="find" onclick="findCars()">
+    NÁJSŤ MOJE AUTO
+    <span>→</span>
+  </button>
+
+</section>
+
+<section id="output"></section>
+
+</main>
+
+<footer>
+  CARMATCH AI — inteligentný výber automobilov
+</footer>
+
+<script src="app.js"></script>
+
+</body>
+</html>
