@@ -5,57 +5,44 @@ export default async function handler(req, res) {
     });
   }
 
+  const apiKey = process.env.OPENROUTER_API_KEY;
+
+  if (!apiKey) {
+    return res.status(500).json({
+      error: "OPENROUTER_API_KEY is missing in Vercel"
+    });
+  }
+
   try {
-    const apiKey = process.env.OPENROUTER_API_KEY;
-
-    if (!apiKey) {
-      return res.status(500).json({
-        error: "OPENROUTER_API_KEY is missing"
-      });
-    }
-
-    const { naturalLanguage, filters } = req.body || {};
+    const body = req.body || {};
+    const naturalLanguage = body.naturalLanguage || "";
+    const filters = body.filters || {};
 
     const prompt = `
-You are CARMATCH AI, an expert worldwide car recommendation assistant.
+You are CARMATCH AI.
 
-User request:
-${naturalLanguage || "No request provided"}
+Your job is to recommend exactly 3 cars that best match the user's requirements.
 
-Filters:
-${JSON.stringify(filters || {}, null, 2)}
+USER REQUEST:
+${naturalLanguage}
 
-Recommend exactly 3 cars that best match the user's requirements.
+FILTERS:
+${JSON.stringify(filters, null, 2)}
 
-Prioritize:
-- worldwide manufacturers
-- newest available generation
-- model years 2026 or 2027 when available
-- correct generation
-- correct model year
-- performance
-- price
-- seats
-- drivetrain
-- practicality
-- maintenance costs
+IMPORTANT:
+- Consider manufacturers from all over the world.
+- Prefer the newest generation available.
+- Prefer model year 2026 or 2027 when actually available.
+- Do not invent a generation or model year.
+- Do not invent specifications.
+- If you are uncertain about a specification, say "unknown".
+- Give practical advantages and disadvantages.
+- Give realistic maintenance information.
+- Give an official manufacturer configurator URL when known.
+- Never pretend that an image URL is a verified photograph.
+- Return exactly 3 cars.
 
-For every car provide:
-- brand
-- model
-- generation
-- model year
-- price
-- power
-- seats
-- drivetrain
-- fuel type
-- advantages
-- disadvantages
-- maintenance information
-- official manufacturer configurator URL
-
-Return ONLY valid JSON:
+Return ONLY valid JSON in this exact structure:
 
 {
   "cars": [
@@ -67,11 +54,12 @@ Return ONLY valid JSON:
       "price": "€100,000",
       "power": "300 kW",
       "seats": 2,
+      "trunk": "unknown",
       "drive": "AWD",
       "fuel": "Petrol",
       "image": "",
       "photoSource": "",
-      "reason": "Why this car matches",
+      "reason": "Why this car matches the request",
       "pros": [
         "Advantage 1",
         "Advantage 2",
@@ -106,7 +94,7 @@ Return ONLY valid JSON:
               content: prompt
             }
           ],
-          temperature: 0.2
+          temperature: 0.1
         })
       }
     );
@@ -116,12 +104,11 @@ Return ONLY valid JSON:
     if (!response.ok) {
       return res.status(response.status).json({
         error: "OpenRouter API error",
-        details: data.error?.message || "Unknown error"
+        details: data.error?.message || "Unknown OpenRouter error"
       });
     }
 
-    const text =
-      data.choices?.[0]?.message?.content || "";
+    const text = data.choices?.[0]?.message?.content || "";
 
     if (!text) {
       return res.status(500).json({
@@ -136,11 +123,11 @@ Return ONLY valid JSON:
     } catch (error) {
       return res.status(500).json({
         error: "AI returned invalid JSON",
-        raw: text
+        details: text.substring(0, 500)
       });
     }
 
-    if (!Array.isArray(parsed.cars)) {
+    if (!parsed.cars || !Array.isArray(parsed.cars)) {
       return res.status(500).json({
         error: "AI response does not contain cars"
       });
