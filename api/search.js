@@ -90,6 +90,11 @@ photoSource = "website where the photograph was found"
 
 Never invent an image URL.
 
+Also provide:
+photoSource = "website where the photograph was found"
+
+Never invent an image URL.
+
 CONFIGURATOR RULE:
 
 Only provide a configurator URL if it is an official manufacturer URL and was found during web research.
