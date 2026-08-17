@@ -17,7 +17,7 @@ export default async function handler(req, res) {
     const { naturalLanguage = "", filters = {} } = req.body || {};
 
     const prompt = `
-You are CARMATCH AI, a professional worldwide automotive recommendation system.
+You are CARMATCH AI, a professional worldwide automotive recommendation assistant.
 
 CURRENT DATE: August 17, 2026.
 
@@ -27,103 +27,37 @@ ${naturalLanguage}
 FILTERS:
 ${JSON.stringify(filters, null, 2)}
 
-TASK:
-Find exactly 3 vehicles that best match the user's requirements.
+Recommend exactly 3 vehicles that best match the user's requirements.
 
-IMPORTANT RULES:
+Rules:
+- Consider manufacturers worldwide.
+- Prefer the newest available generation.
+- Prefer 2026 or 2027 when genuinely available.
+- Never invent specifications.
+- Never invent prices.
+- Never invent model years.
+- Never confuse different generations.
+- Give exactly 3 vehicles.
+- Rank them by how well they match the user's requirements.
+- Give a realistic score from 0 to 100.
+- Include advantages, disadvantages and maintenance information.
+- Include trunk capacity when available.
+- Include dimensions when available.
+- Include an official manufacturer configurator URL ONLY when you know it is valid.
+- Never invent a configurator URL.
+- The entire answer must use the same language as the user's request.
+- Translate all descriptive information into that language.
 
-1. Use web search when current information is needed.
-2. Consider vehicles from manufacturers worldwide.
-3. Prefer the newest generation actually available.
-4. Verify model year before presenting it.
-5. Never confuse an old generation with a new generation.
-6. Prefer model year 2026 or 2027 when genuinely available.
-7. Never invent specifications.
-8. Never invent prices.
-9. Never invent photographs.
-10. Never invent configurator URLs.
-11. If a fact cannot be reliably verified, write "Unknown".
-12. Prefer official manufacturer sources for specifications.
-13. Prefer official manufacturer websites for configurators.
-14. Return exactly 3 vehicles.
-15. Rank them according to how well they satisfy the user's requirements.
-16. Calculate a realistic match score from 0 to 100.
-17. Explain why each vehicle was selected.
-18. Include advantages and disadvantages.
-19. Include maintenance information.
-20. Include trunk capacity when available.
-21. Include dimensions when available.
-22. Include a source list.
-23. The answer MUST use the same language as the user's request.
-24. Translate all user-facing descriptive information into that language.
-25. Keep official model names and URLs unchanged.
-
-PHOTO RULE:
-
-For every vehicle, actively search the web for a high-quality photograph.
-
-The photograph MUST match:
-- exact brand
-- exact model
-- exact generation
-- preferably exact model year
-
-Prefer:
-1. official manufacturer media/gallery pages
-2. official manufacturer press photos
-3. reputable automotive sources
-
-Do NOT use:
-- unrelated vehicles
-- older generations
-- concept cars when recommending the production car
-- random stock photos
-- thumbnails from unrelated pages
-
-The image URL must be a direct, usable image URL if possible.
-
-If you cannot confidently identify a matching photograph, set:
-image = ""
-
-Also provide:
-photoSource = "website where the photograph was found"
-
+IMAGE:
+Provide an image URL when possible.
+Prefer an image corresponding to the exact vehicle model and generation.
+If no reliable image is available, return an empty string.
 Never invent an image URL.
 
-Also provide:
-photoSource = "website where the photograph was found"
-
-Never invent an image URL.
-
-CONFIGURATOR RULE:
-
-Only provide a configurator URL if it is an official manufacturer URL and was found during web research.
-
-Never invent a URL.
-
-If there is no verified configurator:
-configurator = ""
-
-LANGUAGE:
-
-Detect the language automatically.
-
-Slovak → Slovak
-English → English
-Czech → Czech
-German → German
-French → French
-Italian → Italian
-Spanish → Spanish
-Polish → Polish
-Hungarian → Hungarian
-
-Return ONLY valid JSON.
-
-FORMAT:
+Return ONLY valid JSON:
 
 {
-  "language": "sk",
+  "language": "auto",
   "cars": [
     {
       "name": "Brand Model",
@@ -140,7 +74,7 @@ FORMAT:
       "dimensions": "Length × width × height",
       "image": "",
       "photoSource": "",
-      "reason": "Why this vehicle matches",
+      "reason": "Why this vehicle was selected",
       "pros": [
         "Advantage 1",
         "Advantage 2",
@@ -152,13 +86,7 @@ FORMAT:
       ],
       "maintenance": "Maintenance information",
       "manufacturer": "",
-      "configurator": "",
-      "sources": [
-        {
-          "title": "Source title",
-          "url": "https://example.com"
-        }
-      ]
+      "configurator": ""
     }
   ]
 }
@@ -176,25 +104,12 @@ FORMAT:
         },
         body: JSON.stringify({
           model: "openrouter/free",
-
           messages: [
             {
               role: "user",
               content: prompt
             }
           ],
-
-          tools: [
-            {
-              type: "openrouter:web_search",
-              parameters: {
-                max_results: 3,
-                max_total_results: 6,
-                search_context_size: "low"
-              }
-            }
-          ],
-
           temperature: 0.1
         })
       }
@@ -209,7 +124,7 @@ FORMAT:
       });
     }
 
-    const text = data?.choices?.[0]?.message?.content || "";
+    let text = data?.choices?.[0]?.message?.content || "";
 
     if (!text) {
       return res.status(500).json({
@@ -217,10 +132,10 @@ FORMAT:
       });
     }
 
-    let cleaned = text.trim();
+    text = text.trim();
 
-    if (cleaned.startsWith("```")) {
-      cleaned = cleaned
+    if (text.startsWith("```")) {
+      text = text
         .replace(/^```json\s*/i, "")
         .replace(/^```\s*/i, "")
         .replace(/\s*```$/i, "")
@@ -230,11 +145,11 @@ FORMAT:
     let result;
 
     try {
-      result = JSON.parse(cleaned);
+      result = JSON.parse(text);
     } catch {
       return res.status(500).json({
         error: "AI returned invalid JSON",
-        details: cleaned.substring(0, 800)
+        details: text.substring(0, 500)
       });
     }
 
@@ -244,34 +159,37 @@ FORMAT:
       });
     }
 
-    const cars = result.cars.slice(0, 3).map(car => ({
-      name: car.name || "Unknown vehicle",
-      generation: car.generation || "Unknown",
-      year: car.year || "",
-      score: car.score ?? "",
-      price: car.price || "Unknown",
-      power: car.power || "Unknown",
-      seats: car.seats || "Unknown",
-      trunk: car.trunk || "Unknown",
-      drive: car.drive || "Unknown",
-      fuel: car.fuel || "Unknown",
-      body: car.body || "Unknown",
-      dimensions: car.dimensions || "Unknown",
-image:
-  car.image ||
-  `https://loremflickr.com/1200/700/car,${encodeURIComponent(
-    car.name || "car"
-  )}`,
-      photoSource:
-  car.photoSource || "Automaticky vyhľadaná fotografia",
-      reason: car.reason || "",
-      pros: Array.isArray(car.pros) ? car.pros : [],
-      cons: Array.isArray(car.cons) ? car.cons : [],
-      maintenance: car.maintenance || "Unknown",
-      manufacturer: car.manufacturer || "",
-      configurator: car.configurator || "",
-      sources: Array.isArray(car.sources) ? car.sources : []
-    }));
+    const cars = result.cars.slice(0, 3).map(car => {
+      const name = car.name || "Car";
+
+      return {
+        name,
+        generation: car.generation || "Unknown",
+        year: car.year || "",
+        score: car.score ?? "",
+        price: car.price || "Unknown",
+        power: car.power || "Unknown",
+        seats: car.seats || "Unknown",
+        trunk: car.trunk || "Unknown",
+        drive: car.drive || "Unknown",
+        fuel: car.fuel || "Unknown",
+        body: car.body || "Unknown",
+        dimensions: car.dimensions || "Unknown",
+        image:
+          car.image ||
+          `https://loremflickr.com/1200/700/${encodeURIComponent(
+            name
+          )},car`,
+        photoSource:
+          car.photoSource || "Automated vehicle image",
+        reason: car.reason || "",
+        pros: Array.isArray(car.pros) ? car.pros : [],
+        cons: Array.isArray(car.cons) ? car.cons : [],
+        maintenance: car.maintenance || "Unknown",
+        manufacturer: car.manufacturer || "",
+        configurator: car.configurator || ""
+      };
+    });
 
     return res.status(200).json({
       language: result.language || "auto",
@@ -279,7 +197,7 @@ image:
     });
 
   } catch (error) {
-    console.error("CARMATCH BACKEND ERROR:", error);
+    console.error("CARMATCH ERROR:", error);
 
     return res.status(500).json({
       error: "Backend error",
