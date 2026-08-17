@@ -6,48 +6,62 @@ export default async function handler(req, res) {
   }
 
   try {
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = process.env.OPENROUTER_API_KEY;
 
     if (!apiKey) {
       return res.status(500).json({
-        error: "OPENAI_API_KEY is not configured"
+        error: "OPENROUTER_API_KEY is missing"
       });
     }
 
     const { naturalLanguage, filters } = req.body || {};
 
     const prompt = `
-You are CARMATCH AI, an expert worldwide automotive recommendation assistant.
+You are CARMATCH AI, an expert worldwide car recommendation assistant.
 
 User request:
-${naturalLanguage || "No natural-language request provided."}
+${naturalLanguage || "No request provided"}
 
 Filters:
 ${JSON.stringify(filters || {}, null, 2)}
 
-Find the 3 best matching cars.
+Recommend exactly 3 cars that best match the user's requirements.
 
-Consider:
-- cars from manufacturers worldwide
+Prioritize:
+- worldwide manufacturers
 - newest available generation
 - model years 2026 or 2027 when available
-- exact generation and model year
+- correct generation
+- correct model year
+- performance
 - price
-- power
-- number of seats
+- seats
 - drivetrain
 - practicality
-- maintenance
+- maintenance costs
+
+For every car provide:
+- brand
+- model
+- generation
+- model year
+- price
+- power
+- seats
+- drivetrain
+- fuel type
 - advantages
 - disadvantages
+- maintenance information
+- official manufacturer configurator URL
 
-Return ONLY valid JSON in exactly this format:
+Return ONLY valid JSON:
 
 {
   "cars": [
     {
       "name": "Brand Model",
-      "generation": "Generation name",
+      "generation": "Generation",
       "year": 2026,
       "score": 95,
       "price": "€100,000",
@@ -57,7 +71,7 @@ Return ONLY valid JSON in exactly this format:
       "fuel": "Petrol",
       "image": "",
       "photoSource": "",
-      "reason": "Why this car matches the request",
+      "reason": "Why this car matches",
       "pros": [
         "Advantage 1",
         "Advantage 2",
@@ -67,7 +81,7 @@ Return ONLY valid JSON in exactly this format:
         "Disadvantage 1",
         "Disadvantage 2"
       ],
-      "maintenance": "Maintenance and ownership considerations",
+      "maintenance": "Maintenance information",
       "configurator": ""
     }
   ]
@@ -75,16 +89,24 @@ Return ONLY valid JSON in exactly this format:
 `;
 
     const response = await fetch(
-      "https://api.openai.com/v1/responses",
+      "https://openrouter.ai/api/v1/chat/completions",
       {
         method: "POST",
         headers: {
+          "Authorization": `Bearer ${apiKey}`,
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`
+          "HTTP-Referer": "https://carmatch-ai.vercel.app",
+          "X-Title": "CARMATCH AI"
         },
         body: JSON.stringify({
-          model: "gpt-5.6",
-          input: prompt
+          model: "openrouter/free",
+          messages: [
+            {
+              role: "user",
+              content: prompt
+            }
+          ],
+          temperature: 0.2
         })
       }
     );
@@ -92,15 +114,14 @@ Return ONLY valid JSON in exactly this format:
     const data = await response.json();
 
     if (!response.ok) {
-      console.error("OpenAI API error:", data);
-
       return res.status(response.status).json({
-        error: "OpenAI API error",
-        details: data.error?.message || "Unknown OpenAI error"
+        error: "OpenRouter API error",
+        details: data.error?.message || "Unknown error"
       });
     }
 
-    const text = data.output_text || "";
+    const text =
+      data.choices?.[0]?.message?.content || "";
 
     if (!text) {
       return res.status(500).json({
@@ -113,14 +134,13 @@ Return ONLY valid JSON in exactly this format:
     try {
       parsed = JSON.parse(text);
     } catch (error) {
-      console.error("Invalid JSON from AI:", text);
-
       return res.status(500).json({
-        error: "AI returned invalid JSON"
+        error: "AI returned invalid JSON",
+        raw: text
       });
     }
 
-    if (!parsed.cars || !Array.isArray(parsed.cars)) {
+    if (!Array.isArray(parsed.cars)) {
       return res.status(500).json({
         error: "AI response does not contain cars"
       });
@@ -130,14 +150,10 @@ Return ONLY valid JSON in exactly this format:
       cars: parsed.cars.slice(0, 3)
     });
 
-    
   } catch (error) {
-    console.error("Backend error:", error);
-
     return res.status(500).json({
       error: "Backend error",
       message: error.message
     });
   }
 }
-
