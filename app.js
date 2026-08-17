@@ -71,8 +71,9 @@ async function searchCars() {
     });
 
     if (!response.ok) {
-      throw new Error("Backend nie je dostupný.");
-    }
+  const errorText = await response.text();
+  throw new Error(`Backend ${response.status}: ${errorText}`);
+}
 
     const data = await response.json();
 
