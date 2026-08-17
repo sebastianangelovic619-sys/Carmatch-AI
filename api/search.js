@@ -60,12 +60,35 @@ IMPORTANT RULES:
 
 PHOTO RULE:
 
-Only provide an image URL if web research found a photograph that clearly corresponds to the same model and generation.
+For every vehicle, actively search the web for a high-quality photograph.
 
-Do not use an older generation photograph simply because it is easier to find.
+The photograph MUST match:
+- exact brand
+- exact model
+- exact generation
+- preferably exact model year
 
-If an exact photograph cannot be reliably verified:
+Prefer:
+1. official manufacturer media/gallery pages
+2. official manufacturer press photos
+3. reputable automotive sources
+
+Do NOT use:
+- unrelated vehicles
+- older generations
+- concept cars when recommending the production car
+- random stock photos
+- thumbnails from unrelated pages
+
+The image URL must be a direct, usable image URL if possible.
+
+If you cannot confidently identify a matching photograph, set:
 image = ""
+
+Also provide:
+photoSource = "website where the photograph was found"
+
+Never invent an image URL.
 
 CONFIGURATOR RULE:
 
