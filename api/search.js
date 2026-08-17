@@ -257,8 +257,13 @@ FORMAT:
       fuel: car.fuel || "Unknown",
       body: car.body || "Unknown",
       dimensions: car.dimensions || "Unknown",
-      image: car.image || "",
-      photoSource: car.photoSource || "",
+image:
+  car.image ||
+  `https://loremflickr.com/1200/700/car,${encodeURIComponent(
+    car.name || "car"
+  )}`,
+      photoSource:
+  car.photoSource || "Automaticky vyhľadaná fotografia",
       reason: car.reason || "",
       pros: Array.isArray(car.pros) ? car.pros : [],
       cons: Array.isArray(car.cons) ? car.cons : [],
