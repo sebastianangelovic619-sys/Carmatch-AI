@@ -14,16 +14,12 @@ export default async function handler(req, res) {
   }
 
   try {
-    const body = req.body || {};
-
-    const naturalLanguage = body.naturalLanguage || "";
-    const filters = body.filters || {};
+    const { naturalLanguage = "", filters = {} } = req.body || {};
 
     const prompt = `
-You are CARMATCH AI, a worldwide automotive research and recommendation assistant.
+You are CARMATCH AI, a professional worldwide automotive recommendation system.
 
-CURRENT DATE:
-August 17, 2026.
+CURRENT DATE: August 17, 2026.
 
 USER REQUEST:
 ${naturalLanguage}
@@ -31,87 +27,72 @@ ${naturalLanguage}
 FILTERS:
 ${JSON.stringify(filters, null, 2)}
 
-YOUR TASK:
+TASK:
+Find exactly 3 vehicles that best match the user's requirements.
 
-Find the 3 best vehicles matching the user's requirements.
+IMPORTANT RULES:
 
-IMPORTANT:
+1. Use web search when current information is needed.
+2. Consider vehicles from manufacturers worldwide.
+3. Prefer the newest generation actually available.
+4. Verify model year before presenting it.
+5. Never confuse an old generation with a new generation.
+6. Prefer model year 2026 or 2027 when genuinely available.
+7. Never invent specifications.
+8. Never invent prices.
+9. Never invent photographs.
+10. Never invent configurator URLs.
+11. If a fact cannot be reliably verified, write "Unknown".
+12. Prefer official manufacturer sources for specifications.
+13. Prefer official manufacturer websites for configurators.
+14. Return exactly 3 vehicles.
+15. Rank them according to how well they satisfy the user's requirements.
+16. Calculate a realistic match score from 0 to 100.
+17. Explain why each vehicle was selected.
+18. Include advantages and disadvantages.
+19. Include maintenance information.
+20. Include trunk capacity when available.
+21. Include dimensions when available.
+22. Include a source list.
+23. The answer MUST use the same language as the user's request.
+24. Translate all user-facing descriptive information into that language.
+25. Keep official model names and URLs unchanged.
 
-1. Use web search for current information.
-2. Search the web before deciding on the vehicles.
-3. Prefer official manufacturer websites for specifications.
-4. Verify the model year.
-5. Verify the exact generation.
-6. Prefer the newest generation available.
-7. Prefer 2026 or 2027 when actually available.
-8. Never invent a model year.
-9. Never confuse an older generation with a newer generation.
-10. Consider vehicles worldwide.
-11. Compare multiple suitable vehicles before selecting the final 3.
-12. Return exactly 3 vehicles.
-13. The response language MUST be the same language as the user's request.
-14. Translate ALL descriptive information into that language.
-15. Technical names, model names and official URLs may remain in their original form.
-16. Do not invent a photograph URL.
-17. Do not invent a configurator URL.
-18. Only provide a configurator URL if it was found and verified through web research.
-19. If no verified configurator exists, return an empty string.
-20. If an exact photograph cannot be verified, return an empty image URL instead of a random photograph.
-21. Do not present uncertain information as fact.
-22. Give a confidence level for important information.
-23. Give a short explanation of why each vehicle was selected.
+PHOTO RULE:
 
-For each vehicle find, when available:
+Only provide an image URL if web research found a photograph that clearly corresponds to the same model and generation.
 
-- brand
-- model
-- exact generation
-- model year
-- current price
-- power
-- seats
-- trunk capacity
-- drivetrain
-- fuel/powertrain
-- body type
-- approximate dimensions
-- advantages
-- disadvantages
-- maintenance information
-- reason for selection
-- official manufacturer website
-- verified official configurator
-- verified photograph
-- source URLs
+Do not use an older generation photograph simply because it is easier to find.
 
-PHOTO REQUIREMENT:
+If an exact photograph cannot be reliably verified:
+image = ""
 
-The photograph must correspond as closely as possible to:
-brand + model + generation + model year.
+CONFIGURATOR RULE:
 
-Do NOT use an older-generation photograph simply because it is easier to find.
+Only provide a configurator URL if it is an official manufacturer URL and was found during web research.
 
-CONFIGURATOR REQUIREMENT:
+Never invent a URL.
 
-Only return a configurator URL if the page was actually found during web research and appears to be an official manufacturer page.
+If there is no verified configurator:
+configurator = ""
 
-LANGUAGE REQUIREMENT:
+LANGUAGE:
 
-Detect the language of the user's request automatically.
+Detect the language automatically.
 
-If the user writes Slovak, answer in Slovak.
-If the user writes English, answer in English.
-If the user writes Czech, answer in Czech.
-If the user writes German, answer in German.
-If the user writes Italian, answer in Italian.
-If the user writes French, answer in French.
-If the user writes Spanish, answer in Spanish.
-
-The entire user-facing description must use that language.
+Slovak → Slovak
+English → English
+Czech → Czech
+German → German
+French → French
+Italian → Italian
+Spanish → Spanish
+Polish → Polish
+Hungarian → Hungarian
 
 Return ONLY valid JSON.
 
-Use exactly this structure:
+FORMAT:
 
 {
   "language": "sk",
@@ -123,15 +104,15 @@ Use exactly this structure:
       "score": 95,
       "price": "€100,000",
       "power": "300 kW",
-      "seats": 2,
-      "trunk": "400 l",
+      "seats": 5,
+      "trunk": "500 l",
       "drive": "AWD",
       "fuel": "Petrol",
-      "body": "Coupe",
-      "dimensions": "Length information",
+      "body": "SUV",
+      "dimensions": "Length × width × height",
       "image": "",
       "photoSource": "",
-      "reason": "Why this vehicle was selected",
+      "reason": "Why this vehicle matches",
       "pros": [
         "Advantage 1",
         "Advantage 2",
@@ -175,6 +156,16 @@ Use exactly this structure:
             }
           ],
 
+          tools: [
+            {
+              type: "openrouter:web_search",
+              parameters: {
+                max_results: 3,
+                max_total_results: 6,
+                search_context_size: "low"
+              }
+            }
+          ],
 
           temperature: 0.1
         })
@@ -186,15 +177,11 @@ Use exactly this structure:
     if (!response.ok) {
       return res.status(response.status).json({
         error: "OpenRouter API error",
-        details:
-          data?.error?.message ||
-          data?.error ||
-          "Unknown OpenRouter error"
+        details: data?.error?.message || "Unknown OpenRouter error"
       });
     }
 
-    const text =
-      data?.choices?.[0]?.message?.content || "";
+    const text = data?.choices?.[0]?.message?.content || "";
 
     if (!text) {
       return res.status(500).json({
@@ -202,34 +189,34 @@ Use exactly this structure:
       });
     }
 
-    let cleanedText = text.trim();
+    let cleaned = text.trim();
 
-    if (cleanedText.startsWith("```")) {
-      cleanedText = cleanedText
+    if (cleaned.startsWith("```")) {
+      cleaned = cleaned
         .replace(/^```json\s*/i, "")
         .replace(/^```\s*/i, "")
         .replace(/\s*```$/i, "")
         .trim();
     }
 
-    let parsed;
+    let result;
 
     try {
-      parsed = JSON.parse(cleanedText);
-    } catch (error) {
+      result = JSON.parse(cleaned);
+    } catch {
       return res.status(500).json({
         error: "AI returned invalid JSON",
-        details: cleanedText.substring(0, 1000)
+        details: cleaned.substring(0, 800)
       });
     }
 
-    if (!parsed || !Array.isArray(parsed.cars)) {
+    if (!result || !Array.isArray(result.cars)) {
       return res.status(500).json({
         error: "AI response does not contain cars"
       });
     }
 
-    const cars = parsed.cars.slice(0, 3).map(car => ({
+    const cars = result.cars.slice(0, 3).map(car => ({
       name: car.name || "Unknown vehicle",
       generation: car.generation || "Unknown",
       year: car.year || "",
@@ -254,11 +241,13 @@ Use exactly this structure:
     }));
 
     return res.status(200).json({
-      language: parsed.language || "auto",
+      language: result.language || "auto",
       cars
     });
 
   } catch (error) {
+    console.error("CARMATCH BACKEND ERROR:", error);
+
     return res.status(500).json({
       error: "Backend error",
       message: error.message
