@@ -175,14 +175,6 @@ Use exactly this structure:
             }
           ],
 
-          tools: [
-            {
-              type: "openrouter:web_search",
-              parameters: {
-                max_results: 8
-              }
-            }
-          ],
 
           temperature: 0.1
         })
