@@ -130,6 +130,7 @@ Return ONLY valid JSON in exactly this format:
       cars: parsed.cars.slice(0, 3)
     });
 
+    
   } catch (error) {
     console.error("Backend error:", error);
 
