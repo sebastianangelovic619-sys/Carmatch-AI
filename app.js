@@ -7,7 +7,8 @@ const resultsBox = document.getElementById("results");
 button.addEventListener("click", searchCars);
 
 function value(id) {
-  return document.getElementById(id).value.trim();
+  const element = document.getElementById(id);
+  return element ? element.value.trim() : "";
 }
 
 function collectRequest() {
@@ -28,18 +29,7 @@ function collectRequest() {
       avoidBrands: value("avoid")
     },
 
-    resultCount: 3,
-
-    requirements: [
-      "Use current vehicle information.",
-      "Prefer the newest available generation.",
-      "The photograph must match the exact generation/model year.",
-      "Use high-quality vehicle photographs.",
-      "Consider vehicles worldwide.",
-      "Return exactly three best matches.",
-      "Prefer official manufacturer information for specifications.",
-      "Provide an official manufacturer configurator when available."
-    ]
+    resultCount: 3
   };
 }
 
@@ -56,9 +46,9 @@ async function searchCars() {
   }
 
   button.disabled = true;
-  button.textContent = "🤖 AI HĽADÁ NAJLEPŠIE AUTÁ...";
+  button.textContent = "🤖 AI VYBERÁ NAJLEPŠIE AUTÁ...";
   statusBox.textContent =
-    "Vyhodnocujem požiadavky a hľadám aktuálne vozidlá…";
+    "AI vyhodnocuje tvoje požiadavky…";
   resultsBox.innerHTML = "";
 
   try {
@@ -70,12 +60,21 @@ async function searchCars() {
       body: JSON.stringify(request)
     });
 
-    if (!response.ok) {
-  const errorText = await response.text();
-  throw new Error(`Backend ${response.status}: ${errorText}`);
-}
+    const responseText = await response.text();
 
-    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(
+        `Backend ${response.status}: ${responseText}`
+      );
+    }
+
+    let data;
+
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      throw new Error("Backend vrátil neplatnú odpoveď.");
+    }
 
     if (!data.cars || !Array.isArray(data.cars)) {
       throw new Error("AI nevrátila platné výsledky.");
@@ -87,19 +86,16 @@ async function searchCars() {
       "Hotovo — AI vybrala 3 najvhodnejšie vozidlá.";
 
   } catch (error) {
+    console.error(error);
 
-  statusBox.textContent =
-    error.message;
+    statusBox.textContent = error.message;
 
     resultsBox.innerHTML = `
       <div class="info">
-        <strong>CARMATCH AI je pripravený.</strong><br><br>
-        Frontend je pripravený na skutočné AI
-        vyhľadávanie. Ďalším krokom je pripojenie
-        bezpečného backendu a webového vyhľadávania.
+        <strong>CARMATCH AI sa nepodarilo dokončiť vyhľadávanie.</strong><br><br>
+        ${escapeHTML(error.message)}
       </div>
     `;
-
   } finally {
     button.disabled = false;
     button.innerHTML =
@@ -120,14 +116,13 @@ function renderResults(cars) {
 }
 
 function createCard(car, index) {
-
   const pros = Array.isArray(car.pros)
     ? car.pros.map(x => `<li>${escapeHTML(x)}</li>`).join("")
-    : "<li>Údaje doplní AI.</li>";
+    : "<li>Údaj nie je dostupný.</li>";
 
   const cons = Array.isArray(car.cons)
     ? car.cons.map(x => `<li>${escapeHTML(x)}</li>`).join("")
-    : "<li>Údaje doplní AI.</li>";
+    : "<li>Údaj nie je dostupný.</li>";
 
   const image =
     car.image ||
@@ -141,6 +136,7 @@ function createCard(car, index) {
         src="${escapeAttribute(image)}"
         alt="${escapeAttribute(car.name || "Automobil")}"
         loading="lazy"
+        onerror="this.src='https://placehold.co/1200x700/e9eaec/555?text=Car'"
       >
 
       <div class="car-body">
@@ -155,7 +151,12 @@ function createCard(car, index) {
 
         <div class="generation">
           ${escapeHTML(car.generation || "")}
-          ${car.year ? " · modelový rok " + escapeHTML(String(car.year)) : ""}
+          ${
+            car.year
+              ? " · modelový rok " +
+                escapeHTML(String(car.year))
+              : ""
+          }
         </div>
 
         <div class="score">
@@ -165,7 +166,7 @@ function createCard(car, index) {
         <div class="specs">
           💰 Cena: ${escapeHTML(car.price || "—")}<br>
           ⚡ Výkon: ${escapeHTML(car.power || "—")}<br>
-          🪑 Miesta: ${escapeHTML(car.seats || "—")}<br>
+          🪑 Miesta: ${escapeHTML(String(car.seats || "—"))}<br>
           🧳 Kufor: ${escapeHTML(car.trunk || "—")}<br>
           🚗 Pohon: ${escapeHTML(car.drive || "—")}<br>
           🔋 Palivo: ${escapeHTML(car.fuel || "—")}
@@ -173,7 +174,9 @@ function createCard(car, index) {
 
         <div class="section">
           <strong>🤖 Prečo ho AI vybrala</strong>
-          ${escapeHTML(car.reason || "AI doplní vysvetlenie.")}
+          ${escapeHTML(
+            car.reason || "Vysvetlenie nie je dostupné."
+          )}
         </div>
 
         <div class="section pros">
@@ -188,12 +191,16 @@ function createCard(car, index) {
 
         <div class="section">
           <strong>🔧 Údržba</strong>
-          ${escapeHTML(car.maintenance || "Údaje nie sú dostupné.")}
+          ${escapeHTML(
+            car.maintenance || "Údaj nie je dostupný."
+          )}
         </div>
 
         <div class="section">
-          <strong>📸 Fotografia</strong>
-          ${escapeHTML(car.photoSource || "Aktuálny zdroj fotografie")}
+          <strong>📸 Zdroj fotografie</strong>
+          ${escapeHTML(
+            car.photoSource || "Automatický zdroj"
+          )}
         </div>
 
         ${
