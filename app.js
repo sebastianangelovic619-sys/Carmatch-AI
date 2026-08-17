@@ -88,8 +88,8 @@ async function searchCars() {
 
   } catch (error) {
 
-    statusBox.textContent =
-      "AI backend zatiaľ nie je pripojený.";
+  statusBox.textContent =
+    error.message;
 
     resultsBox.innerHTML = `
       <div class="info">
