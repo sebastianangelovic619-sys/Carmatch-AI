@@ -160,7 +160,7 @@ Return ONLY valid JSON:
 
     // Find a suitable image on Wikimedia Commons
     async function findCarImage(car) {
-      const search = `${car.name} ${car.generation || ""} car`;
+      const search = `${car.name} ${car.generation || ""}`;
 
       const url =
         "https://commons.wikimedia.org/w/api.php?" +
