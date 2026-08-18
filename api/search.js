@@ -19,7 +19,7 @@ export default async function handler(req, res) {
     const prompt = `
 You are CARMATCH AI, a professional worldwide automotive recommendation assistant.
 
-CURRENT DATE: August 17, 2026.
+CURRENT DATE: August 18, 2026.
 
 USER REQUEST:
 ${naturalLanguage}
@@ -48,11 +48,10 @@ Rules:
 - The entire answer must use the same language as the user's request.
 - Translate all descriptive information into that language.
 
-IMAGE:
-Provide an image URL when possible.
-Prefer an image corresponding to the exact vehicle model and generation.
-If no reliable image is available, return an empty string.
-Never invent an image URL.
+IMPORTANT IMAGE RULE:
+Do NOT generate or invent an image URL.
+Return image as an empty string.
+The application will find the image separately.
 
 Return ONLY valid JSON:
 
@@ -99,7 +98,7 @@ Return ONLY valid JSON:
         headers: {
           "Authorization": `Bearer ${apiKey}`,
           "Content-Type": "application/json",
-          "HTTP-Referer": "https://carmatch-ai.vercel.app",
+          "HTTP-Referer": "https://carmatchai.vercel.app",
           "X-Title": "CARMATCH AI"
         },
         body: JSON.stringify({
@@ -159,37 +158,115 @@ Return ONLY valid JSON:
       });
     }
 
-    const cars = result.cars.slice(0, 3).map(car => {
-      const name = car.name || "Car";
+    // Find a suitable image on Wikimedia Commons
+    async function findCarImage(car) {
+      const search = `${car.name} ${car.generation || ""} car`;
 
-      return {
-        name,
-        generation: car.generation || "Unknown",
-        year: car.year || "",
-        score: car.score ?? "",
-        price: car.price || "Unknown",
-        power: car.power || "Unknown",
-        seats: car.seats || "Unknown",
-        trunk: car.trunk || "Unknown",
-        drive: car.drive || "Unknown",
-        fuel: car.fuel || "Unknown",
-        body: car.body || "Unknown",
-        dimensions: car.dimensions || "Unknown",
-        image:
-          car.image ||
-          `https://loremflickr.com/1200/700/${encodeURIComponent(
-            name
-          )},car`,
-        photoSource:
-          car.photoSource || "Automated vehicle image",
-        reason: car.reason || "",
-        pros: Array.isArray(car.pros) ? car.pros : [],
-        cons: Array.isArray(car.cons) ? car.cons : [],
-        maintenance: car.maintenance || "Unknown",
-        manufacturer: car.manufacturer || "",
-        configurator: car.configurator || ""
-      };
-    });
+      const url =
+        "https://commons.wikimedia.org/w/api.php?" +
+        new URLSearchParams({
+          action: "query",
+          generator: "search",
+          gsrsearch: search,
+          gsrnamespace: "6",
+          gsrlimit: "5",
+          prop: "imageinfo",
+          iiprop: "url|extmetadata",
+          iiurlwidth: "1200",
+          format: "json",
+          origin: "*"
+        });
+
+      try {
+        const response = await fetch(url);
+
+        if (!response.ok) {
+          return {
+            image: "",
+            photoSource: ""
+          };
+        }
+
+        const data = await response.json();
+        const pages = Object.values(data?.query?.pages || {});
+
+        for (const page of pages) {
+          const info = page?.imageinfo?.[0];
+
+          if (!info?.thumburl && !info?.url) {
+            continue;
+          }
+
+          const title = (page.title || "").toLowerCase();
+
+          // Prefer actual image files rather than logos/icons.
+          if (
+            title.includes("logo") ||
+            title.includes("emblem") ||
+            title.includes("icon")
+          ) {
+            continue;
+          }
+
+          const author =
+            info.extmetadata?.Artist?.value ||
+            info.extmetadata?.Credit?.value ||
+            "";
+
+          const license =
+            info.extmetadata?.LicenseShortName?.value ||
+            "";
+
+          return {
+            image: info.thumburl || info.url,
+            photoSource: `Wikimedia Commons${author ? ` — ${author}` : ""}${
+              license ? ` — ${license}` : ""
+            }`
+          };
+        }
+
+        return {
+          image: "",
+          photoSource: ""
+        };
+      } catch {
+        return {
+          image: "",
+          photoSource: ""
+        };
+      }
+    }
+
+    const cars = await Promise.all(
+      result.cars.slice(0, 3).map(async car => {
+        const name = car.name || "Car";
+
+        const photo = await findCarImage(car);
+
+        return {
+          name,
+          generation: car.generation || "Unknown",
+          year: car.year || "",
+          score: car.score ?? "",
+          price: car.price || "Unknown",
+          power: car.power || "Unknown",
+          seats: car.seats || "Unknown",
+          trunk: car.trunk || "Unknown",
+          drive: car.drive || "Unknown",
+          fuel: car.fuel || "Unknown",
+          body: car.body || "Unknown",
+          dimensions: car.dimensions || "Unknown",
+          image: photo.image,
+          photoSource: photo.photoSource,
+          reason: car.reason || "",
+          pros: Array.isArray(car.pros) ? car.pros : [],
+          cons: Array.isArray(car.cons) ? car.cons : [],
+          maintenance: car.maintenance || "Unknown",
+          manufacturer: car.manufacturer || "",
+          configurator: car.configurator || ""
+        };
+      })
+    );
 
     return res.status(200).json({
       language: result.language || "auto",
