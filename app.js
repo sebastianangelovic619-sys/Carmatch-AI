@@ -84,6 +84,53 @@ async function searchCars() {
 
     statusBox.textContent =
       "Hotovo — AI vybrala 3 najvhodnejšie vozidlá.";
+// 🔔 Oznámenie o dokončení vyhľadávania
+try {
+  // 📳 Krátka vibrácia na podporovaných telefónoch
+  if ("vibrate" in navigator) {
+    navigator.vibrate([150, 80, 150]);
+  }
+
+  // 🔊 Krátky zvuk
+  const audioContext = new (
+    window.AudioContext || window.webkitAudioContext
+  )();
+
+  const oscillator = audioContext.createOscillator();
+  const gainNode = audioContext.createGain();
+
+  oscillator.type = "sine";
+  oscillator.frequency.setValueAtTime(
+    880,
+    audioContext.currentTime
+  );
+
+  gainNode.gain.setValueAtTime(
+    0.001,
+    audioContext.currentTime
+  );
+
+  gainNode.gain.exponentialRampToValueAtTime(
+    0.15,
+    audioContext.currentTime + 0.02
+  );
+
+  gainNode.gain.exponentialRampToValueAtTime(
+    0.001,
+    audioContext.currentTime + 0.35
+  );
+
+  oscillator.connect(gainNode);
+  gainNode.connect(audioContext.destination);
+
+  oscillator.start();
+  oscillator.stop(audioContext.currentTime + 0.35);
+
+} catch (notificationError) {
+  console.log(
+    "Zvuk alebo vibrácia nie sú na tomto zariadení dostupné."
+  );
+}    
 
   } catch (error) {
     console.error(error);
