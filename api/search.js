@@ -102,7 +102,7 @@ Return ONLY valid JSON:
           "X-Title": "CARMATCH AI"
         },
         body: JSON.stringify({
-          model: "openrouter/free",
+          model: "openai/gpt-oss-20b:free",
           messages: [
             {
               role: "user",
