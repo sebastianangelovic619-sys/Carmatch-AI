@@ -31,12 +31,6 @@ export default async function handler(req, res) {
 
     const userText = String(naturalLanguage || "").trim();
 
-    /*
-      -------------------------------------------------------
-      LANGUAGE / MARKET
-      -------------------------------------------------------
-    */
-
     function detectLanguage(text) {
       const t = text.toLowerCase();
 
@@ -47,39 +41,27 @@ export default async function handler(req, res) {
         return "sk";
       }
 
-      if (
-        /\b(chciałbym|samochód|potrzebuję|cena|napęd)\b/.test(t)
-      ) {
+      if (/\b(chciałbym|samochód|potrzebuję|cena|napęd)\b/.test(t)) {
         return "pl";
       }
 
-      if (
-        /\b(chci|potřebuji|auto|vůz|cena|výkon)\b/.test(t)
-      ) {
+      if (/\b(chci|potřebuji|auto|vůz|cena|výkon)\b/.test(t)) {
         return "cs";
       }
 
-      if (
-        /\b(ich|möchte|brauche|preis|leistung|auto)\b/.test(t)
-      ) {
+      if (/\b(ich|möchte|brauche|preis|leistung|auto)\b/.test(t)) {
         return "de";
       }
 
-      if (
-        /\b(je|voiture|prix|besoin|puissance)\b/.test(t)
-      ) {
+      if (/\b(je|voiture|prix|besoin|puissance)\b/.test(t)) {
         return "fr";
       }
 
-      if (
-        /\b(voglio|auto|prezzo|potenza|bisogno)\b/.test(t)
-      ) {
+      if (/\b(voglio|auto|prezzo|potenza|bisogno)\b/.test(t)) {
         return "it";
       }
 
-      if (
-        /\b(quiero|coche|precio|potencia|necesito)\b/.test(t)
-      ) {
+      if (/\b(quiero|coche|precio|potencia|necesito)\b/.test(t)) {
         return "es";
       }
 
@@ -101,12 +83,6 @@ export default async function handler(req, res) {
 
     const market = marketMap[language] || "International market";
 
-    /*
-      -------------------------------------------------------
-      AI PROMPT
-      -------------------------------------------------------
-    */
-
     const prompt = `
 You are CARMATCH AI, a professional worldwide automotive recommendation assistant.
 
@@ -124,84 +100,48 @@ ${userText}
 FILTERS:
 ${JSON.stringify(filters, null, 2)}
 
-Your task:
-
 Select EXACTLY 3 vehicles that best match the user's requirements.
 
 IMPORTANT RULES:
 
 1. Consider manufacturers worldwide.
 2. Prefer the newest genuinely available generation.
-3. Never confuse generations.
+3. Never confuse different generations.
 4. Never invent specifications.
 5. Never invent model years.
 6. Never invent prices.
-7. Never claim that a price is verified unless you actually have a reliable source.
-8. If the exact manufacturer's price is not known, use:
-   "Cena neoverená"
-9. Do NOT use approximate prices such as:
-   "around €80,000"
-   "approximately €80,000"
-   "about €80,000"
-10. Adapt the market to the user's language.
-11. Adapt currency and market information to the user's market when possible.
-12. Give exactly 3 vehicles.
-13. Rank them from #1 to #3.
-14. Score them from 0 to 100.
-15. Include advantages and disadvantages.
-16. Include maintenance information.
-17. Include trunk capacity when genuinely known.
-18. Include dimensions when genuinely known.
-19. Include the official manufacturer name.
-20. Include an official manufacturer configurator URL ONLY if you genuinely know it.
-21. Never invent URLs.
-22. Do NOT generate image URLs.
-23. Images will be searched separately by the backend.
-24. Return ONLY valid JSON.
-25. All text must be written in the user's language.
+7. Never invent URLs.
+8. Adapt all text to the user's language.
+9. Adapt market and currency to the user's market.
+10. Return exactly 3 vehicles.
+11. Rank them from #1 to #3.
+12. Score them from 0 to 100.
+13. Include advantages and disadvantages.
+14. Include maintenance information.
+15. Include trunk capacity when genuinely known.
+16. Include dimensions when genuinely known.
+17. Include the official manufacturer name.
+18. Include an official manufacturer configurator URL ONLY when genuinely known.
+19. Do not generate image URLs.
+20. Images are searched separately by the backend.
+21. Return ONLY valid JSON.
+22. Do not return markdown.
+23. Do not return explanations outside JSON.
 
-PRICE RULE:
+PRICE RULES:
 
-Always provide a price when a reliable current starting price is known.
-
-Use the manufacturer's officially published starting price whenever possible.
-
-IMPORTANT:
-- Do NOT invent a price.
-- Do NOT use an approximate price.
-- Do NOT use "around", "approximately", "about", or similar estimates.
-- Distinguish clearly between "starting price" and the price of a configured vehicle.
-- If only a starting price is known, explicitly label it as a starting price.
+- Never invent a price.
+- Never use approximate prices.
+- Never use "around", "approximately", "about" or similar estimates.
+- Prefer an officially published manufacturer starting price.
+- Clearly distinguish starting price from configured vehicle price.
 - Use the currency appropriate for the selected market.
-- Prefer the official manufacturer's price for the selected market.
-- If an exact official price is known, set priceVerified to true.
-- If the price is known but cannot be confidently verified from the manufacturer, set priceVerified to false but still provide the known price and clearly state that it requires verification.
-- Never replace a known price with "Cena neoverená".
-- If no reliable price is known at all, use "Cena nie je dostupná".
+- If a reliable official price is known, provide it.
+- If a price is known but cannot be confidently verified, provide it with priceVerified false.
+- If no reliable price is known, use "Cena nie je dostupná".
+- Never pretend that an unverified price is verified.
 
-Examples:
-
-"price": "84 990 €",
-"priceVerified": true,
-"priceSource": "Oficiálny cenník výrobcu",
-"priceType": "starting_price"
-
-OR
-
-"price": "84 990 €",
-"priceVerified": false,
-"priceSource": "Cena vyžaduje overenie",
-"priceType": "starting_price"
-
-OR, only when no reliable price is available:
-
-"price": "Cena nie je dostupná",
-"priceVerified": false,
-"priceSource": "",
-"priceType": "unknown"
-
-Never invent a price simply to fill the field.
-Return this exact structure:
+Return exactly this JSON structure:
 
 {
   "language": "${language}",
@@ -212,9 +152,10 @@ Return this exact structure:
       "generation": "Exact generation",
       "year": 2026,
       "score": 95,
-      "price": "Cena neoverená",
+      "price": "84 990 €",
       "priceVerified": false,
       "priceSource": "",
+      "priceType": "starting_price",
       "power": "300 kW",
       "seats": 5,
       "trunk": "500 l",
@@ -222,7 +163,7 @@ Return this exact structure:
       "fuel": "Petrol",
       "body": "SUV",
       "dimensions": "Length × width × height",
-      "reason": "Why this vehicle was selected",
+      "reason": "Explanation in user's language",
       "pros": [
         "Advantage 1",
         "Advantage 2",
@@ -240,12 +181,6 @@ Return this exact structure:
 }
 `;
 
-    /*
-      -------------------------------------------------------
-      OPENROUTER
-      -------------------------------------------------------
-    */
-
     const requestTimeout = timeout(22000);
 
     let response;
@@ -262,22 +197,21 @@ Return this exact structure:
             "HTTP-Referer": "https://carmatchai.vercel.app",
             "X-Title": "CARMATCH AI"
           },
-        body: JSON.stringify({
-  model: "openrouter/free",
-  messages: [
-    {
-      role: "system",
-      content:
-        "Return ONLY valid JSON. Never return explanations, safety labels, markdown or plain text."
-    },
-    {
-      role: "user",
-      content: prompt
-    }
-  ],
-  temperature: 0.1,
-  max_tokens: 3500
-})
+          body: JSON.stringify({
+            model: "openrouter/free",
+            messages: [
+              {
+                role: "system",
+                content:
+                  "Return ONLY valid JSON. Never return markdown, explanations, safety labels or plain text outside JSON."
+              },
+              {
+                role: "user",
+                content: prompt
+              }
+            ],
+            temperature: 0.1,
+            max_tokens: 3500
           })
         }
       );
@@ -306,301 +240,16 @@ Return this exact structure:
       });
     }
 
-    if (
-  text.trim().toLowerCase() === "user safety: safe"
-) {
-  return res.status(502).json({
-    error: "AI returned a safety status instead of vehicle data"
-  });
-}
+    let text =
+      data?.choices?.[0]?.message?.content || "";
+
+    text = String(text).trim();
 
     if (!text) {
-      return res.status(500).json({
+      return res.status(502).json({
         error: "AI returned an empty response"
       });
     }
 
-    text = String(text).trim();
-
-    /*
-      -------------------------------------------------------
-      CLEAN JSON
-      -------------------------------------------------------
-    */
-
-    if (text.startsWith("```")) {
-      text = text
-        .replace(/^```json\s*/i, "")
-        .replace(/^```\s*/i, "")
-        .replace(/\s*```$/i, "")
-        .trim();
-    }
-
-    let result;
-
-    try {
-      result = JSON.parse(text);
-    } catch (error) {
-      console.error("INVALID AI JSON:", text);
-
-      return res.status(500).json({
-        error: "AI returned invalid JSON",
-        details: text.substring(0, 500)
-      });
-    }
-
     if (
-      !result ||
-      !Array.isArray(result.cars) ||
-      result.cars.length < 3
-    ) {
-      return res.status(500).json({
-        error: "AI response does not contain 3 cars"
-      });
-    }
-
-    /*
-      -------------------------------------------------------
-      WIKIMEDIA IMAGE SEARCH
-      -------------------------------------------------------
-    */
-
-    async function searchWikimedia(query) {
-      const url =
-        "https://commons.wikimedia.org/w/api.php?" +
-        new URLSearchParams({
-          action: "query",
-          generator: "search",
-          gsrsearch: query,
-          gsrnamespace: "6",
-          gsrlimit: "8",
-          prop: "imageinfo",
-          iiprop: "url|extmetadata",
-          iiurlwidth: "1200",
-          format: "json",
-          origin: "*"
-        });
-
-      const controller = timeout(5000);
-
-      try {
-        const response = await fetch(url, {
-          signal: controller.signal
-        });
-
-        if (!response.ok) {
-          return null;
-        }
-
-        const data = await response.json();
-
-        const pages =
-          Object.values(
-            data?.query?.pages || {}
-          );
-
-        for (const page of pages) {
-          const info =
-            page?.imageinfo?.[0];
-
-          if (!info) continue;
-
-          const image =
-            info.thumburl || info.url;
-
-          if (!image) continue;
-
-          const title =
-            String(page.title || "").toLowerCase();
-
-          /*
-            Reject logos/icons and obviously irrelevant files.
-          */
-
-          if (
-            title.includes("logo") ||
-            title.includes("emblem") ||
-            title.includes("icon") ||
-            title.includes("badge") ||
-            title.includes("symbol")
-          ) {
-            continue;
-          }
-
-          return {
-            image,
-            photoSource: "Wikimedia Commons"
-          };
-        }
-
-        return null;
-      } catch {
-        return null;
-      } finally {
-        controller.clear();
-      }
-    }
-
-    async function findCarImage(car) {
-      const name =
-        String(car.name || "").trim();
-
-      const generation =
-        String(car.generation || "").trim();
-
-      /*
-        Several searches are attempted.
-        This greatly improves the chance of finding
-        an actual vehicle photograph.
-      */
-
-      const queries = [
-        `${name} ${generation}`,
-        `${name} ${generation} automobile`,
-        `${name} car`,
-        `${name} vehicle`
-      ];
-
-      for (const query of queries) {
-        const result =
-          await searchWikimedia(query);
-
-        if (result?.image) {
-          return result;
-        }
-      }
-
-      return {
-        image: "",
-        photoSource: ""
-      };
-    }
-
-    /*
-      Search all 3 images in parallel.
-      This is important for speed.
-    */
-
-    const photoResults =
-      await Promise.all(
-        result.cars
-          .slice(0, 3)
-          .map(car => findCarImage(car))
-      );
-
-    /*
-      -------------------------------------------------------
-      FINAL RESULT
-      -------------------------------------------------------
-    */
-
-    const cars =
-      result.cars
-        .slice(0, 3)
-        .map((car, index) => {
-
-          const photo =
-            photoResults[index] || {};
-
-          return {
-            name:
-              car.name || "Neznáme auto",
-
-            generation:
-              car.generation || "Neznáma generácia",
-
-            year:
-              car.year || "",
-
-            score:
-              car.score ?? "",
-
-            price:
-  car.price || "Cena nie je dostupná",
-
-priceVerified:
-  car.priceVerified === true,
-
-priceSource:
-  car.priceSource || "",
-
-priceType:
-  car.priceType || "unknown",
-
-            power:
-              car.power || "Údaj nie je dostupný",
-
-            seats:
-              car.seats ?? "Údaj nie je dostupný",
-
-            trunk:
-              car.trunk || "Údaj nie je dostupný",
-
-            drive:
-              car.drive || "Údaj nie je dostupný",
-
-            fuel:
-              car.fuel || "Údaj nie je dostupný",
-
-            body:
-              car.body || "Údaj nie je dostupný",
-
-            dimensions:
-              car.dimensions ||
-              "Údaj nie je dostupný",
-
-            image:
-              photo.image || "",
-
-            photoSource:
-              photo.photoSource || "",
-
-            reason:
-              car.reason || "",
-
-            pros:
-              Array.isArray(car.pros)
-                ? car.pros.slice(0, 4)
-                : [],
-
-            cons:
-              Array.isArray(car.cons)
-                ? car.cons.slice(0, 4)
-                : [],
-
-            maintenance:
-              car.maintenance ||
-              "Údaj nie je dostupný",
-
-            manufacturer:
-              car.manufacturer || "",
-
-            configurator:
-              car.configurator || ""
-          };
-        });
-
-    return res.status(200).json({
-      language:
-        result.language || language,
-
-      market:
-        result.market || market,
-
-      cars
-    });
-
-  } catch (error) {
-    console.error(
-      "CARMATCH ERROR:",
-      error
-    );
-
-    return res.status(500).json({
-      error: "Backend error",
-      message:
-        error?.message ||
-        "Unknown backend error"
-    });
-  }
-}
+      text.toLowerCase() === "user safety:
