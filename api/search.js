@@ -19,71 +19,51 @@ export default async function handler(req, res) {
     const prompt = `
 You are CARMATCH AI, a professional worldwide automotive recommendation assistant.
 
-CURRENT DATE: August 18, 2026.
-
-USER REQUEST:
+User request:
 ${naturalLanguage}
 
-FILTERS:
-${JSON.stringify(filters, null, 2)}
+Filters:
+${JSON.stringify(filters)}
 
-Recommend exactly 3 vehicles that best match the user's requirements.
+Select exactly 3 vehicles.
 
 Rules:
-- Consider manufacturers worldwide.
-- Prefer the newest available generation.
+- Match the user's requirements as closely as possible.
+- Consider vehicles worldwide.
+- Prefer the newest genuine generation.
 - Prefer 2026 or 2027 when genuinely available.
 - Never invent specifications.
 - Never invent prices.
-- Never invent model years.
-- Never confuse different generations.
-- Give exactly 3 vehicles.
-- Rank them by how well they match the user's requirements.
-- Give a realistic score from 0 to 100.
-- Include advantages, disadvantages and maintenance information.
-- Include trunk capacity when available.
-- Include dimensions when available.
-- Include an official manufacturer configurator URL ONLY when you know it is valid.
-- Never invent a configurator URL.
-- The entire answer must use the same language as the user's request.
-- Translate all descriptive information into that language.
+- If the exact manufacturer price is unknown, write "Price not verified".
+- Never invent URLs.
+- Use the same language as the user's request.
+- Keep the answer concise.
+- Return ONLY valid JSON.
 
-IMPORTANT IMAGE RULE:
-Do NOT generate or invent an image URL.
-Return image as an empty string.
-The application will find the image separately.
-
-Return ONLY valid JSON:
+Return:
 
 {
-  "language": "auto",
+  "language": "same language as user",
   "cars": [
     {
-      "name": "Brand Model",
-      "generation": "Exact generation",
-      "year": 2026,
-      "score": 95,
-      "price": "€100,000",
-      "power": "300 kW",
-      "seats": 5,
-      "trunk": "500 l",
-      "drive": "AWD",
-      "fuel": "Petrol",
-      "body": "SUV",
-      "dimensions": "Length × width × height",
+      "name": "",
+      "generation": "",
+      "year": "",
+      "score": 0,
+      "price": "",
+      "power": "",
+      "seats": "",
+      "trunk": "",
+      "drive": "",
+      "fuel": "",
+      "body": "",
+      "dimensions": "",
       "image": "",
       "photoSource": "",
-      "reason": "Why this vehicle was selected",
-      "pros": [
-        "Advantage 1",
-        "Advantage 2",
-        "Advantage 3"
-      ],
-      "cons": [
-        "Disadvantage 1",
-        "Disadvantage 2"
-      ],
-      "maintenance": "Maintenance information",
+      "reason": "",
+      "pros": [],
+      "cons": [],
+      "maintenance": "",
       "manufacturer": "",
       "configurator": ""
     }
@@ -109,7 +89,8 @@ Return ONLY valid JSON:
               content: prompt
             }
           ],
-          temperature: 0.1
+          temperature: 0.1,
+          max_tokens: 1600
         })
       }
     );
@@ -119,11 +100,12 @@ Return ONLY valid JSON:
     if (!response.ok) {
       return res.status(response.status).json({
         error: "OpenRouter API error",
-        details: data?.error?.message || "Unknown OpenRouter error"
+        details: data?.error?.message || "Unknown error"
       });
     }
 
-    let text = data?.choices?.[0]?.message?.content || "";
+    let text =
+      data?.choices?.[0]?.message?.content || "";
 
     if (!text) {
       return res.status(500).json({
@@ -131,15 +113,12 @@ Return ONLY valid JSON:
       });
     }
 
-    text = text.trim();
-
-    if (text.startsWith("```")) {
-      text = text
-        .replace(/^```json\s*/i, "")
-        .replace(/^```\s*/i, "")
-        .replace(/\s*```$/i, "")
-        .trim();
-    }
+    text = text
+      .trim()
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
 
     let result;
 
@@ -158,115 +137,45 @@ Return ONLY valid JSON:
       });
     }
 
-    // Find a suitable image on Wikimedia Commons
-    async function findCarImage(car) {
-      const search = `${car.name} ${car.generation || ""} car`;
+    const cars = result.cars
+      .slice(0, 3)
+      .map(car => ({
+        name: car.name || "Unknown",
+        generation: car.generation || "Unknown",
+        year: car.year || "",
+        score: car.score ?? "",
+        price: car.price || "Price not verified",
+        power: car.power || "Unknown",
+        seats: car.seats || "Unknown",
+        trunk: car.trunk || "Unknown",
+        drive: car.drive || "Unknown",
+        fuel: car.fuel || "Unknown",
+        body: car.body || "Unknown",
+        dimensions: car.dimensions || "Unknown",
 
-      const url =
-        "https://commons.wikimedia.org/w/api.php?" +
-        new URLSearchParams({
-          action: "query",
-          generator: "search",
-          gsrsearch: search,
-          gsrnamespace: "6",
-          gsrlimit: "5",
-          prop: "imageinfo",
-          iiprop: "url|extmetadata",
-          iiurlwidth: "1200",
-          format: "json",
-          origin: "*"
-        });
+        // Obrázky zatiaľ nezdržiavajú backend.
+        image: "",
+        photoSource: "",
 
-      try {
-        const response = await fetch(url);
+        reason: car.reason || "",
 
-        if (!response.ok) {
-          return {
-            image: "",
-            photoSource: ""
-          };
-        }
+        pros: Array.isArray(car.pros)
+          ? car.pros.slice(0, 3)
+          : [],
 
-        const data = await response.json();
-        const pages = Object.values(data?.query?.pages || {});
+        cons: Array.isArray(car.cons)
+          ? car.cons.slice(0, 2)
+          : [],
 
-        for (const page of pages) {
-          const info = page?.imageinfo?.[0];
+        maintenance:
+          car.maintenance || "Unknown",
 
-          if (!info?.thumburl && !info?.url) {
-            continue;
-          }
+        manufacturer:
+          car.manufacturer || "",
 
-          const title = (page.title || "").toLowerCase();
-
-          // Prefer actual image files rather than logos/icons.
-          if (
-            title.includes("logo") ||
-            title.includes("emblem") ||
-            title.includes("icon")
-          ) {
-            continue;
-          }
-
-          const author =
-            info.extmetadata?.Artist?.value ||
-            info.extmetadata?.Credit?.value ||
-            "";
-
-          const license =
-            info.extmetadata?.LicenseShortName?.value ||
-            "";
-
-          return {
-            image: info.thumburl || info.url,
-            photoSource: `Wikimedia Commons${author ? ` — ${author}` : ""}${
-              license ? ` — ${license}` : ""
-            }`
-          };
-        }
-
-        return {
-          image: "",
-          photoSource: ""
-        };
-      } catch {
-        return {
-          image: "",
-          photoSource: ""
-        };
-      }
-    }
-
-    const cars = await Promise.all(
-      result.cars.slice(0, 3).map(async car => {
-        const name = car.name || "Car";
-
-        const photo = await findCarImage(car);
-
-        return {
-          name,
-          generation: car.generation || "Unknown",
-          year: car.year || "",
-          score: car.score ?? "",
-          price: car.price || "Unknown",
-          power: car.power || "Unknown",
-          seats: car.seats || "Unknown",
-          trunk: car.trunk || "Unknown",
-          drive: car.drive || "Unknown",
-          fuel: car.fuel || "Unknown",
-          body: car.body || "Unknown",
-          dimensions: car.dimensions || "Unknown",
-          image: photo.image,
-          photoSource: photo.photoSource,
-          reason: car.reason || "",
-          pros: Array.isArray(car.pros) ? car.pros : [],
-          cons: Array.isArray(car.cons) ? car.cons : [],
-          maintenance: car.maintenance || "Unknown",
-          manufacturer: car.manufacturer || "",
-          configurator: car.configurator || ""
-        };
-      })
-    );
+        configurator:
+          car.configurator || ""
+      }));
 
     return res.status(200).json({
       language: result.language || "auto",
