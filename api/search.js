@@ -252,4 +252,277 @@ Return exactly this JSON structure:
     }
 
     if (
-      text.toLowerCase() === "user safety:
+      text.toLowerCase() === "user safety: safe"
+    ) {
+      return res.status(502).json({
+        error:
+          "AI returned a safety status instead of vehicle data"
+      });
+    }
+
+    if (text.startsWith("```")) {
+      text = text
+        .replace(/^```json\s*/i, "")
+        .replace(/^```\s*/i, "")
+        .replace(/\s*```$/i, "")
+        .trim();
+    }
+
+    let result;
+
+    try {
+      result = JSON.parse(text);
+    } catch (error) {
+      console.error(
+        "INVALID AI JSON:",
+        text.substring(0, 1000)
+      );
+
+      return res.status(502).json({
+        error: "AI returned invalid JSON",
+        details: text.substring(0, 500)
+      });
+    }
+
+    if (
+      !result ||
+      !Array.isArray(result.cars) ||
+      result.cars.length < 3
+    ) {
+      return res.status(502).json({
+        error:
+          "AI response does not contain 3 cars"
+      });
+    }
+
+    async function searchWikimedia(query) {
+      const url =
+        "https://commons.wikimedia.org/w/api.php?" +
+        new URLSearchParams({
+          action: "query",
+          generator: "search",
+          gsrsearch: query,
+          gsrnamespace: "6",
+          gsrlimit: "8",
+          prop: "imageinfo",
+          iiprop: "url|extmetadata",
+          iiurlwidth: "1200",
+          format: "json",
+          origin: "*"
+        });
+
+      const controller = timeout(5000);
+
+      try {
+        const imageResponse = await fetch(url, {
+          signal: controller.signal
+        });
+
+        if (!imageResponse.ok) {
+          return null;
+        }
+
+        const imageData =
+          await imageResponse.json();
+
+        const pages =
+          Object.values(
+            imageData?.query?.pages || {}
+          );
+
+        for (const page of pages) {
+          const info =
+            page?.imageinfo?.[0];
+
+          if (!info) continue;
+
+          const image =
+            info.thumburl || info.url;
+
+          if (!image) continue;
+
+          const title =
+            String(
+              page.title || ""
+            ).toLowerCase();
+
+          if (
+            title.includes("logo") ||
+            title.includes("emblem") ||
+            title.includes("icon") ||
+            title.includes("badge") ||
+            title.includes("symbol")
+          ) {
+            continue;
+          }
+
+          return {
+            image,
+            photoSource:
+              "Wikimedia Commons"
+          };
+        }
+
+        return null;
+      } catch {
+        return null;
+      } finally {
+        controller.clear();
+      }
+    }
+
+    async function findCarImage(car) {
+      const name =
+        String(car.name || "").trim();
+
+      const generation =
+        String(car.generation || "").trim();
+
+      const queries = [
+        `${name} ${generation}`,
+        `${name} ${generation} automobile`,
+        `${name} car`,
+        `${name} vehicle`
+      ];
+
+      for (const query of queries) {
+        const result =
+          await searchWikimedia(query);
+
+        if (result?.image) {
+          return result;
+        }
+      }
+
+      return {
+        image: "",
+        photoSource: ""
+      };
+    }
+
+    const photoResults =
+      await Promise.all(
+        result.cars
+          .slice(0, 3)
+          .map(car => findCarImage(car))
+      );
+
+    const cars =
+      result.cars
+        .slice(0, 3)
+        .map((car, index) => {
+          const photo =
+            photoResults[index] || {};
+
+          return {
+            name:
+              car.name ||
+              "Neznáme auto",
+
+            generation:
+              car.generation ||
+              "Neznáma generácia",
+
+            year:
+              car.year || "",
+
+            score:
+              car.score ?? "",
+
+            price:
+              car.price ||
+              "Cena nie je dostupná",
+
+            priceVerified:
+              car.priceVerified === true,
+
+            priceSource:
+              car.priceSource || "",
+
+            priceType:
+              car.priceType ||
+              "unknown",
+
+            power:
+              car.power ||
+              "Údaj nie je dostupný",
+
+            seats:
+              car.seats ??
+              "Údaj nie je dostupný",
+
+            trunk:
+              car.trunk ||
+              "Údaj nie je dostupný",
+
+            drive:
+              car.drive ||
+              "Údaj nie je dostupný",
+
+            fuel:
+              car.fuel ||
+              "Údaj nie je dostupný",
+
+            body:
+              car.body ||
+              "Údaj nie je dostupný",
+
+            dimensions:
+              car.dimensions ||
+              "Údaj nie je dostupný",
+
+            image:
+              photo.image || "",
+
+            photoSource:
+              photo.photoSource || "",
+
+            reason:
+              car.reason || "",
+
+            pros:
+              Array.isArray(car.pros)
+                ? car.pros.slice(0, 4)
+                : [],
+
+            cons:
+              Array.isArray(car.cons)
+                ? car.cons.slice(0, 4)
+                : [],
+
+            maintenance:
+              car.maintenance ||
+              "Údaj nie je dostupný",
+
+            manufacturer:
+              car.manufacturer || "",
+
+            configurator:
+              car.configurator || ""
+          };
+        });
+
+    return res.status(200).json({
+      language:
+        result.language || language,
+
+      market:
+        result.market || market,
+
+      cars
+    });
+
+  } catch (error) {
+    console.error(
+      "CARMATCH ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+      error: "Backend error",
+      message:
+        error?.message ||
+        "Unknown backend error"
+    });
+  }
+}
