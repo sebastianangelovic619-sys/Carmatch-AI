@@ -162,24 +162,45 @@ IMPORTANT RULES:
 
 PRICE RULE:
 
-The AI must NOT guess a price.
+Always provide a price when a reliable current starting price is known.
 
-Use:
+Use the manufacturer's officially published starting price whenever possible.
 
-"price": "Cena neoverená",
-"priceVerified": false,
-"priceSource": ""
+IMPORTANT:
+- Do NOT invent a price.
+- Do NOT use an approximate price.
+- Do NOT use "around", "approximately", "about", or similar estimates.
+- Distinguish clearly between "starting price" and the price of a configured vehicle.
+- If only a starting price is known, explicitly label it as a starting price.
+- Use the currency appropriate for the selected market.
+- Prefer the official manufacturer's price for the selected market.
+- If an exact official price is known, set priceVerified to true.
+- If the price is known but cannot be confidently verified from the manufacturer, set priceVerified to false but still provide the known price and clearly state that it requires verification.
+- Never replace a known price with "Cena neoverená".
+- If no reliable price is known at all, use "Cena nie je dostupná".
 
-unless an exact official manufacturer price is genuinely known.
+Examples:
 
-If an exact official manufacturer price is genuinely known:
-
-"price": "exact price",
+"price": "84 990 €",
 "priceVerified": true,
-"priceSource": "official manufacturer"
+"priceSource": "Oficiálny cenník výrobcu",
+"priceType": "starting_price"
 
-Do not confuse starting price with the price of a specific configuration.
+OR
 
+"price": "84 990 €",
+"priceVerified": false,
+"priceSource": "Cena vyžaduje overenie",
+"priceType": "starting_price"
+
+OR, only when no reliable price is available:
+
+"price": "Cena nie je dostupná",
+"priceVerified": false,
+"priceSource": "",
+"priceType": "unknown"
+
+Never invent a price simply to fill the field.
 Return this exact structure:
 
 {
