@@ -1,74 +1,108 @@
 export default async function handler(req, res) {
+  /* =====================================================
+     CARMATCH AI - ROBUST BACKEND
+     ===================================================== */
+
+  // -----------------------------------------------------
+  // CORS
+  // -----------------------------------------------------
+
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "POST, OPTIONS"
+  );
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization"
+  );
+
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
   if (req.method !== "POST") {
     return res.status(405).json({
       error: "Method not allowed"
     });
   }
 
-  const apiKey = process.env.OPENROUTER_API_KEY;
+  // -----------------------------------------------------
+  // API KEY
+  // -----------------------------------------------------
+
+  const apiKey =
+    process.env.OPENROUTER_API_KEY;
 
   if (!apiKey) {
     return res.status(500).json({
-      error: "OPENROUTER_API_KEY is missing in Vercel"
+      error:
+        "OPENROUTER_API_KEY is missing in Vercel"
     });
   }
 
   try {
+    // ---------------------------------------------------
+    // INPUT
+    // ---------------------------------------------------
+
     const {
       naturalLanguage = "",
       filters = {}
     } = req.body || {};
 
-    const userText = String(
-      naturalLanguage || ""
-    ).trim();
+    const userText =
+      String(
+        naturalLanguage || ""
+      ).trim();
 
-    /* =====================================================
-       LANGUAGE
-       ===================================================== */
+    // ---------------------------------------------------
+    // LANGUAGE DETECTION
+    // ---------------------------------------------------
 
     function detectLanguage(text) {
-      const t = text.toLowerCase();
+      const t =
+        String(text || "").toLowerCase();
 
       if (
         /[áäčďéíĺľňóôŕšťúýž]/.test(t) ||
-        /\b(chcem|potrebujem|auto|vozidlo|kufor|výkon|pohon|cena|miest)\b/.test(t)
+        /\b(chcem|potrebujem|auto|vozidlo|kufor|výkon|pohon|cena|miest|rok|benzín|nafta|elektrické|hybrid)\b/.test(t)
       ) {
         return "sk";
       }
 
       if (
-        /\b(chci|potřebuji|auto|vozidlo|kufr|výkon|pohon|cena)\b/.test(t)
+        /\b(chci|potřebuji|auto|vozidlo|kufr|výkon|pohon|cena|místa|rok)\b/.test(t)
       ) {
         return "cs";
       }
 
       if (
-        /\b(ich|möchte|brauche|fahrzeug|preis|leistung|allrad)\b/.test(t)
+        /\b(ich|möchte|brauche|fahrzeug|preis|leistung|allrad|sitze|jahr)\b/.test(t)
       ) {
         return "de";
       }
 
       if (
-        /\b(voiture|prix|besoin|puissance)\b/.test(t)
+        /\b(voiture|prix|besoin|puissance|places|année)\b/.test(t)
       ) {
         return "fr";
       }
 
       if (
-        /\b(voglio|macchina|prezzo|potenza|bisogno)\b/.test(t)
+        /\b(voglio|macchina|prezzo|potenza|bisogno|posti|anno)\b/.test(t)
       ) {
         return "it";
       }
 
       if (
-        /\b(quiero|coche|precio|potencia|necesito)\b/.test(t)
+        /\b(quiero|coche|precio|potencia|necesito|plazas|año)\b/.test(t)
       ) {
         return "es";
       }
 
       if (
-        /\b(chcę|samochód|cena|moc|potrzebuję)\b/.test(t)
+        /\b(chcę|samochód|cena|moc|potrzebuję|miejsc|rok)\b/.test(t)
       ) {
         return "pl";
       }
@@ -76,7 +110,8 @@ export default async function handler(req, res) {
       return "en";
     }
 
-    const language = detectLanguage(userText);
+    const language =
+      detectLanguage(userText);
 
     const marketMap = {
       sk: "Slovakia / European Union",
@@ -93,9 +128,9 @@ export default async function handler(req, res) {
       marketMap[language] ||
       "International market";
 
-    /* =====================================================
-       PROMPT
-       ===================================================== */
+    // ---------------------------------------------------
+    // PROMPT
+    // ---------------------------------------------------
 
     const prompt = `
 You are CARMATCH AI, a professional worldwide automotive recommendation assistant.
@@ -121,13 +156,13 @@ IMPORTANT RULES:
 
 1. Consider manufacturers worldwide.
 2. Prefer the newest genuinely available generation.
-3. Never confuse different generations.
+3. Never confuse generations.
 4. Never invent specifications.
 5. Never invent model years.
 6. Never invent prices.
 7. Never invent URLs.
 8. Match the user's market whenever possible.
-9. Return exactly 3 vehicles.
+9. Return EXACTLY 3 vehicles.
 10. Rank them from #1 to #3.
 11. Give a realistic score from 0 to 100.
 12. Include advantages.
@@ -135,11 +170,14 @@ IMPORTANT RULES:
 14. Include maintenance information.
 15. Include trunk capacity when known.
 16. Include dimensions when known.
-17. Include the manufacturer.
-18. Include an official manufacturer configurator URL only when genuinely known.
+17. Include manufacturer.
+18. Include official manufacturer configurator URL only when genuinely known.
 19. Do not generate image URLs.
 20. Images are searched separately by the backend.
 21. All descriptive text must use the user's language.
+22. Do not mention internal reasoning.
+23. Do not mention safety systems or content labels.
+24. Return valid JSON only.
 
 PRICE RULE:
 
@@ -160,35 +198,53 @@ Never use:
 - approximately
 - about
 - roughly
-- similar estimates
+- estimated
+- similar estimate
 
-If a known price cannot be confidently verified from the manufacturer:
+If the manufacturer price cannot be confidently verified:
 
 priceVerified = false
 
-Never invent a price simply to fill the field.
+Never invent a price.
+
+JSON STRUCTURE:
+
+{
+  "language": "string",
+  "market": "string",
+  "cars": [
+    {
+      "name": "string",
+      "generation": "string",
+      "year": "string",
+      "score": 0,
+      "price": "string",
+      "priceVerified": false,
+      "priceSource": "string",
+      "priceType": "string",
+      "power": "string",
+      "seats": "string",
+      "trunk": "string",
+      "drive": "string",
+      "fuel": "string",
+      "body": "string",
+      "dimensions": "string",
+      "reason": "string",
+      "pros": ["string"],
+      "cons": ["string"],
+      "maintenance": "string",
+      "manufacturer": "string",
+      "configurator": "string"
+    }
+  ]
+}
 
 Return ONLY JSON.
-Do not return reasoning.
-Do not return thinking.
-Do not return markdown.
-Do not return safety labels.
-Do not return text before or after JSON.
 `;
 
-    /* =====================================================
-       OPENROUTER MODELS
-       ===================================================== */
-
-    const models = [
-      "google/gemma-4-26b-a4b-it:free",
-      "meta-llama/llama-4-scout:free",
-      "qwen/qwen3-30b-a3b:free"
-    ];
-
-    /* =====================================================
-       JSON SCHEMA
-       ===================================================== */
+    // ---------------------------------------------------
+    // JSON SCHEMA
+    // ---------------------------------------------------
 
     const schema = {
       type: "object",
@@ -338,20 +394,102 @@ Do not return text before or after JSON.
       ]
     };
 
-    /* =====================================================
-       OPENROUTER REQUEST WITH AUTOMATIC FALLBACK
-       ===================================================== */
+    // ---------------------------------------------------
+    // MODEL LIST
+    //
+    // 1. openrouter/free
+    //    OpenRouter automatically selects an available
+    //    free model appropriate for the request.
+    //
+    // 2. gpt-oss-20b:free
+    //    Current free model with structured outputs.
+    //
+    // 3. Nemotron 3 Ultra:free
+    //    Current free model, but DOES NOT support
+    //    response_format, so it uses plain JSON prompt.
+    // ---------------------------------------------------
 
-    async function askModel(model) {
+    const models = [
+      {
+        id: "openrouter/free",
+        supportsSchema: true
+      },
+
+      {
+        id: "openai/gpt-oss-20b:free",
+        supportsSchema: true
+      },
+
+      {
+        id:
+          "nvidia/nemotron-3-ultra-550b-a55b:free",
+        supportsSchema: false
+      }
+    ];
+
+    // ---------------------------------------------------
+    // TIMEOUT
+    // ---------------------------------------------------
+
+    const MODEL_TIMEOUT =
+      30000;
+
+    // ---------------------------------------------------
+    // OPENROUTER REQUEST
+    // ---------------------------------------------------
+
+    async function askModel(modelConfig) {
       const controller =
         new AbortController();
 
       const timer =
         setTimeout(() => {
           controller.abort();
-        }, 15000);
+        }, MODEL_TIMEOUT);
 
       try {
+        const body = {
+          model:
+            modelConfig.id,
+
+          messages: [
+            {
+              role: "system",
+              content:
+                "Return ONLY valid JSON. Never return markdown, reasoning, thinking, commentary or safety labels."
+            },
+
+            {
+              role: "user",
+              content: prompt
+            }
+          ],
+
+          temperature: 0.1,
+
+          max_tokens: 3500
+        };
+
+        /*
+          response_format is used only for models where
+          structured output is supported.
+        */
+
+        if (modelConfig.supportsSchema) {
+          body.response_format = {
+            type: "json_schema",
+
+            json_schema: {
+              name:
+                "carmatch_results",
+
+              strict: true,
+
+              schema
+            }
+          };
+        }
+
         const response =
           await fetch(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -375,38 +513,8 @@ Do not return text before or after JSON.
                   "CARMATCH AI"
               },
 
-              body: JSON.stringify({
-                model,
-
-                messages: [
-                  {
-                    role: "system",
-                    content:
-                      "Return ONLY valid JSON. Never return reasoning, thinking, markdown or safety labels."
-                  },
-                  {
-                    role: "user",
-                    content: prompt
-                  }
-                ],
-
-                temperature: 0.1,
-
-                max_tokens: 2600,
-
-                response_format: {
-                  type: "json_schema",
-
-                  json_schema: {
-                    name:
-                      "carmatch_results",
-
-                    strict: true,
-
-                    schema
-                  }
-                }
-              })
+              body:
+                JSON.stringify(body)
             }
           );
 
@@ -416,10 +524,12 @@ Do not return text before or after JSON.
         if (!response.ok) {
           return {
             ok: false,
+
             status:
               response.status,
+
             error:
-              raw.substring(0, 1000)
+              raw.substring(0, 1500)
           };
         }
 
@@ -433,7 +543,7 @@ Do not return text before or after JSON.
             ok: false,
             status: 502,
             error:
-              "Invalid OpenRouter response"
+              "Invalid OpenRouter JSON response"
           };
         }
 
@@ -441,14 +551,26 @@ Do not return text before or after JSON.
           data?.choices?.[0]?.message?.content ||
           "";
 
+        /*
+          Some providers can return content as an array.
+        */
+
         if (Array.isArray(content)) {
           content =
             content
-              .map(item =>
-                typeof item === "string"
-                  ? item
-                  : item?.text || ""
-              )
+              .map((item) => {
+                if (
+                  typeof item ===
+                  "string"
+                ) {
+                  return item;
+                }
+
+                return (
+                  item?.text ||
+                  ""
+                );
+              })
               .join("");
         }
 
@@ -466,11 +588,15 @@ Do not return text before or after JSON.
 
         return {
           ok: true,
-          content
+
+          content,
+
+          model:
+            data?.model ||
+            modelConfig.id
         };
 
       } catch (error) {
-
         if (
           error?.name ===
           "AbortError"
@@ -490,52 +616,427 @@ Do not return text before or after JSON.
             error?.message ||
             "Model request failed"
         };
-
       } finally {
         clearTimeout(timer);
       }
     }
 
-    /* =====================================================
-       TRY MODELS ONE BY ONE
-       ===================================================== */
+    // ---------------------------------------------------
+    // JSON EXTRACTION
+    // ---------------------------------------------------
 
-    let aiContent = "";
+    function extractJSON(text) {
+      let cleaned =
+        String(text || "")
+          .trim();
+
+      // Remove markdown blocks.
+      cleaned =
+        cleaned.replace(
+          /^```json\s*/i,
+          ""
+        );
+
+      cleaned =
+        cleaned.replace(
+          /^```\s*/i,
+          ""
+        );
+
+      cleaned =
+        cleaned.replace(
+          /\s*```$/i,
+          ""
+        );
+
+      // Remove obvious prefixes.
+      const firstObject =
+        cleaned.indexOf("{");
+
+      const firstArray =
+        cleaned.indexOf("[");
+
+      let start = -1;
+
+      if (
+        firstObject === -1
+      ) {
+        start =
+          firstArray;
+      } else if (
+        firstArray === -1
+      ) {
+        start =
+          firstObject;
+      } else {
+        start =
+          Math.min(
+            firstObject,
+            firstArray
+          );
+      }
+
+      if (start < 0) {
+        return null;
+      }
+
+      if (start > 0) {
+        cleaned =
+          cleaned.slice(start);
+      }
+
+      const lastObject =
+        cleaned.lastIndexOf("}");
+
+      const lastArray =
+        cleaned.lastIndexOf("]");
+
+      const end =
+        Math.max(
+          lastObject,
+          lastArray
+        );
+
+      if (end < 0) {
+        return null;
+      }
+
+      cleaned =
+        cleaned.slice(
+          0,
+          end + 1
+        );
+
+      try {
+        return JSON.parse(
+          cleaned
+        );
+      } catch {
+        return null;
+      }
+    }
+
+    // ---------------------------------------------------
+    // BASIC RESULT VALIDATION
+    // ---------------------------------------------------
+
+    function validateResult(data) {
+      if (
+        !data ||
+        typeof data !== "object"
+      ) {
+        return false;
+      }
+
+      if (
+        !Array.isArray(
+          data.cars
+        )
+      ) {
+        return false;
+      }
+
+      if (
+        data.cars.length !== 3
+      ) {
+        return false;
+      }
+
+      for (
+        const car of data.cars
+      ) {
+        if (
+          !car ||
+          typeof car !==
+            "object"
+        ) {
+          return false;
+        }
+
+        if (
+          typeof car.name !==
+          "string" ||
+          !car.name.trim()
+        ) {
+          return false;
+        }
+
+        if (
+          typeof car.manufacturer !==
+          "string"
+        ) {
+          return false;
+        }
+      }
+
+      return true;
+    }
+
+    // ---------------------------------------------------
+    // MODEL RETRY SYSTEM
+    // ---------------------------------------------------
+
+    let result = null;
 
     const modelErrors = [];
 
-    for (const model of models) {
+    for (
+      let attempt = 0;
+      attempt < models.length;
+      attempt++
+    ) {
+      const model =
+        models[attempt];
 
-      const result =
-        await askModel(model);
+      const ai =
+        await askModel(
+          model
+        );
 
-      if (result.ok) {
-        aiContent =
-          result.content;
+      // Request error
+      if (!ai.ok) {
+        modelErrors.push({
+          model:
+            model.id,
 
-        break;
+          status:
+            ai.status,
+
+          error:
+            ai.error
+        });
+
+        console.error(
+          `CARMATCH AI MODEL FAILED: ${model.id}`,
+          ai.status,
+          ai.error
+        );
+
+        continue;
       }
 
-      modelErrors.push({
-        model,
-        status:
-          result.status,
-        error:
-          result.error
-      });
+      // Try JSON
+      const parsed =
+        extractJSON(
+          ai.content
+        );
 
-      /*
-        Continue automatically after:
-        429 rate limit
-        500 provider error
-        502 invalid response
-        504 timeout
-      */
+      if (
+        !parsed ||
+        !validateResult(
+          parsed
+        )
+      ) {
+        modelErrors.push({
+          model:
+            model.id,
 
-      continue;
+          status:
+            502,
+
+          error:
+            "AI returned invalid or incomplete JSON"
+        });
+
+        console.error(
+          `CARMATCH AI INVALID JSON: ${model.id}`,
+          String(
+            ai.content
+          ).substring(
+            0,
+            2000
+          )
+        );
+
+        continue;
+      }
+
+      // SUCCESS
+      result =
+        parsed;
+
+      console.log(
+        `CARMATCH AI SUCCESS: ${model.id}`
+      );
+
+      break;
     }
 
-    if (!aiContent) {
+    // ---------------------------------------------------
+    // LAST JSON REPAIR ATTEMPT
+    //
+    // Uses openrouter/free again with a tiny prompt.
+    // This catches cases such as:
+    // "User Safety: safe"
+    // followed by valid JSON.
+    // ---------------------------------------------------
+
+    if (!result) {
+      const repairPrompt = `
+Convert the following AI output into valid JSON.
+
+IMPORTANT:
+- Return ONLY JSON.
+- Do not explain anything.
+- Do not add commentary.
+- Do not add safety labels.
+- The final JSON must contain EXACTLY 3 cars.
+- Preserve all useful information.
+- If something is missing, use an empty string.
+- Do not invent vehicle facts.
+
+OUTPUT TO REPAIR:
+
+${modelErrors.length
+  ? "Previous model responses were unsuccessful."
+  : ""}
+`;
+
+      try {
+        const repairController =
+          new AbortController();
+
+        const repairTimer =
+          setTimeout(
+            () =>
+              repairController.abort(),
+            18000
+          );
+
+        const repairResponse =
+          await fetch(
+            "https://openrouter.ai/api/v1/chat/completions",
+            {
+              method: "POST",
+
+              signal:
+                repairController.signal,
+
+              headers: {
+                "Authorization":
+                  `Bearer ${apiKey}`,
+
+                "Content-Type":
+                  "application/json",
+
+                "HTTP-Referer":
+                  "https://carmatchai.vercel.app",
+
+                "X-Title":
+                  "CARMATCH AI"
+              },
+
+              body:
+                JSON.stringify({
+                  model:
+                    "openrouter/free",
+
+                  messages: [
+                    {
+                      role:
+                        "system",
+
+                      content:
+                        "Return ONLY valid JSON."
+                    },
+
+                    {
+                      role:
+                        "user",
+
+                      content:
+                        `${repairPrompt}\n\nORIGINAL USER REQUEST:\n${userText}\n\nFILTERS:\n${JSON.stringify(filters)}`
+                    }
+                  ],
+
+                  temperature:
+                    0.05,
+
+                  max_tokens:
+                    3500
+                })
+            }
+          );
+
+        const repairRaw =
+          await repairResponse.text();
+
+        clearTimeout(
+          repairTimer
+        );
+
+        if (
+          repairResponse.ok
+        ) {
+          try {
+            const repairData =
+              JSON.parse(
+                repairRaw
+              );
+
+            let repairContent =
+              repairData
+                ?.choices?.[0]
+                ?.message
+                ?.content ||
+              "";
+
+            if (
+              Array.isArray(
+                repairContent
+              )
+            ) {
+              repairContent =
+                repairContent
+                  .map(
+                    (item) =>
+                      typeof item ===
+                      "string"
+                        ? item
+                        : item?.text ||
+                          ""
+                  )
+                  .join("");
+            }
+
+            const repaired =
+              extractJSON(
+                repairContent
+              );
+
+            if (
+              repaired &&
+              validateResult(
+                repaired
+              )
+            ) {
+              result =
+                repaired;
+
+              console.log(
+                "CARMATCH AI JSON REPAIR SUCCESS"
+              );
+            }
+          } catch (repairError) {
+            console.error(
+              "JSON REPAIR FAILED:",
+              repairError
+            );
+          }
+        }
+      } catch (repairError) {
+        console.error(
+          "JSON REPAIR REQUEST FAILED:",
+          repairError
+        );
+      }
+    }
+
+    // ---------------------------------------------------
+    // ALL AI METHODS FAILED
+    // ---------------------------------------------------
+
+    if (!result) {
       console.error(
         "ALL AI MODELS FAILED:",
         modelErrors
@@ -546,121 +1047,38 @@ Do not return text before or after JSON.
           "AI is temporarily unavailable",
 
         message:
-          "Všetky dostupné AI modely sú momentálne zaneprázdnené. Skús vyhľadávanie o chvíľu znova."
-      });
-    }
+          "CARMATCH AI momentálne nedostal použiteľnú odpoveď od dostupných AI modelov.",
 
-    /* =====================================================
-       CLEAN AI JSON
-       ===================================================== */
-
-    let text =
-      String(aiContent).trim();
-
-    text =
-      text
-        .replace(
-          /^```json\s*/i,
-          ""
-        )
-        .replace(
-          /^```\s*/i,
-          ""
-        )
-        .replace(
-          /\s*```$/i,
-          ""
-        )
-        .trim();
-
-    /*
-      Some providers may accidentally
-      put text around the JSON.
-    */
-
-    const first =
-      text.indexOf("{");
-
-    const last =
-      text.lastIndexOf("}");
-
-    if (
-      first === -1 ||
-      last === -1 ||
-      last <= first
-    ) {
-      console.error(
-        "AI DID NOT RETURN JSON:",
-        text.substring(0, 2000)
-      );
-
-      return res.status(502).json({
-        error:
-          "AI response did not contain JSON"
-      });
-    }
-
-    text =
-      text.substring(
-        first,
-        last + 1
-      );
-
-    let result;
-
-    try {
-      result =
-        JSON.parse(text);
-
-    } catch (error) {
-
-      console.error(
-        "INVALID AI JSON:",
-        text.substring(0, 2000)
-      );
-
-      return res.status(502).json({
-        error:
-          "AI returned invalid JSON",
+        retryable:
+          true,
 
         details:
-          text.substring(0, 500)
+          process.env.NODE_ENV ===
+          "development"
+            ? modelErrors
+            : undefined
       });
     }
 
-    /* =====================================================
-       VALIDATE RESULT
-       ===================================================== */
+    // ---------------------------------------------------
+    // IMAGE SEARCH
+    // ---------------------------------------------------
 
-    if (
-      !result ||
-      !Array.isArray(result.cars) ||
-      result.cars.length !== 3
+    async function searchWikimedia(
+      query
     ) {
-      return res.status(502).json({
-        error:
-          "AI did not return exactly 3 cars"
-      });
-    }
-
-    /* =====================================================
-       IMAGE SEARCH
-       ===================================================== */
-
-    async function searchWikimedia(query) {
-
       const controller =
         new AbortController();
 
       const timer =
-        setTimeout(() => {
-          controller.abort();
-        }, 3000);
+        setTimeout(
+          () =>
+            controller.abort(),
+          4000
+        );
 
       try {
-
-        const url =
-          "https://commons.wikimedia.org/w/api.php?" +
+        const params =
           new URLSearchParams({
             action:
               "query",
@@ -694,12 +1112,17 @@ Do not return text before or after JSON.
           });
 
         const response =
-          await fetch(url, {
-            signal:
-              controller.signal
-          });
+          await fetch(
+            `https://commons.wikimedia.org/w/api.php?${params.toString()}`,
+            {
+              signal:
+                controller.signal
+            }
+          );
 
-        if (!response.ok) {
+        if (
+          !response.ok
+        ) {
           return null;
         }
 
@@ -708,14 +1131,16 @@ Do not return text before or after JSON.
 
         const pages =
           Object.values(
-            data?.query?.pages ||
-            {}
+            data?.query
+              ?.pages || {}
           );
 
-        for (const page of pages) {
-
+        for (
+          const page of pages
+        ) {
           const info =
-            page?.imageinfo?.[0];
+            page
+              ?.imageinfo?.[0];
 
           if (!info) {
             continue;
@@ -735,7 +1160,9 @@ Do not return text before or after JSON.
             ).toLowerCase();
 
           if (
-            !mime.startsWith("image/")
+            !mime.startsWith(
+              "image/"
+            )
           ) {
             continue;
           }
@@ -746,12 +1173,24 @@ Do not return text before or after JSON.
             ).toLowerCase();
 
           if (
-            title.includes("logo") ||
-            title.includes("emblem") ||
-            title.includes("icon") ||
-            title.includes("badge") ||
-            title.includes("symbol") ||
-            title.includes("flag")
+            title.includes(
+              "logo"
+            ) ||
+            title.includes(
+              "emblem"
+            ) ||
+            title.includes(
+              "icon"
+            ) ||
+            title.includes(
+              "badge"
+            ) ||
+            title.includes(
+              "symbol"
+            ) ||
+            title.includes(
+              "flag"
+            )
           ) {
             continue;
           }
@@ -769,12 +1208,15 @@ Do not return text before or after JSON.
         return null;
 
       } finally {
-        clearTimeout(timer);
+        clearTimeout(
+          timer
+        );
       }
     }
 
-    async function findCarImage(car) {
-
+    async function findCarImage(
+      car
+    ) {
       const name =
         String(
           car.name || ""
@@ -794,7 +1236,6 @@ Do not return text before or after JSON.
       for (
         const query of queries
       ) {
-
         const photo =
           await searchWikimedia(
             query
@@ -813,127 +1254,152 @@ Do not return text before or after JSON.
       };
     }
 
-    /*
-      Search all 3 images simultaneously.
-    */
+    // ---------------------------------------------------
+    // SEARCH 3 IMAGES IN PARALLEL
+    // ---------------------------------------------------
 
     const photos =
       await Promise.all(
         result.cars
           .slice(0, 3)
-          .map(car =>
-            findCarImage(car)
+          .map(
+            (car) =>
+              findCarImage(
+                car
+              )
           )
       );
 
-    /* =====================================================
-       FINAL DATA
-       ===================================================== */
+    // ---------------------------------------------------
+    // FINAL RESPONSE
+    // ---------------------------------------------------
 
     const cars =
       result.cars
         .slice(0, 3)
-        .map((car, index) => {
+        .map(
+          (
+            car,
+            index
+          ) => {
+            const photo =
+              photos[index] ||
+              {};
 
-          const photo =
-            photos[index] || {};
+            return {
+              name:
+                car.name ||
+                "Neznáme auto",
 
-          return {
+              generation:
+                car.generation ||
+                "Neznáma generácia",
 
-            name:
-              car.name ||
-              "Neznáme auto",
+              year:
+                car.year || "",
 
-            generation:
-              car.generation ||
-              "Neznáma generácia",
+              score:
+                Number.isFinite(
+                  Number(
+                    car.score
+                  )
+                )
+                  ? Number(
+                      car.score
+                    )
+                  : 0,
 
-            year:
-              car.year || "",
+              price:
+                car.price ||
+                "Cena nie je dostupná",
 
-            score:
-              Number.isFinite(
-                Number(car.score)
-              )
-                ? Number(car.score)
-                : 0,
+              priceVerified:
+                car.priceVerified ===
+                true,
 
-            price:
-              car.price ||
-              "Cena nie je dostupná",
+              priceSource:
+                car.priceSource ||
+                "",
 
-            priceVerified:
-              car.priceVerified === true,
+              priceType:
+                car.priceType ||
+                "unknown",
 
-            priceSource:
-              car.priceSource || "",
+              power:
+                car.power ||
+                "Údaj nie je dostupný",
 
-            priceType:
-              car.priceType ||
-              "unknown",
+              seats:
+                car.seats ||
+                "Údaj nie je dostupný",
 
-            power:
-              car.power ||
-              "Údaj nie je dostupný",
+              trunk:
+                car.trunk ||
+                "Údaj nie je dostupný",
 
-            seats:
-              car.seats ||
-              "Údaj nie je dostupný",
+              drive:
+                car.drive ||
+                "Údaj nie je dostupný",
 
-            trunk:
-              car.trunk ||
-              "Údaj nie je dostupný",
+              fuel:
+                car.fuel ||
+                "Údaj nie je dostupný",
 
-            drive:
-              car.drive ||
-              "Údaj nie je dostupný",
+              body:
+                car.body ||
+                "Údaj nie je dostupný",
 
-            fuel:
-              car.fuel ||
-              "Údaj nie je dostupný",
+              dimensions:
+                car.dimensions ||
+                "Údaj nie je dostupný",
 
-            body:
-              car.body ||
-              "Údaj nie je dostupný",
+              image:
+                photo.image || "",
 
-            dimensions:
-              car.dimensions ||
-              "Údaj nie je dostupný",
+              photoSource:
+                photo.photoSource ||
+                "",
 
-            image:
-              photo.image || "",
+              reason:
+                car.reason || "",
 
-            photoSource:
-              photo.photoSource || "",
+              pros:
+                Array.isArray(
+                  car.pros
+                )
+                  ? car.pros.slice(
+                      0,
+                      4
+                    )
+                  : [],
 
-            reason:
-              car.reason || "",
+              cons:
+                Array.isArray(
+                  car.cons
+                )
+                  ? car.cons.slice(
+                      0,
+                      4
+                    )
+                  : [],
 
-            pros:
-              Array.isArray(car.pros)
-                ? car.pros.slice(0, 4)
-                : [],
+              maintenance:
+                car.maintenance ||
+                "Údaj nie je dostupný",
 
-            cons:
-              Array.isArray(car.cons)
-                ? car.cons.slice(0, 4)
-                : [],
+              manufacturer:
+                car.manufacturer ||
+                "",
 
-            maintenance:
-              car.maintenance ||
-              "Údaj nie je dostupný",
-
-            manufacturer:
-              car.manufacturer || "",
-
-            configurator:
-              isValidURL(
-                car.configurator
-              )
-                ? car.configurator
-                : ""
-          };
-        });
+              configurator:
+                isValidURL(
+                  car.configurator
+                )
+                  ? car.configurator
+                  : ""
+            };
+          }
+        );
 
     return res.status(200).json({
       language:
@@ -948,7 +1414,6 @@ Do not return text before or after JSON.
     });
 
   } catch (error) {
-
     console.error(
       "CARMATCH BACKEND ERROR:",
       error
@@ -965,13 +1430,13 @@ Do not return text before or after JSON.
   }
 }
 
-
 /* =======================================================
    URL VALIDATION
    ======================================================= */
 
-function isValidURL(value) {
-
+function isValidURL(
+  value
+) {
   if (
     typeof value !==
     "string"
@@ -980,7 +1445,6 @@ function isValidURL(value) {
   }
 
   try {
-
     const url =
       new URL(value);
 
@@ -992,7 +1456,6 @@ function isValidURL(value) {
     );
 
   } catch {
-
     return false;
   }
 }
