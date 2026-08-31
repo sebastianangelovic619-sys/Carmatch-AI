@@ -27,9 +27,12 @@ export default async function handler(req, res) {
   };
 
   try {
-    const { naturalLanguage = "", filters = {} } = req.body || {};
+    const { naturalLanguage = "", filters = {} } =
+      req.body || {};
 
-    const userText = String(naturalLanguage || "").trim();
+    const userText = String(
+      naturalLanguage || ""
+    ).trim();
 
     function detectLanguage(text) {
       const t = text.toLowerCase();
@@ -41,27 +44,39 @@ export default async function handler(req, res) {
         return "sk";
       }
 
-      if (/\b(chciałbym|samochód|potrzebuję|cena|napęd)\b/.test(t)) {
+      if (
+        /\b(chciałbym|samochód|potrzebuję|cena|napęd)\b/.test(t)
+      ) {
         return "pl";
       }
 
-      if (/\b(chci|potřebuji|auto|vůz|cena|výkon)\b/.test(t)) {
+      if (
+        /\b(chci|potřebuji|auto|vůz|cena|výkon)\b/.test(t)
+      ) {
         return "cs";
       }
 
-      if (/\b(ich|möchte|brauche|preis|leistung|auto)\b/.test(t)) {
+      if (
+        /\b(ich|möchte|brauche|preis|leistung|auto)\b/.test(t)
+      ) {
         return "de";
       }
 
-      if (/\b(je|voiture|prix|besoin|puissance)\b/.test(t)) {
+      if (
+        /\b(voiture|prix|besoin|puissance)\b/.test(t)
+      ) {
         return "fr";
       }
 
-      if (/\b(voglio|auto|prezzo|potenza|bisogno)\b/.test(t)) {
+      if (
+        /\b(voglio|prezzo|potenza|bisogno)\b/.test(t)
+      ) {
         return "it";
       }
 
-      if (/\b(quiero|coche|precio|potencia|necesito)\b/.test(t)) {
+      if (
+        /\b(quiero|coche|precio|potencia|necesito)\b/.test(t)
+      ) {
         return "es";
       }
 
@@ -81,67 +96,81 @@ export default async function handler(req, res) {
       en: "International market"
     };
 
-    const market = marketMap[language] || "International market";
+    const market =
+      marketMap[language] ||
+      "International market";
 
     const prompt = `
-You are CARMATCH AI, a professional worldwide automotive recommendation assistant.
+You are CARMATCH AI.
 
-CURRENT DATE: August 31, 2026.
+Current date: August 31, 2026.
 
-USER LANGUAGE:
+User language:
 ${language}
 
-USER MARKET:
+User market:
 ${market}
 
-USER REQUEST:
+User request:
 ${userText}
 
-FILTERS:
-${JSON.stringify(filters, null, 2)}
+Filters:
+${JSON.stringify(filters)}
 
-Select EXACTLY 3 vehicles that best match the user's requirements.
+Select exactly 3 vehicles that best match the request.
 
-IMPORTANT RULES:
+IMPORTANT:
 
-1. Consider manufacturers worldwide.
-2. Prefer the newest genuinely available generation.
-3. Never confuse different generations.
-4. Never invent specifications.
-5. Never invent model years.
-6. Never invent prices.
-7. Never invent URLs.
-8. Adapt all text to the user's language.
-9. Adapt market and currency to the user's market.
-10. Return exactly 3 vehicles.
-11. Rank them from #1 to #3.
-12. Score them from 0 to 100.
-13. Include advantages and disadvantages.
-14. Include maintenance information.
-15. Include trunk capacity when genuinely known.
-16. Include dimensions when genuinely known.
-17. Include the official manufacturer name.
-18. Include an official manufacturer configurator URL ONLY when genuinely known.
-19. Do not generate image URLs.
-20. Images are searched separately by the backend.
-21. Return ONLY valid JSON.
-22. Do not return markdown.
-23. Do not return explanations outside JSON.
+- Consider worldwide manufacturers.
+- Prefer the newest genuinely available generation.
+- Never confuse generations.
+- Never invent specifications.
+- Never invent model years.
+- Never invent prices.
+- Never invent URLs.
+- All descriptive text must be in the user's language.
+- Use the user's market where appropriate.
+- Return exactly 3 vehicles.
+- Rank them from 1 to 3.
+- Give a score from 0 to 100.
+- Include pros and cons.
+- Include maintenance information.
+- Include trunk capacity when genuinely known.
+- Include dimensions when genuinely known.
+- Include manufacturer.
+- Include an official configurator URL only when genuinely known.
+- Do not generate image URLs.
 
 PRICE RULES:
 
 - Never invent a price.
 - Never use approximate prices.
-- Never use "around", "approximately", "about" or similar estimates.
 - Prefer an officially published manufacturer starting price.
-- Clearly distinguish starting price from configured vehicle price.
-- Use the currency appropriate for the selected market.
-- If a reliable official price is known, provide it.
-- If a price is known but cannot be confidently verified, provide it with priceVerified false.
+- Clearly identify a starting price.
+- If an exact reliable price is known, provide it.
+- If the price cannot be confidently verified, set priceVerified to false.
 - If no reliable price is known, use "Cena nie je dostupná".
-- Never pretend that an unverified price is verified.
 
-Return exactly this JSON structure:
+VERY IMPORTANT OUTPUT RULE:
+
+Return ONLY one JSON object.
+
+Do NOT write:
+- thinking
+- analysis
+- reasoning
+- explanations before JSON
+- explanations after JSON
+- markdown
+- code fences
+- "Here's a thinking process"
+- "User Safety"
+- any other text outside JSON.
+
+The first character of the response must be {
+The last character of the response must be }
+
+Use exactly this structure:
 
 {
   "language": "${language}",
@@ -181,6 +210,12 @@ Return exactly this JSON structure:
 }
 `;
 
+    /*
+      -------------------------------------------------------
+      OPENROUTER
+      -------------------------------------------------------
+    */
+
     const requestTimeout = timeout(22000);
 
     let response;
@@ -191,25 +226,30 @@ Return exactly this JSON structure:
         {
           method: "POST",
           signal: requestTimeout.signal,
+
           headers: {
             "Authorization": `Bearer ${apiKey}`,
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://carmatchai.vercel.app",
+            "HTTP-Referer":
+              "https://carmatchai.vercel.app",
             "X-Title": "CARMATCH AI"
           },
+
           body: JSON.stringify({
             model: "openrouter/free",
+
             messages: [
               {
                 role: "system",
                 content:
-                  "Return ONLY valid JSON. Never return markdown, explanations, safety labels or plain text outside JSON."
+                  "Return ONLY one valid JSON object. Do not output thinking, reasoning, analysis, markdown or any text outside the JSON object."
               },
               {
                 role: "user",
                 content: prompt
               }
             ],
+
             temperature: 0.1,
             max_tokens: 3500
           })
@@ -229,7 +269,8 @@ Return exactly this JSON structure:
       requestTimeout.clear();
     }
 
-    const data = await response.json().catch(() => ({}));
+    const data =
+      await response.json().catch(() => ({}));
 
     if (!response.ok) {
       return res.status(response.status).json({
@@ -241,7 +282,8 @@ Return exactly this JSON structure:
     }
 
     let text =
-      data?.choices?.[0]?.message?.content || "";
+      data?.choices?.[0]?.message?.content ||
+      "";
 
     text = String(text).trim();
 
@@ -251,38 +293,86 @@ Return exactly this JSON structure:
       });
     }
 
-    if (
-      text.toLowerCase() === "user safety: safe"
-    ) {
-      return res.status(502).json({
-        error:
-          "AI returned a safety status instead of vehicle data"
-      });
+    /*
+      -------------------------------------------------------
+      REMOVE MARKDOWN CODE FENCES
+      -------------------------------------------------------
+    */
+
+    text = text
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
+
+    /*
+      -------------------------------------------------------
+      FIND JSON INSIDE EXTRA AI TEXT
+      -------------------------------------------------------
+    */
+
+    function extractJSON(raw) {
+      const firstBrace =
+        raw.indexOf("{");
+
+      const lastBrace =
+        raw.lastIndexOf("}");
+
+      if (
+        firstBrace === -1 ||
+        lastBrace === -1 ||
+        lastBrace <= firstBrace
+      ) {
+        return null;
+      }
+
+      return raw.substring(
+        firstBrace,
+        lastBrace + 1
+      );
     }
 
-    if (text.startsWith("```")) {
-      text = text
-        .replace(/^```json\s*/i, "")
-        .replace(/^```\s*/i, "")
-        .replace(/\s*```$/i, "")
-        .trim();
+    const jsonText =
+      extractJSON(text);
+
+    if (!jsonText) {
+      console.error(
+        "NO JSON FOUND:",
+        text.substring(0, 1000)
+      );
+
+      return res.status(502).json({
+        error:
+          "AI response did not contain JSON",
+        details:
+          text.substring(0, 500)
+      });
     }
 
     let result;
 
     try {
-      result = JSON.parse(text);
+      result =
+        JSON.parse(jsonText);
     } catch (error) {
       console.error(
         "INVALID AI JSON:",
-        text.substring(0, 1000)
+        jsonText.substring(0, 1000)
       );
 
       return res.status(502).json({
-        error: "AI returned invalid JSON",
-        details: text.substring(0, 500)
+        error:
+          "AI returned invalid JSON",
+        details:
+          jsonText.substring(0, 500)
       });
     }
+
+    /*
+      -------------------------------------------------------
+      VALIDATE RESULT
+      -------------------------------------------------------
+    */
 
     if (
       !result ||
@@ -294,6 +384,12 @@ Return exactly this JSON structure:
           "AI response does not contain 3 cars"
       });
     }
+
+    /*
+      -------------------------------------------------------
+      WIKIMEDIA IMAGE SEARCH
+      -------------------------------------------------------
+    */
 
     async function searchWikimedia(query) {
       const url =
@@ -311,12 +407,15 @@ Return exactly this JSON structure:
           origin: "*"
         });
 
-      const controller = timeout(5000);
+      const controller =
+        timeout(5000);
 
       try {
-        const imageResponse = await fetch(url, {
-          signal: controller.signal
-        });
+        const imageResponse =
+          await fetch(url, {
+            signal:
+              controller.signal
+          });
 
         if (!imageResponse.ok) {
           return null;
@@ -327,7 +426,8 @@ Return exactly this JSON structure:
 
         const pages =
           Object.values(
-            imageData?.query?.pages || {}
+            imageData?.query?.pages ||
+              {}
           );
 
         for (const page of pages) {
@@ -337,7 +437,8 @@ Return exactly this JSON structure:
           if (!info) continue;
 
           const image =
-            info.thumburl || info.url;
+            info.thumburl ||
+            info.url;
 
           if (!image) continue;
 
@@ -364,8 +465,10 @@ Return exactly this JSON structure:
         }
 
         return null;
+
       } catch {
         return null;
+
       } finally {
         controller.clear();
       }
@@ -373,10 +476,14 @@ Return exactly this JSON structure:
 
     async function findCarImage(car) {
       const name =
-        String(car.name || "").trim();
+        String(
+          car.name || ""
+        ).trim();
 
       const generation =
-        String(car.generation || "").trim();
+        String(
+          car.generation || ""
+        ).trim();
 
       const queries = [
         `${name} ${generation}`,
@@ -387,7 +494,9 @@ Return exactly this JSON structure:
 
       for (const query of queries) {
         const result =
-          await searchWikimedia(query);
+          await searchWikimedia(
+            query
+          );
 
         if (result?.image) {
           return result;
@@ -400,19 +509,35 @@ Return exactly this JSON structure:
       };
     }
 
+    /*
+      -------------------------------------------------------
+      SEARCH PHOTOS IN PARALLEL
+      -------------------------------------------------------
+    */
+
     const photoResults =
       await Promise.all(
         result.cars
           .slice(0, 3)
-          .map(car => findCarImage(car))
+          .map(car =>
+            findCarImage(car)
+          )
       );
+
+    /*
+      -------------------------------------------------------
+      FINAL CARS
+      -------------------------------------------------------
+    */
 
     const cars =
       result.cars
         .slice(0, 3)
         .map((car, index) => {
+
           const photo =
-            photoResults[index] || {};
+            photoResults[index] ||
+            {};
 
           return {
             name:
@@ -504,10 +629,12 @@ Return exactly this JSON structure:
 
     return res.status(200).json({
       language:
-        result.language || language,
+        result.language ||
+        language,
 
       market:
-        result.market || market,
+        result.market ||
+        market,
 
       cars
     });
