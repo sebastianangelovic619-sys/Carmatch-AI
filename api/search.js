@@ -262,16 +262,25 @@ Return this exact structure:
             "HTTP-Referer": "https://carmatchai.vercel.app",
             "X-Title": "CARMATCH AI"
           },
-          body: JSON.stringify({
-            model: "openrouter/free",
-            messages: [
-              {
-                role: "user",
-                content: prompt
-              }
-            ],
-            temperature: 0.1,
-            max_tokens: 3500
+        body: JSON.stringify({
+  model: "openrouter/free",
+  messages: [
+    {
+      role: "system",
+      content:
+        "Return ONLY valid JSON. Never return explanations, safety labels, markdown or plain text."
+    },
+    {
+      role: "user",
+      content: prompt
+    }
+  ],
+  temperature: 0.1,
+  max_tokens: 3500,
+  response_format: {
+    type: "json_object"
+  }
+})
           })
         }
       );
