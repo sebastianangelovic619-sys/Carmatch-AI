@@ -13,63 +13,52 @@ export default async function handler(req, res) {
     });
   }
 
-  const timeout = (ms) => {
-    const controller = new AbortController();
-
-    const timer = setTimeout(() => {
-      controller.abort();
-    }, ms);
-
-    return {
-      signal: controller.signal,
-      clear: () => clearTimeout(timer)
-    };
-  };
-
   try {
-    const { naturalLanguage = "", filters = {} } =
-      req.body || {};
+    const {
+      naturalLanguage = "",
+      filters = {}
+    } = req.body || {};
 
     const userText = String(
       naturalLanguage || ""
     ).trim();
+
+    /*
+      ======================================================
+      LANGUAGE
+      ======================================================
+    */
 
     function detectLanguage(text) {
       const t = text.toLowerCase();
 
       if (
         /[áäčďéíĺľňóôŕšťúýž]/.test(t) ||
-        /\b(chcem|potrebujem|auto|vozidlo|kufor|výkon|pohon|cena)\b/.test(t)
+        /\b(chcem|chceš|potrebujem|auto|vozidlo|kufor|výkon|pohon|cena|miest)\b/.test(t)
       ) {
         return "sk";
       }
 
       if (
-        /\b(chciałbym|samochód|potrzebuję|cena|napęd)\b/.test(t)
-      ) {
-        return "pl";
-      }
-
-      if (
-        /\b(chci|potřebuji|auto|vůz|cena|výkon)\b/.test(t)
+        /\b(chci|potřebuji|auto|vozidlo|kufr|výkon|pohon|cena)\b/.test(t)
       ) {
         return "cs";
       }
 
       if (
-        /\b(ich|möchte|brauche|preis|leistung|auto)\b/.test(t)
+        /\b(ich|möchte|brauche|auto|fahrzeug|preis|leistung|allrad)\b/.test(t)
       ) {
         return "de";
       }
 
       if (
-        /\b(voiture|prix|besoin|puissance)\b/.test(t)
+        /\b(je|voiture|prix|besoin|puissance|4x4)\b/.test(t)
       ) {
         return "fr";
       }
 
       if (
-        /\b(voglio|prezzo|potenza|bisogno)\b/.test(t)
+        /\b(voglio|macchina|prezzo|potenza|bisogno)\b/.test(t)
       ) {
         return "it";
       }
@@ -80,19 +69,32 @@ export default async function handler(req, res) {
         return "es";
       }
 
+      if (
+        /\b(chcę|samochód|cena|moc|potrzebuję)\b/.test(t)
+      ) {
+        return "pl";
+      }
+
+      if (
+        /\b(keresek|autó|ár|teljesítmény)\b/.test(t)
+      ) {
+        return "hu";
+      }
+
       return "en";
     }
 
     const language = detectLanguage(userText);
 
     const marketMap = {
-      sk: "Slovakia / European Union",
-      cs: "Czech Republic / European Union",
-      pl: "Poland / European Union",
-      de: "Germany / European Union",
-      fr: "France / European Union",
-      it: "Italy / European Union",
-      es: "Spain / European Union",
+      sk: "Slovakia",
+      cs: "Czech Republic",
+      de: "Germany",
+      fr: "France",
+      it: "Italy",
+      es: "Spain",
+      pl: "Poland",
+      hu: "Hungary",
       en: "International market"
     };
 
@@ -100,123 +102,98 @@ export default async function handler(req, res) {
       marketMap[language] ||
       "International market";
 
+    /*
+      ======================================================
+      PROMPT
+      ======================================================
+    */
+
     const prompt = `
-You are CARMATCH AI.
+You are CARMATCH AI, a professional automotive recommendation system.
 
-Current date: August 31, 2026.
+CURRENT DATE:
+August 31, 2026
 
-User language:
+USER LANGUAGE:
 ${language}
 
-User market:
+USER MARKET:
 ${market}
 
-User request:
+USER REQUEST:
 ${userText}
 
-Filters:
-${JSON.stringify(filters)}
+FILTERS:
+${JSON.stringify(filters, null, 2)}
 
-Select exactly 3 vehicles that best match the request.
+Choose EXACTLY 3 vehicles that best match the user's request.
 
-IMPORTANT:
+RULES:
 
-- Consider worldwide manufacturers.
-- Prefer the newest genuinely available generation.
+- Consider manufacturers worldwide.
+- Prefer the newest genuine generation.
 - Never confuse generations.
 - Never invent specifications.
 - Never invent model years.
 - Never invent prices.
 - Never invent URLs.
-- All descriptive text must be in the user's language.
-- Use the user's market where appropriate.
+- Prefer official manufacturer information when known.
+- Match the user's market when possible.
+- Answer all descriptive text in the user's language.
 - Return exactly 3 vehicles.
-- Rank them from 1 to 3.
-- Give a score from 0 to 100.
-- Include pros and cons.
+- Rank them from #1 to #3.
+- Give a realistic match score from 0 to 100.
+- Include advantages.
+- Include disadvantages.
 - Include maintenance information.
-- Include trunk capacity when genuinely known.
-- Include dimensions when genuinely known.
+- Include trunk capacity when known.
+- Include dimensions when known.
 - Include manufacturer.
-- Include an official configurator URL only when genuinely known.
-- Do not generate image URLs.
+- Include configurator only when genuinely known.
 
-PRICE RULES:
+PRICE RULE:
 
-- Never invent a price.
-- Never use approximate prices.
-- Prefer an officially published manufacturer starting price.
-- Clearly identify a starting price.
-- If an exact reliable price is known, provide it.
-- If the price cannot be confidently verified, set priceVerified to false.
-- If no reliable price is known, use "Cena nie je dostupná".
+Never guess a price.
 
-VERY IMPORTANT OUTPUT RULE:
+If you genuinely know an exact manufacturer starting price, provide it.
 
-Return ONLY one JSON object.
+If you do NOT know a reliable official price:
+price = "Cena nie je overená"
+priceVerified = false
+priceSource = ""
 
-Do NOT write:
-- thinking
-- analysis
-- reasoning
-- explanations before JSON
-- explanations after JSON
-- markdown
-- code fences
-- "Here's a thinking process"
-- "User Safety"
-- any other text outside JSON.
+Never use approximate prices.
 
-The first character of the response must be {
-The last character of the response must be }
+IMAGE RULE:
 
-Use exactly this structure:
+Do not generate image URLs.
+image must be empty.
+Images are handled separately by the backend.
 
-{
-  "language": "${language}",
-  "market": "${market}",
-  "cars": [
-    {
-      "name": "Brand Model",
-      "generation": "Exact generation",
-      "year": 2026,
-      "score": 95,
-      "price": "84 990 €",
-      "priceVerified": false,
-      "priceSource": "",
-      "priceType": "starting_price",
-      "power": "300 kW",
-      "seats": 5,
-      "trunk": "500 l",
-      "drive": "AWD",
-      "fuel": "Petrol",
-      "body": "SUV",
-      "dimensions": "Length × width × height",
-      "reason": "Explanation in user's language",
-      "pros": [
-        "Advantage 1",
-        "Advantage 2",
-        "Advantage 3"
-      ],
-      "cons": [
-        "Disadvantage 1",
-        "Disadvantage 2"
-      ],
-      "maintenance": "Maintenance information",
-      "manufacturer": "Manufacturer",
-      "configurator": ""
-    }
-  ]
-}
+LANGUAGE RULE:
+
+All descriptive information must be written in the user's language.
+
+Return ONLY the JSON object required by the schema.
+Never return markdown.
+Never return reasoning.
+Never return thinking.
+Never return safety labels.
 `;
 
     /*
-      -------------------------------------------------------
+      ======================================================
       OPENROUTER
-      -------------------------------------------------------
+      ======================================================
     */
 
-    const requestTimeout = timeout(22000);
+    const controller =
+      new AbortController();
+
+    const timeoutId =
+      setTimeout(() => {
+        controller.abort();
+      }, 18000);
 
     let response;
 
@@ -225,24 +202,33 @@ Use exactly this structure:
         "https://openrouter.ai/api/v1/chat/completions",
         {
           method: "POST",
-          signal: requestTimeout.signal,
+
+          signal:
+            controller.signal,
 
           headers: {
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
+            "Authorization":
+              `Bearer ${apiKey}`,
+
+            "Content-Type":
+              "application/json",
+
             "HTTP-Referer":
               "https://carmatchai.vercel.app",
-            "X-Title": "CARMATCH AI"
+
+            "X-Title":
+              "CARMATCH AI"
           },
 
           body: JSON.stringify({
-            model: "openrouter/free",
+            model:
+              "google/gemma-4-26b-a4b-it:free",
 
             messages: [
               {
                 role: "system",
                 content:
-                  "Return ONLY one valid JSON object. Do not output thinking, reasoning, analysis, markdown or any text outside the JSON object."
+                  "Return ONLY valid JSON matching the provided schema. Do not output reasoning, markdown, safety labels or text outside JSON."
               },
               {
                 role: "user",
@@ -251,33 +237,236 @@ Use exactly this structure:
             ],
 
             temperature: 0.1,
-            max_tokens: 3500
+
+            max_tokens: 2600,
+
+            response_format: {
+              type: "json_schema",
+
+              json_schema: {
+                name:
+                  "carmatch_results",
+
+                strict: true,
+
+                schema: {
+                  type: "object",
+
+                  additionalProperties:
+                    false,
+
+                  properties: {
+                    language: {
+                      type: "string"
+                    },
+
+                    market: {
+                      type: "string"
+                    },
+
+                    cars: {
+                      type: "array",
+
+                      minItems: 3,
+
+                      maxItems: 3,
+
+                      items: {
+                        type: "object",
+
+                        additionalProperties:
+                          false,
+
+                        properties: {
+                          name: {
+                            type: "string"
+                          },
+
+                          generation: {
+                            type: "string"
+                          },
+
+                          year: {
+                            type: "string"
+                          },
+
+                          score: {
+                            type: "number"
+                          },
+
+                          price: {
+                            type: "string"
+                          },
+
+                          priceVerified: {
+                            type: "boolean"
+                          },
+
+                          priceSource: {
+                            type: "string"
+                          },
+
+                          priceType: {
+                            type: "string"
+                          },
+
+                          power: {
+                            type: "string"
+                          },
+
+                          seats: {
+                            type: "string"
+                          },
+
+                          trunk: {
+                            type: "string"
+                          },
+
+                          drive: {
+                            type: "string"
+                          },
+
+                          fuel: {
+                            type: "string"
+                          },
+
+                          body: {
+                            type: "string"
+                          },
+
+                          dimensions: {
+                            type: "string"
+                          },
+
+                          image: {
+                            type: "string"
+                          },
+
+                          photoSource: {
+                            type: "string"
+                          },
+
+                          reason: {
+                            type: "string"
+                          },
+
+                          pros: {
+                            type: "array",
+                            items: {
+                              type: "string"
+                            }
+                          },
+
+                          cons: {
+                            type: "array",
+                            items: {
+                              type: "string"
+                            }
+                          },
+
+                          maintenance: {
+                            type: "string"
+                          },
+
+                          manufacturer: {
+                            type: "string"
+                          },
+
+                          configurator: {
+                            type: "string"
+                          }
+                        },
+
+                        required: [
+                          "name",
+                          "generation",
+                          "year",
+                          "score",
+                          "price",
+                          "priceVerified",
+                          "priceSource",
+                          "priceType",
+                          "power",
+                          "seats",
+                          "trunk",
+                          "drive",
+                          "fuel",
+                          "body",
+                          "dimensions",
+                          "image",
+                          "photoSource",
+                          "reason",
+                          "pros",
+                          "cons",
+                          "maintenance",
+                          "manufacturer",
+                          "configurator"
+                        ]
+                      }
+                    }
+                  },
+
+                  required: [
+                    "language",
+                    "market",
+                    "cars"
+                  ]
+                }
+              }
+            }
           })
         }
       );
     } catch (error) {
-      if (error.name === "AbortError") {
+      if (
+        error?.name ===
+        "AbortError"
+      ) {
         return res.status(504).json({
-          error: "AI request timed out",
+          error:
+            "AI request timed out",
           message:
-            "Vyhľadávanie trvalo príliš dlho. Skús požiadavku zopakovať."
+            "AI odpovedala príliš pomaly. Skús vyhľadávanie znova."
         });
       }
 
       throw error;
+
     } finally {
-      requestTimeout.clear();
+      clearTimeout(timeoutId);
     }
 
-    const data =
-      await response.json().catch(() => ({}));
+    /*
+      ======================================================
+      OPENROUTER RESPONSE
+      ======================================================
+    */
+
+    const raw =
+      await response.text();
 
     if (!response.ok) {
       return res.status(response.status).json({
-        error: "OpenRouter API error",
+        error:
+          "OpenRouter API error",
+
         details:
-          data?.error?.message ||
-          "Unknown OpenRouter error"
+          raw.substring(0, 1500)
+      });
+    }
+
+    let data;
+
+    try {
+      data =
+        JSON.parse(raw);
+    } catch {
+      return res.status(502).json({
+        error:
+          "OpenRouter returned invalid API JSON",
+
+        details:
+          raw.substring(0, 1000)
       });
     }
 
@@ -285,50 +474,70 @@ Use exactly this structure:
       data?.choices?.[0]?.message?.content ||
       "";
 
-    text = String(text).trim();
+    /*
+      Handle providers that return
+      content as an array.
+    */
+
+    if (Array.isArray(text)) {
+      text = text
+        .map(item =>
+          typeof item === "string"
+            ? item
+            : item?.text || ""
+        )
+        .join("");
+    }
+
+    text =
+      String(text).trim();
 
     if (!text) {
       return res.status(502).json({
-        error: "AI returned an empty response"
+        error:
+          "AI returned an empty response"
       });
     }
 
     /*
-      -------------------------------------------------------
-      REMOVE MARKDOWN CODE FENCES
-      -------------------------------------------------------
+      ======================================================
+      JSON CLEANUP
+      ======================================================
     */
 
     text = text
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/\s*```$/i, "")
+      .replace(
+        /^```json\s*/i,
+        ""
+      )
+      .replace(
+        /^```\s*/i,
+        ""
+      )
+      .replace(
+        /\s*```$/i,
+        ""
+      )
       .trim();
 
-    /*
-      -------------------------------------------------------
-      FIND JSON INSIDE EXTRA AI TEXT
-      -------------------------------------------------------
-    */
+    function extractJSON(value) {
+      const first =
+        value.indexOf("{");
 
-    function extractJSON(raw) {
-      const firstBrace =
-        raw.indexOf("{");
-
-      const lastBrace =
-        raw.lastIndexOf("}");
+      const last =
+        value.lastIndexOf("}");
 
       if (
-        firstBrace === -1 ||
-        lastBrace === -1 ||
-        lastBrace <= firstBrace
+        first === -1 ||
+        last === -1 ||
+        last <= first
       ) {
         return null;
       }
 
-      return raw.substring(
-        firstBrace,
-        lastBrace + 1
+      return value.substring(
+        first,
+        last + 1
       );
     }
 
@@ -336,14 +545,10 @@ Use exactly this structure:
       extractJSON(text);
 
     if (!jsonText) {
-      console.error(
-        "NO JSON FOUND:",
-        text.substring(0, 1000)
-      );
-
       return res.status(502).json({
         error:
           "AI response did not contain JSON",
+
         details:
           text.substring(0, 500)
       });
@@ -354,127 +559,41 @@ Use exactly this structure:
     try {
       result =
         JSON.parse(jsonText);
+
     } catch (error) {
+
       console.error(
-        "INVALID AI JSON:",
-        jsonText.substring(0, 1000)
+        "CARMATCH INVALID JSON:",
+        text.substring(0, 2000)
       );
 
       return res.status(502).json({
         error:
           "AI returned invalid JSON",
+
         details:
-          jsonText.substring(0, 500)
+          text.substring(0, 500)
       });
     }
-
-    /*
-      -------------------------------------------------------
-      VALIDATE RESULT
-      -------------------------------------------------------
-    */
 
     if (
       !result ||
       !Array.isArray(result.cars) ||
-      result.cars.length < 3
+      result.cars.length !== 3
     ) {
       return res.status(502).json({
         error:
-          "AI response does not contain 3 cars"
+          "AI did not return exactly 3 cars"
       });
     }
 
     /*
-      -------------------------------------------------------
+      ======================================================
       WIKIMEDIA IMAGE SEARCH
-      -------------------------------------------------------
+      ======================================================
     */
 
-    async function searchWikimedia(query) {
-      const url =
-        "https://commons.wikimedia.org/w/api.php?" +
-        new URLSearchParams({
-          action: "query",
-          generator: "search",
-          gsrsearch: query,
-          gsrnamespace: "6",
-          gsrlimit: "8",
-          prop: "imageinfo",
-          iiprop: "url|extmetadata",
-          iiurlwidth: "1200",
-          format: "json",
-          origin: "*"
-        });
-
-      const controller =
-        timeout(5000);
-
-      try {
-        const imageResponse =
-          await fetch(url, {
-            signal:
-              controller.signal
-          });
-
-        if (!imageResponse.ok) {
-          return null;
-        }
-
-        const imageData =
-          await imageResponse.json();
-
-        const pages =
-          Object.values(
-            imageData?.query?.pages ||
-              {}
-          );
-
-        for (const page of pages) {
-          const info =
-            page?.imageinfo?.[0];
-
-          if (!info) continue;
-
-          const image =
-            info.thumburl ||
-            info.url;
-
-          if (!image) continue;
-
-          const title =
-            String(
-              page.title || ""
-            ).toLowerCase();
-
-          if (
-            title.includes("logo") ||
-            title.includes("emblem") ||
-            title.includes("icon") ||
-            title.includes("badge") ||
-            title.includes("symbol")
-          ) {
-            continue;
-          }
-
-          return {
-            image,
-            photoSource:
-              "Wikimedia Commons"
-          };
-        }
-
-        return null;
-
-      } catch {
-        return null;
-
-      } finally {
-        controller.clear();
-      }
-    }
-
-    async function findCarImage(car) {
+    async function findImage(car) {
       const name =
         String(
           car.name || ""
@@ -485,21 +604,143 @@ Use exactly this structure:
           car.generation || ""
         ).trim();
 
+      const year =
+        String(
+          car.year || ""
+        ).trim();
+
       const queries = [
+        `${name} ${generation} ${year}`,
         `${name} ${generation}`,
-        `${name} ${generation} automobile`,
-        `${name} car`,
-        `${name} vehicle`
+        `${name} car`
       ];
 
       for (const query of queries) {
-        const result =
-          await searchWikimedia(
-            query
+
+        const controller =
+          new AbortController();
+
+        const timer =
+          setTimeout(
+            () =>
+              controller.abort(),
+            3000
           );
 
-        if (result?.image) {
-          return result;
+        try {
+
+          const url =
+            "https://commons.wikimedia.org/w/api.php?" +
+            new URLSearchParams({
+              action:
+                "query",
+
+              generator:
+                "search",
+
+              gsrsearch:
+                query,
+
+              gsrnamespace:
+                "6",
+
+              gsrlimit:
+                "6",
+
+              prop:
+                "imageinfo",
+
+              iiprop:
+                "url|mime",
+
+              iiurlwidth:
+                "1200",
+
+              format:
+                "json",
+
+              origin:
+                "*"
+            });
+
+          const imageResponse =
+            await fetch(url, {
+              signal:
+                controller.signal
+            });
+
+          if (
+            !imageResponse.ok
+          ) {
+            continue;
+          }
+
+          const imageData =
+            await imageResponse.json();
+
+          const pages =
+            Object.values(
+              imageData?.query?.pages ||
+              {}
+            );
+
+          for (const page of pages) {
+
+            const info =
+              page?.imageinfo?.[0];
+
+            if (!info) {
+              continue;
+            }
+
+            const image =
+              info.thumburl ||
+              info.url;
+
+            if (!image) {
+              continue;
+            }
+
+            const mime =
+              String(
+                info.mime || ""
+              ).toLowerCase();
+
+            if (
+              !mime.startsWith(
+                "image/"
+              )
+            ) {
+              continue;
+            }
+
+            const title =
+              String(
+                page.title || ""
+              ).toLowerCase();
+
+            if (
+              title.includes("logo") ||
+              title.includes("emblem") ||
+              title.includes("icon") ||
+              title.includes("badge") ||
+              title.includes("symbol") ||
+              title.includes("flag")
+            ) {
+              continue;
+            }
+
+            return {
+              image,
+              photoSource:
+                "Wikimedia Commons"
+            };
+          }
+
+        } catch {
+          // Try the next query.
+        } finally {
+          clearTimeout(timer);
         }
       }
 
@@ -510,24 +751,22 @@ Use exactly this structure:
     }
 
     /*
-      -------------------------------------------------------
-      SEARCH PHOTOS IN PARALLEL
-      -------------------------------------------------------
+      All 3 image searches run simultaneously.
     */
 
-    const photoResults =
+    const photos =
       await Promise.all(
         result.cars
           .slice(0, 3)
           .map(car =>
-            findCarImage(car)
+            findImage(car)
           )
       );
 
     /*
-      -------------------------------------------------------
-      FINAL CARS
-      -------------------------------------------------------
+      ======================================================
+      FINAL RESULT
+      ======================================================
     */
 
     const cars =
@@ -536,8 +775,7 @@ Use exactly this structure:
         .map((car, index) => {
 
           const photo =
-            photoResults[index] ||
-            {};
+            photos[index] || {};
 
           return {
             name:
@@ -552,7 +790,11 @@ Use exactly this structure:
               car.year || "",
 
             score:
-              car.score ?? "",
+              Number.isFinite(
+                Number(car.score)
+              )
+                ? Number(car.score)
+                : 0,
 
             price:
               car.price ||
@@ -573,7 +815,7 @@ Use exactly this structure:
               "Údaj nie je dostupný",
 
             seats:
-              car.seats ??
+              car.seats ||
               "Údaj nie je dostupný",
 
             trunk:
@@ -623,7 +865,11 @@ Use exactly this structure:
               car.manufacturer || "",
 
             configurator:
-              car.configurator || ""
+              isValidURL(
+                car.configurator
+              )
+                ? car.configurator
+                : ""
           };
         });
 
@@ -640,16 +886,42 @@ Use exactly this structure:
     });
 
   } catch (error) {
+
     console.error(
-      "CARMATCH ERROR:",
+      "CARMATCH BACKEND ERROR:",
       error
     );
 
     return res.status(500).json({
-      error: "Backend error",
+      error:
+        "Backend error",
+
       message:
         error?.message ||
         "Unknown backend error"
     });
+  }
+}
+
+
+function isValidURL(value) {
+  if (
+    typeof value !==
+    "string"
+  ) {
+    return false;
+  }
+
+  try {
+    const url =
+      new URL(value);
+
+    return (
+      url.protocol === "https:" ||
+      url.protocol === "http:"
+    );
+
+  } catch {
+    return false;
   }
 }
