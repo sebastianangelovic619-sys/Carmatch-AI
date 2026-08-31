@@ -353,3 +353,1248 @@ RETURN ONLY JSON.
           /^\s*User\s+Safety\s*:\s*safe\s*/i,
           ""
         );
+
+      text =
+        text.replace(
+          /^\s*Safety\s*:\s*safe\s*/i,
+          ""
+        );
+
+      return text.trim();
+    }
+
+    /* ===================================================
+       EXTRACT JSON
+       =================================================== */
+
+    function extractJSON(input) {
+
+      const text =
+        cleanAIText(input);
+
+      if (!text) {
+        return null;
+      }
+
+      const start =
+        text.indexOf("{");
+
+      if (start === -1) {
+        return null;
+      }
+
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+
+      for (
+        let i = start;
+        i < text.length;
+        i++
+      ) {
+
+        const char =
+          text[i];
+
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+
+        if (char === "\\") {
+          escaped = true;
+          continue;
+        }
+
+        if (char === '"') {
+          inString =
+            !inString;
+          continue;
+        }
+
+        if (inString) {
+          continue;
+        }
+
+        if (char === "{") {
+          depth++;
+        }
+
+        if (char === "}") {
+
+          depth--;
+
+          if (depth === 0) {
+
+            const candidate =
+              text.slice(
+                start,
+                i + 1
+              );
+
+            try {
+
+              return JSON.parse(
+                candidate
+              );
+
+            } catch {
+
+              return null;
+            }
+          }
+        }
+      }
+
+      return null;
+    }
+
+    /* ===================================================
+       VALIDATE AI RESULT
+       =================================================== */
+
+    function validateResult(data) {
+
+      if (
+        !data ||
+        typeof data !== "object"
+      ) {
+        return false;
+      }
+
+      if (
+        !Array.isArray(
+          data.cars
+        )
+      ) {
+        return false;
+      }
+
+      if (
+        data.cars.length !== 3
+      ) {
+        return false;
+      }
+
+      for (
+        const car of data.cars
+      ) {
+
+        if (
+          !car ||
+          typeof car !==
+            "object"
+        ) {
+          return false;
+        }
+
+        if (
+          typeof car.name !==
+            "string" ||
+          !car.name.trim()
+        ) {
+          return false;
+        }
+
+        if (
+          typeof car.manufacturer !==
+            "string"
+        ) {
+          return false;
+        }
+
+        if (
+          !Array.isArray(
+            car.pros
+          )
+        ) {
+          return false;
+        }
+
+        if (
+          !Array.isArray(
+            car.cons
+          )
+        ) {
+          return false;
+        }
+      }
+
+      return true;
+    }
+
+    /* ===================================================
+       ASK MODEL
+       =================================================== */
+
+    async function askModel(
+      model
+    ) {
+
+      const controller =
+        new AbortController();
+
+      const timer =
+        setTimeout(
+          () =>
+            controller.abort(),
+          REQUEST_TIMEOUT
+        );
+
+      try {
+
+        const response =
+          await fetch(
+            "https://openrouter.ai/api/v1/chat/completions",
+            {
+              method: "POST",
+
+              signal:
+                controller.signal,
+
+              headers: {
+
+                "Authorization":
+                  `Bearer ${apiKey}`,
+
+                "Content-Type":
+                  "application/json",
+
+                "HTTP-Referer":
+                  "https://carmatchai.vercel.app",
+
+                "X-Title":
+                  "CARMATCH AI"
+              },
+
+              body:
+                JSON.stringify({
+
+                  model,
+
+                  messages: [
+
+                    {
+                      role:
+                        "system",
+
+                      content:
+                        "Return ONLY one valid JSON object. Never return markdown, reasoning, thinking, safety labels, commentary, or User Safety messages."
+                    },
+
+                    {
+                      role:
+                        "user",
+
+                      content:
+                        prompt
+                    }
+
+                  ],
+
+                  temperature:
+                    0.1,
+
+                  max_tokens:
+                    3500
+                })
+            }
+          );
+
+        const raw =
+          await response.text();
+
+        /* ---------------------------------------------
+           PROVIDER ERROR
+           --------------------------------------------- */
+
+        if (
+          !response.ok
+        ) {
+
+          return {
+
+            ok: false,
+
+            status:
+              response.status,
+
+            error:
+              raw.substring(
+                0,
+                1500
+              )
+          };
+        }
+
+        /* ---------------------------------------------
+           OPENROUTER JSON
+           --------------------------------------------- */
+
+        let data;
+
+        try {
+
+          data =
+            JSON.parse(
+              raw
+            );
+
+        } catch {
+
+          return {
+
+            ok: false,
+
+            status: 502,
+
+            error:
+              "OpenRouter returned invalid JSON"
+          };
+        }
+
+        /* ---------------------------------------------
+           GET CONTENT
+           --------------------------------------------- */
+
+        let content =
+          data
+            ?.choices?.[0]
+            ?.message
+            ?.content ||
+          "";
+
+        /*
+          Some providers can return content
+          as an array.
+        */
+
+        if (
+          Array.isArray(
+            content
+          )
+        ) {
+
+          content =
+            content
+              .map(
+                (part) => {
+
+                  if (
+                    typeof part ===
+                    "string"
+                  ) {
+                    return part;
+                  }
+
+                  return (
+                    part?.text ||
+                    ""
+                  );
+                }
+              )
+              .join("");
+        }
+
+        content =
+          cleanAIText(
+            content
+          );
+
+        if (!content) {
+
+          return {
+
+            ok: false,
+
+            status: 502,
+
+            error:
+              "AI returned an empty response"
+          };
+        }
+
+        /* ---------------------------------------------
+           PARSE CAR JSON
+           --------------------------------------------- */
+
+        const parsed =
+          extractJSON(
+            content
+          );
+
+        if (
+          !parsed ||
+          !validateResult(
+            parsed
+          )
+        ) {
+
+          return {
+
+            ok: false,
+
+            status: 502,
+
+            error:
+              "AI returned invalid JSON or not exactly 3 cars",
+
+            raw:
+              content.substring(
+                0,
+                2000
+              )
+          };
+        }
+
+        /* ---------------------------------------------
+           SUCCESS
+           --------------------------------------------- */
+
+        return {
+
+          ok: true,
+
+          result:
+            parsed,
+
+          model:
+            data?.model ||
+            model
+        };
+
+      } catch (error) {
+
+        if (
+          error?.name ===
+          "AbortError"
+        ) {
+
+          return {
+
+            ok: false,
+
+            status: 504,
+
+            error:
+              "AI model timeout"
+          };
+        }
+
+        return {
+
+          ok: false,
+
+          status: 500,
+
+          error:
+            error?.message ||
+            "AI request failed"
+        };
+
+      } finally {
+
+        clearTimeout(
+          timer
+        );
+      }
+    }
+
+    /* ===================================================
+       AI FALLBACK SYSTEM
+       =================================================== */
+
+    let result =
+      null;
+
+    let successfulModel =
+      "";
+
+    const errors = [];
+
+    /* ===================================================
+       FREE ATTEMPT #1
+       =================================================== */
+
+    console.log(
+      "CARMATCH AI: FREE ATTEMPT #1"
+    );
+
+    let response =
+      await askModel(
+        FREE_MODEL
+      );
+
+    if (
+      response.ok
+    ) {
+
+      result =
+        response.result;
+
+      successfulModel =
+        response.model ||
+        FREE_MODEL;
+
+      console.log(
+        "CARMATCH AI FREE SUCCESS:",
+        successfulModel
+      );
+
+    } else {
+
+      errors.push({
+
+        tier:
+          "free",
+
+        attempt:
+          1,
+
+        model:
+          FREE_MODEL,
+
+        status:
+          response.status,
+
+        error:
+          response.error,
+
+        raw:
+          response.raw
+      });
+
+      console.error(
+        "CARMATCH AI FREE #1 FAILED:",
+        response
+      );
+    }
+
+    /* ===================================================
+       FREE ATTEMPT #2
+       =================================================== */
+
+    if (!result) {
+
+      await sleep(
+        500
+      );
+
+      console.log(
+        "CARMATCH AI: FREE ATTEMPT #2"
+      );
+
+      response =
+        await askModel(
+          FREE_MODEL
+        );
+
+      if (
+        response.ok
+      ) {
+
+        result =
+          response.result;
+
+        successfulModel =
+          response.model ||
+          FREE_MODEL;
+
+        console.log(
+          "CARMATCH AI FREE RETRY SUCCESS:",
+          successfulModel
+        );
+
+      } else {
+
+        errors.push({
+
+          tier:
+            "free",
+
+          attempt:
+            2,
+
+          model:
+            FREE_MODEL,
+
+          status:
+            response.status,
+
+          error:
+            response.error,
+
+          raw:
+            response.raw
+        });
+
+        console.error(
+          "CARMATCH AI FREE #2 FAILED:",
+          response
+        );
+      }
+    }
+
+    /* ===================================================
+       PAID FALLBACK
+       =================================================== */
+
+    if (
+      !result &&
+      PAID_FALLBACK_ENABLED
+    ) {
+
+      console.log(
+        "CARMATCH AI: FREE FAILED"
+      );
+
+      console.log(
+        "CARMATCH AI: STARTING PAID FALLBACK:",
+        PAID_MODEL
+      );
+
+      /* -----------------------------------------------
+         PAID ATTEMPT #1
+         ----------------------------------------------- */
+
+      response =
+        await askModel(
+          PAID_MODEL
+        );
+
+      if (
+        response.ok
+      ) {
+
+        result =
+          response.result;
+
+        successfulModel =
+          response.model ||
+          PAID_MODEL;
+
+        console.log(
+          "CARMATCH AI PAID SUCCESS:",
+          successfulModel
+        );
+
+      } else {
+
+        errors.push({
+
+          tier:
+            "paid",
+
+          attempt:
+            1,
+
+          model:
+            PAID_MODEL,
+
+          status:
+            response.status,
+
+          error:
+            response.error,
+
+          raw:
+            response.raw
+        });
+
+        console.error(
+          "CARMATCH AI PAID #1 FAILED:",
+          response
+        );
+      }
+
+      /* -----------------------------------------------
+         PAID ATTEMPT #2
+         ----------------------------------------------- */
+
+      if (!result) {
+
+        await sleep(
+          500
+        );
+
+        console.log(
+          "CARMATCH AI: PAID ATTEMPT #2"
+        );
+
+        response =
+          await askModel(
+            PAID_MODEL
+          );
+
+        if (
+          response.ok
+        ) {
+
+          result =
+            response.result;
+
+          successfulModel =
+            response.model ||
+            PAID_MODEL;
+
+          console.log(
+            "CARMATCH AI PAID RETRY SUCCESS:",
+            successfulModel
+          );
+
+        } else {
+
+          errors.push({
+
+            tier:
+              "paid",
+
+            attempt:
+              2,
+
+            model:
+              PAID_MODEL,
+
+            status:
+              response.status,
+
+            error:
+              response.error,
+
+            raw:
+              response.raw
+          });
+
+          console.error(
+            "CARMATCH AI PAID #2 FAILED:",
+            response
+          );
+        }
+      }
+
+    } else if (
+      !result &&
+      !PAID_FALLBACK_ENABLED
+    ) {
+
+      console.log(
+        "CARMATCH AI: PAID FALLBACK IS DISABLED"
+      );
+    }
+
+    /* ===================================================
+       EVERYTHING FAILED
+       =================================================== */
+
+    if (!result) {
+
+      console.error(
+        "ALL CARMATCH AI ATTEMPTS FAILED:",
+        JSON.stringify(
+          errors,
+          null,
+          2
+        )
+      );
+
+      return res.status(503).json({
+
+        error:
+          "AI is temporarily unavailable",
+
+        message:
+          PAID_FALLBACK_ENABLED
+            ? "CARMATCH AI momentálne nedostal použiteľnú odpoveď ani z bezplatných, ani z plateného AI modelu."
+            : "CARMATCH AI momentálne nedostal použiteľnú odpoveď z bezplatných AI modelov.",
+
+        retryable:
+          true,
+
+        paidFallbackEnabled:
+          PAID_FALLBACK_ENABLED
+      });
+    }
+
+    /* ===================================================
+       WIKIMEDIA IMAGE SEARCH
+       =================================================== */
+
+    async function searchWikimedia(
+      query
+    ) {
+
+      const controller =
+        new AbortController();
+
+      const timer =
+        setTimeout(
+          () =>
+            controller.abort(),
+          3500
+        );
+
+      try {
+
+        const params =
+          new URLSearchParams({
+
+            action:
+              "query",
+
+            generator:
+              "search",
+
+            gsrsearch:
+              query,
+
+            gsrnamespace:
+              "6",
+
+            gsrlimit:
+              "5",
+
+            prop:
+              "imageinfo",
+
+            iiprop:
+              "url|mime",
+
+            iiurlwidth:
+              "1200",
+
+            format:
+              "json",
+
+            origin:
+              "*"
+          });
+
+        const response =
+          await fetch(
+            `https://commons.wikimedia.org/w/api.php?${params.toString()}`,
+            {
+              signal:
+                controller.signal
+            }
+          );
+
+        if (
+          !response.ok
+        ) {
+          return null;
+        }
+
+        const data =
+          await response.json();
+
+        const pages =
+          Object.values(
+            data?.query
+              ?.pages || {}
+          );
+
+        for (
+          const page of pages
+        ) {
+
+          const info =
+            page
+              ?.imageinfo?.[0];
+
+          if (!info) {
+            continue;
+          }
+
+          const image =
+            info.thumburl ||
+            info.url;
+
+          if (!image) {
+            continue;
+          }
+
+          const mime =
+            String(
+              info.mime || ""
+            ).toLowerCase();
+
+          if (
+            !mime.startsWith(
+              "image/"
+            )
+          ) {
+            continue;
+          }
+
+          const title =
+            String(
+              page.title || ""
+            ).toLowerCase();
+
+          /*
+            Avoid logos and other irrelevant images.
+          */
+
+          if (
+            title.includes(
+              "logo"
+            ) ||
+            title.includes(
+              "emblem"
+            ) ||
+            title.includes(
+              "icon"
+            ) ||
+            title.includes(
+              "badge"
+            ) ||
+            title.includes(
+              "symbol"
+            ) ||
+            title.includes(
+              "flag"
+            )
+          ) {
+            continue;
+          }
+
+          return {
+
+            image,
+
+            photoSource:
+              "Wikimedia Commons"
+          };
+        }
+
+        return null;
+
+      } catch {
+
+        return null;
+
+      } finally {
+
+        clearTimeout(
+          timer
+        );
+      }
+    }
+
+    /* ===================================================
+       FIND CAR IMAGE
+       =================================================== */
+
+    async function findCarImage(
+      car
+    ) {
+
+      const name =
+        String(
+          car.name || ""
+        ).trim();
+
+      const generation =
+        String(
+          car.generation || ""
+        ).trim();
+
+      const manufacturer =
+        String(
+          car.manufacturer || ""
+        ).trim();
+
+      const queries = [
+
+        `${manufacturer} ${name} ${generation}`,
+
+        `${name} ${generation}`,
+
+        `${manufacturer} ${name} car`,
+
+        `${name} automobile`
+      ];
+
+      for (
+        const query of queries
+      ) {
+
+        const photo =
+          await searchWikimedia(
+            query
+          );
+
+        if (
+          photo?.image
+        ) {
+
+          return photo;
+        }
+      }
+
+      /*
+        Image failure must NEVER
+        cause the AI request to fail.
+      */
+
+      return {
+
+        image:
+          "",
+
+        photoSource:
+          ""
+      };
+    }
+
+    /* ===================================================
+       SEARCH ALL 3 IMAGES IN PARALLEL
+       =================================================== */
+
+    const photos =
+      await Promise.all(
+        result.cars
+          .slice(0, 3)
+          .map(
+            (car) =>
+              findCarImage(
+                car
+              )
+          )
+      );
+
+    /* ===================================================
+       FINAL CAR DATA
+       =================================================== */
+
+    const cars =
+      result.cars
+        .slice(0, 3)
+        .map(
+          (
+            car,
+            index
+          ) => {
+
+            const photo =
+              photos[index] ||
+              {};
+
+            let score =
+              Number(
+                car.score
+              );
+
+            if (
+              !Number.isFinite(
+                score
+              )
+            ) {
+              score = 0;
+            }
+
+            score =
+              Math.max(
+                0,
+                Math.min(
+                  100,
+                  score
+                )
+              );
+
+            return {
+
+              name:
+                car.name ||
+                "Neznáme auto",
+
+              generation:
+                car.generation ||
+                "Neznáma generácia",
+
+              year:
+                car.year ||
+                "",
+
+              score,
+
+              price:
+                car.price ||
+                "Cena nie je dostupná",
+
+              priceVerified:
+                car.priceVerified ===
+                true,
+
+              priceSource:
+                car.priceSource ||
+                "",
+
+              priceType:
+                car.priceType ||
+                "unknown",
+
+              power:
+                car.power ||
+                "Údaj nie je dostupný",
+
+              seats:
+                car.seats ||
+                "Údaj nie je dostupný",
+
+              trunk:
+                car.trunk ||
+                "Údaj nie je dostupný",
+
+              drive:
+                car.drive ||
+                "Údaj nie je dostupný",
+
+              fuel:
+                car.fuel ||
+                "Údaj nie je dostupný",
+
+              body:
+                car.body ||
+                "Údaj nie je dostupný",
+
+              dimensions:
+                car.dimensions ||
+                "Údaj nie je dostupný",
+
+              image:
+                photo.image ||
+                "",
+
+              photoSource:
+                photo.photoSource ||
+                "",
+
+              reason:
+                car.reason ||
+                "",
+
+              pros:
+                Array.isArray(
+                  car.pros
+                )
+                  ? car.pros.slice(
+                      0,
+                      4
+                    )
+                  : [],
+
+              cons:
+                Array.isArray(
+                  car.cons
+                )
+                  ? car.cons.slice(
+                      0,
+                      4
+                    )
+                  : [],
+
+              maintenance:
+                car.maintenance ||
+                "Údaj nie je dostupný",
+
+              manufacturer:
+                car.manufacturer ||
+                "",
+
+              configurator:
+                isValidURL(
+                  car.configurator
+                )
+                  ? car.configurator
+                  : ""
+            };
+          }
+        );
+
+    /* ===================================================
+       SUCCESS RESPONSE
+       =================================================== */
+
+    return res.status(200).json({
+
+      language:
+        result.language ||
+        language,
+
+      market:
+        result.market ||
+        market,
+
+      cars,
+
+      ai: {
+
+        model:
+          successfulModel,
+
+        paidFallbackUsed:
+          successfulModel ===
+          PAID_MODEL,
+
+        paidFallbackEnabled:
+          PAID_FALLBACK_ENABLED
+      }
+    });
+
+  } catch (error) {
+
+    /* ===================================================
+       GLOBAL BACKEND ERROR
+       =================================================== */
+
+    console.error(
+      "CARMATCH BACKEND ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+
+      error:
+        "Backend error",
+
+      message:
+        error?.message ||
+        "Unknown backend error"
+    });
+  }
+}
+
+
+/* =======================================================
+   URL VALIDATION
+   ======================================================= */
+
+function isValidURL(
+  value
+) {
+
+  if (
+    typeof value !==
+    "string"
+  ) {
+    return false;
+  }
+
+  try {
+
+    const url =
+      new URL(value);
+
+    return (
+      url.protocol ===
+        "https:" ||
+      url.protocol ===
+        "http:"
+    );
+
+  } catch {
+
+    return false;
+  }
+}
