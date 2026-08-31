@@ -309,8 +309,13 @@ Return this exact structure:
       });
     }
 
-    let text =
-      data?.choices?.[0]?.message?.content || "";
+    if (
+  text.trim().toLowerCase() === "user safety: safe"
+) {
+  return res.status(502).json({
+    error: "AI returned a safety status instead of vehicle data"
+  });
+}
 
     if (!text) {
       return res.status(500).json({
