@@ -277,6 +277,7 @@ select {
 
   .wide {
     grid-column: auto;
+ 
   }
 
   .hero h1 {
@@ -286,4 +287,66 @@ select {
   .subtitle {
     display: none;
   }
+}
+.market-info {
+  background: white;
+  border-radius: 14px;
+  padding: 13px 16px;
+  margin-bottom: 18px;
+  color: #555;
+  font-size: 13px;
+  box-shadow: 0 6px 20px #00000008;
+}
+
+.official-price-box {
+  border-top: 1px solid #eee;
+  border-bottom: 1px solid #eee;
+  margin: 15px 0;
+  padding: 15px 0;
+}
+
+.price-verified {
+  color: #176b32;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .4px;
+}
+
+.price-not-verified {
+  color: #9b3030;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .4px;
+}
+
+.official-price {
+  margin-top: 5px;
+  font-size: 24px;
+  font-weight: 900;
+}
+
+.source-link {
+  display: inline-block;
+  margin-top: 9px;
+  color: #555;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.source-link:hover {
+  text-decoration: underline;
+}
+
+.photo-info {
+  color: #666;
+}
+
+.configure {
+  transition: transform .15s ease,
+              background .15s ease;
+}
+
+.configure:hover {
+  transform: translateY(-1px);
 }
