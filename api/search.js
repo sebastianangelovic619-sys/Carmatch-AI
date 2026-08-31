@@ -505,13 +505,16 @@ Return this exact structure:
               car.score ?? "",
 
             price:
-              car.price || "Cena neoverená",
+  car.price || "Cena nie je dostupná",
 
-            priceVerified:
-              car.priceVerified === true,
+priceVerified:
+  car.priceVerified === true,
 
-            priceSource:
-              car.priceSource || "",
+priceSource:
+  car.priceSource || "",
+
+priceType:
+  car.priceType || "unknown",
 
             power:
               car.power || "Údaj nie je dostupný",
