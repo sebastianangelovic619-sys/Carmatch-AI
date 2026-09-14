@@ -1,20 +1,18 @@
 export default async function handler(req, res) {
   /* =====================================================
-     CARMATCH AI - FINAL STABLE BACKEND
-     
-     FREE:
-       openrouter/free
-       ↓
-       retry
+     CARMATCH AI - MULTI MODEL FAILOVER BACKEND
+
+     FREE MODEL CHAIN:
+       1. Gemma 4 26B A4B
+       2. Gemma 4 31B
+       3. NVIDIA Nemotron 3 Super
+       4. openrouter/free
 
      PAID FALLBACK:
-       openai/gpt-oss-120b
-       ↓
-       retry
+       optional, controlled by Vercel env variable
 
      Images:
        Wikimedia Commons
-
      ===================================================== */
 
   /* =====================================================
@@ -162,7 +160,7 @@ export default async function handler(req, res) {
 You are CARMATCH AI, a professional worldwide automotive recommendation assistant.
 
 CURRENT DATE:
-August 31, 2026
+September 14, 2026
 
 USER LANGUAGE:
 ${language}
@@ -283,8 +281,19 @@ RETURN ONLY JSON.
        MODEL CONFIGURATION
        =================================================== */
 
-    const FREE_MODEL =
-      "openrouter/free";
+    /*
+      OpenRouter currently supports model-level fallback
+      through the "models" array.
+
+      All four models below are intended as FREE routes.
+    */
+
+    const FREE_MODELS = [
+      "google/gemma-4-26b-a4b-it:free",
+      "google/gemma-4-31b-it:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "openrouter/free"
+    ];
 
     const PAID_MODEL =
       process.env.PAID_FALLBACK_MODEL ||
@@ -301,7 +310,7 @@ RETURN ONLY JSON.
        =================================================== */
 
     const REQUEST_TIMEOUT =
-      30000;
+      45000;
 
     /* ===================================================
        SLEEP
@@ -328,10 +337,6 @@ RETURN ONLY JSON.
           input || ""
         ).trim();
 
-      /*
-        Remove markdown fences.
-      */
-
       text =
         text.replace(
           /```json/gi,
@@ -343,10 +348,6 @@ RETURN ONLY JSON.
           /```/g,
           ""
         );
-
-      /*
-        Remove accidental safety messages.
-      */
 
       text =
         text.replace(
@@ -528,7 +529,7 @@ RETURN ONLY JSON.
        =================================================== */
 
     async function askModel(
-      model
+      models
     ) {
 
       const controller =
@@ -542,6 +543,65 @@ RETURN ONLY JSON.
         );
 
       try {
+
+        /*
+          The first model is the preferred model.
+          OpenRouter automatically tries the following
+          models if the previous one fails.
+        */
+
+        const primaryModel =
+          Array.isArray(models)
+            ? models[0]
+            : models;
+
+        const fallbackModels =
+          Array.isArray(models)
+            ? models.slice(1)
+            : [];
+
+        const body = {
+
+          model:
+            primaryModel,
+
+          messages: [
+
+            {
+              role:
+                "system",
+
+              content:
+                "Return ONLY one valid JSON object. Never return markdown, reasoning, thinking, safety labels, commentary, or User Safety messages."
+            },
+
+            {
+              role:
+                "user",
+
+              content:
+                prompt
+            }
+
+          ],
+
+          temperature:
+            0.1,
+
+          max_tokens:
+            3500
+        };
+
+        /*
+          OpenRouter model-level fallback.
+        */
+
+        if (
+          fallbackModels.length
+        ) {
+          body.models =
+            fallbackModels;
+        }
 
         const response =
           await fetch(
@@ -568,36 +628,9 @@ RETURN ONLY JSON.
               },
 
               body:
-                JSON.stringify({
-
-                  model,
-
-                  messages: [
-
-                    {
-                      role:
-                        "system",
-
-                      content:
-                        "Return ONLY one valid JSON object. Never return markdown, reasoning, thinking, safety labels, commentary, or User Safety messages."
-                    },
-
-                    {
-                      role:
-                        "user",
-
-                      content:
-                        prompt
-                    }
-
-                  ],
-
-                  temperature:
-                    0.1,
-
-                  max_tokens:
-                    3500
-                })
+                JSON.stringify(
+                  body
+                )
             }
           );
 
@@ -663,11 +696,6 @@ RETURN ONLY JSON.
             ?.message
             ?.content ||
           "";
-
-        /*
-          Some providers can return content
-          as an array.
-        */
 
         if (
           Array.isArray(
@@ -760,7 +788,7 @@ RETURN ONLY JSON.
 
           model:
             data?.model ||
-            model
+            primaryModel
         };
 
       } catch (error) {
@@ -801,7 +829,7 @@ RETURN ONLY JSON.
     }
 
     /* ===================================================
-       AI FALLBACK SYSTEM
+       FREE AI FAILOVER
        =================================================== */
 
     let result =
@@ -812,17 +840,20 @@ RETURN ONLY JSON.
 
     const errors = [];
 
-    /* ===================================================
-       FREE ATTEMPT #1
-       =================================================== */
-
     console.log(
-      "CARMATCH AI: FREE ATTEMPT #1"
+      "CARMATCH AI: STARTING FREE MODEL CHAIN",
+      FREE_MODELS
     );
+
+    /*
+      First request:
+      OpenRouter tries all FREE_MODELS
+      automatically in order.
+    */
 
     let response =
       await askModel(
-        FREE_MODEL
+        FREE_MODELS
       );
 
     if (
@@ -834,7 +865,7 @@ RETURN ONLY JSON.
 
       successfulModel =
         response.model ||
-        FREE_MODEL;
+        FREE_MODELS[0];
 
       console.log(
         "CARMATCH AI FREE SUCCESS:",
@@ -851,8 +882,8 @@ RETURN ONLY JSON.
         attempt:
           1,
 
-        model:
-          FREE_MODEL,
+        models:
+          FREE_MODELS,
 
         status:
           response.status,
@@ -865,28 +896,28 @@ RETURN ONLY JSON.
       });
 
       console.error(
-        "CARMATCH AI FREE #1 FAILED:",
+        "CARMATCH AI FREE CHAIN FAILED:",
         response
       );
     }
 
     /* ===================================================
-       FREE ATTEMPT #2
+       FREE RETRY
        =================================================== */
 
     if (!result) {
 
       await sleep(
-        500
+        800
       );
 
       console.log(
-        "CARMATCH AI: FREE ATTEMPT #2"
+        "CARMATCH AI: RETRYING FREE MODEL CHAIN"
       );
 
       response =
         await askModel(
-          FREE_MODEL
+          FREE_MODELS
         );
 
       if (
@@ -898,7 +929,7 @@ RETURN ONLY JSON.
 
         successfulModel =
           response.model ||
-          FREE_MODEL;
+          FREE_MODELS[0];
 
         console.log(
           "CARMATCH AI FREE RETRY SUCCESS:",
@@ -915,8 +946,8 @@ RETURN ONLY JSON.
           attempt:
             2,
 
-          model:
-            FREE_MODEL,
+          models:
+            FREE_MODELS,
 
           status:
             response.status,
@@ -929,7 +960,7 @@ RETURN ONLY JSON.
         });
 
         console.error(
-          "CARMATCH AI FREE #2 FAILED:",
+          "CARMATCH AI FREE RETRY FAILED:",
           response
         );
       }
@@ -945,21 +976,19 @@ RETURN ONLY JSON.
     ) {
 
       console.log(
-        "CARMATCH AI: FREE FAILED"
-      );
-
-      console.log(
         "CARMATCH AI: STARTING PAID FALLBACK:",
         PAID_MODEL
       );
 
-      /* -----------------------------------------------
-         PAID ATTEMPT #1
-         ----------------------------------------------- */
+      /*
+        Paid model also gets one retry.
+      */
 
       response =
         await askModel(
-          PAID_MODEL
+          [
+            PAID_MODEL
+          ]
         );
 
       if (
@@ -1002,28 +1031,22 @@ RETURN ONLY JSON.
         });
 
         console.error(
-          "CARMATCH AI PAID #1 FAILED:",
+          "CARMATCH AI PAID FAILED:",
           response
         );
       }
 
-      /* -----------------------------------------------
-         PAID ATTEMPT #2
-         ----------------------------------------------- */
-
       if (!result) {
 
         await sleep(
-          500
-        );
-
-        console.log(
-          "CARMATCH AI: PAID ATTEMPT #2"
+          800
         );
 
         response =
           await askModel(
-            PAID_MODEL
+            [
+              PAID_MODEL
+            ]
           );
 
         if (
@@ -1066,7 +1089,7 @@ RETURN ONLY JSON.
           });
 
           console.error(
-            "CARMATCH AI PAID #2 FAILED:",
+            "CARMATCH AI PAID RETRY FAILED:",
             response
           );
         }
@@ -1231,10 +1254,6 @@ RETURN ONLY JSON.
               page.title || ""
             ).toLowerCase();
 
-          /*
-            Avoid logos and other irrelevant images.
-          */
-
           if (
             title.includes(
               "logo"
@@ -1331,11 +1350,6 @@ RETURN ONLY JSON.
           return photo;
         }
       }
-
-      /*
-        Image failure must NEVER
-        cause the AI request to fail.
-      */
 
       return {
 
@@ -1543,10 +1557,6 @@ RETURN ONLY JSON.
     });
 
   } catch (error) {
-
-    /* ===================================================
-       GLOBAL BACKEND ERROR
-       =================================================== */
 
     console.error(
       "CARMATCH BACKEND ERROR:",
