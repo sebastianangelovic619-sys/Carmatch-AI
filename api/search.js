@@ -1510,7 +1510,7 @@ RETURN ONLY JSON.
 
               cons:
                 Array.isArray(
-                  car.cons
+                  
                 )
                   ? car.cons.slice(
                       0,
