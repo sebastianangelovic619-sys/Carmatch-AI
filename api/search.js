@@ -6,10 +6,10 @@ export default async function handler(req, res) {
        1. Gemma 4 26B A4B
        2. Gemma 4 31B
        3. NVIDIA Nemotron 3 Super
-       4. openrouter/free
+       4. OpenRouter Free Router
 
      PAID FALLBACK:
-       optional, controlled by Vercel env variable
+       Optional, controlled by Vercel environment variable
 
      Images:
        Wikimedia Commons
@@ -160,7 +160,7 @@ export default async function handler(req, res) {
 You are CARMATCH AI, a professional worldwide automotive recommendation assistant.
 
 CURRENT DATE:
-September 14, 2026
+September 15, 2026
 
 USER LANGUAGE:
 ${language}
@@ -280,13 +280,6 @@ RETURN ONLY JSON.
     /* ===================================================
        MODEL CONFIGURATION
        =================================================== */
-
-    /*
-      OpenRouter currently supports model-level fallback
-      through the "models" array.
-
-      All four models below are intended as FREE routes.
-    */
 
     const FREE_MODELS = [
       "google/gemma-4-26b-a4b-it:free",
@@ -529,7 +522,7 @@ RETURN ONLY JSON.
        =================================================== */
 
     async function askModel(
-      models
+      model
     ) {
 
       const controller =
@@ -544,26 +537,9 @@ RETURN ONLY JSON.
 
       try {
 
-        /*
-          The first model is the preferred model.
-          OpenRouter automatically tries the following
-          models if the previous one fails.
-        */
-
-        const primaryModel =
-          Array.isArray(models)
-            ? models[0]
-            : models;
-
-        const fallbackModels =
-          Array.isArray(models)
-            ? models.slice(1)
-            : [];
-
         const body = {
 
-          model:
-            primaryModel,
+          model,
 
           messages: [
 
@@ -589,25 +565,20 @@ RETURN ONLY JSON.
             0.1,
 
           max_tokens:
-            3500
+            3500,
+
+          response_format: {
+            type:
+              "json_object"
+          }
         };
-
-        /*
-          OpenRouter model-level fallback.
-        */
-
-        if (
-          fallbackModels.length
-        ) {
-          body.models =
-            fallbackModels;
-        }
 
         const response =
           await fetch(
             "https://openrouter.ai/api/v1/chat/completions",
             {
-              method: "POST",
+              method:
+                "POST",
 
               signal:
                 controller.signal,
@@ -788,7 +759,7 @@ RETURN ONLY JSON.
 
           model:
             data?.model ||
-            primaryModel
+            model
         };
 
       } catch (error) {
@@ -841,38 +812,64 @@ RETURN ONLY JSON.
     const errors = [];
 
     console.log(
-      "CARMATCH AI: STARTING FREE MODEL CHAIN",
+      "CARMATCH AI: STARTING INDIVIDUAL FREE MODEL FAILOVER",
       FREE_MODELS
     );
 
     /*
-      First request:
-      OpenRouter tries all FREE_MODELS
-      automatically in order.
+      IMPORTANT:
+
+      Models are called ONE BY ONE.
+
+      If one model:
+      - returns 429
+      - returns 500
+      - returns 503
+      - times out
+      - returns empty content
+      - returns invalid JSON
+      - returns anything other than exactly 3 cars
+
+      the backend automatically tries the next model.
     */
 
-    let response =
-      await askModel(
-        FREE_MODELS
-      );
-
-    if (
-      response.ok
+    for (
+      let i = 0;
+      i < FREE_MODELS.length;
+      i++
     ) {
 
-      result =
-        response.result;
-
-      successfulModel =
-        response.model ||
-        FREE_MODELS[0];
+      const model =
+        FREE_MODELS[i];
 
       console.log(
-        "CARMATCH AI FREE SUCCESS:",
-        successfulModel
+        `CARMATCH AI: TRYING FREE MODEL ${i + 1}/${FREE_MODELS.length}:`,
+        model
       );
 
-    } else {
+      const response =
+        await askModel(
+          model
+        );
+
+      if (
+        response.ok
+      ) {
+
+        result =
+          response.result;
+
+        successfulModel =
+          response.model ||
+          model;
+
+        console.log(
+          "CARMATCH AI FREE SUCCESS:",
+          successfulModel
+        );
+
+        break;
+      }
 
       errors.push({
 
@@ -880,10 +877,9 @@ RETURN ONLY JSON.
           "free",
 
         attempt:
-          1,
+          i + 1,
 
-        models:
-          FREE_MODELS,
+        model,
 
         status:
           response.status,
@@ -896,58 +892,73 @@ RETURN ONLY JSON.
       });
 
       console.error(
-        "CARMATCH AI FREE CHAIN FAILED:",
+        "CARMATCH AI FREE MODEL FAILED:",
+        model,
         response
       );
     }
 
     /* ===================================================
-       FREE RETRY
+       SECOND FREE ROUND
        =================================================== */
 
     if (!result) {
 
       await sleep(
-        800
+        1000
       );
 
       console.log(
-        "CARMATCH AI: RETRYING FREE MODEL CHAIN"
+        "CARMATCH AI: STARTING SECOND FREE ROUND"
       );
 
-      response =
-        await askModel(
-          FREE_MODELS
-        );
-
-      if (
-        response.ok
+      for (
+        let i = 0;
+        i < FREE_MODELS.length;
+        i++
       ) {
 
-        result =
-          response.result;
-
-        successfulModel =
-          response.model ||
-          FREE_MODELS[0];
+        const model =
+          FREE_MODELS[i];
 
         console.log(
-          "CARMATCH AI FREE RETRY SUCCESS:",
-          successfulModel
+          `CARMATCH AI: RETRYING FREE MODEL ${i + 1}/${FREE_MODELS.length}:`,
+          model
         );
 
-      } else {
+        const response =
+          await askModel(
+            model
+          );
+
+        if (
+          response.ok
+        ) {
+
+          result =
+            response.result;
+
+          successfulModel =
+            response.model ||
+            model;
+
+          console.log(
+            "CARMATCH AI FREE RETRY SUCCESS:",
+            successfulModel
+          );
+
+          break;
+        }
 
         errors.push({
 
           tier:
-            "free",
+            "free-retry",
 
           attempt:
-            2,
+            i + 1,
 
-          models:
-            FREE_MODELS,
+          model,
 
           status:
             response.status,
@@ -961,6 +972,7 @@ RETURN ONLY JSON.
 
         console.error(
           "CARMATCH AI FREE RETRY FAILED:",
+          model,
           response
         );
       }
@@ -980,15 +992,9 @@ RETURN ONLY JSON.
         PAID_MODEL
       );
 
-      /*
-        Paid model also gets one retry.
-      */
-
-      response =
+      const response =
         await askModel(
-          [
-            PAID_MODEL
-          ]
+          PAID_MODEL
         );
 
       if (
@@ -1042,22 +1048,20 @@ RETURN ONLY JSON.
           800
         );
 
-        response =
+        const retryResponse =
           await askModel(
-            [
-              PAID_MODEL
-            ]
+            PAID_MODEL
           );
 
         if (
-          response.ok
+          retryResponse.ok
         ) {
 
           result =
-            response.result;
+            retryResponse.result;
 
           successfulModel =
-            response.model ||
+            retryResponse.model ||
             PAID_MODEL;
 
           console.log(
@@ -1070,7 +1074,7 @@ RETURN ONLY JSON.
           errors.push({
 
             tier:
-              "paid",
+              "paid-retry",
 
             attempt:
               2,
@@ -1079,18 +1083,18 @@ RETURN ONLY JSON.
               PAID_MODEL,
 
             status:
-              response.status,
+              retryResponse.status,
 
             error:
-              response.error,
+              retryResponse.error,
 
             raw:
-              response.raw
+              retryResponse.raw
           });
 
           console.error(
             "CARMATCH AI PAID RETRY FAILED:",
-            response
+            retryResponse
           );
         }
       }
@@ -1134,7 +1138,13 @@ RETURN ONLY JSON.
           true,
 
         paidFallbackEnabled:
-          PAID_FALLBACK_ENABLED
+          PAID_FALLBACK_ENABLED,
+
+        debug:
+          process.env.NODE_ENV !==
+          "production"
+            ? errors
+            : undefined
       });
     }
 
