@@ -1,34 +1,27 @@
 export default async function handler(req, res) {
   /* =====================================================
-     CARMATCH AI - MULTI MODEL FAILOVER BACKEND
+     CARMATCH AI - FINAL MULTI MODEL AUTOMOTIVE BACKEND
 
-     FREE MODEL CHAIN:
-       1. Gemma 4 26B A4B
-       2. Gemma 4 31B
-       3. NVIDIA Nemotron 3 Super
-       4. OpenRouter Free Router
-
-     PAID FALLBACK:
-       Optional, controlled by Vercel environment variable
-
-     Images:
-       Wikimedia Commons
+     Improvements:
+     - Stronger current-generation rules
+     - Current 2026/2027 model-year priority
+     - Price must be supplied when reliably known
+     - Better maintenance information
+     - No generic "2024" unless actually correct
+     - Exact 3 cars
+     - Free-model failover
+     - Wikimedia image search
      ===================================================== */
 
   /* =====================================================
      CORS
      ===================================================== */
 
-  res.setHeader(
-    "Access-Control-Allow-Origin",
-    "*"
-  );
-
+  res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader(
     "Access-Control-Allow-Methods",
     "POST, OPTIONS"
   );
-
   res.setHeader(
     "Access-Control-Allow-Headers",
     "Content-Type, Authorization"
@@ -59,9 +52,8 @@ export default async function handler(req, res) {
   }
 
   try {
-
     /* ===================================================
-       REQUEST DATA
+       REQUEST
        =================================================== */
 
     const {
@@ -70,19 +62,15 @@ export default async function handler(req, res) {
     } = req.body || {};
 
     const userText =
-      String(
-        naturalLanguage || ""
-      ).trim();
+      String(naturalLanguage || "").trim();
 
     /* ===================================================
-       LANGUAGE DETECTION
+       LANGUAGE
        =================================================== */
 
     function detectLanguage(text) {
-
       const t =
-        String(text || "")
-          .toLowerCase();
+        String(text || "").toLowerCase();
 
       if (
         /[áäčďéíĺľňóôŕšťúýž]/.test(t) ||
@@ -174,71 +162,202 @@ ${userText}
 FILTERS:
 ${JSON.stringify(filters, null, 2)}
 
-Your task is to recommend EXACTLY 3 vehicles that best match the user's requirements.
+==========================================================
+CRITICAL AUTOMOTIVE DATA RULES
+==========================================================
 
-IMPORTANT RULES:
+You MUST prioritize CURRENT automotive information.
 
-1. Consider manufacturers worldwide.
-2. Prefer the newest genuinely available generation.
-3. Never confuse different generations.
-4. Never invent specifications.
-5. Never invent model years.
-6. Never invent prices.
-7. Never invent URLs.
-8. Match the user's market whenever possible.
-9. Return EXACTLY 3 vehicles.
-10. Rank them from #1 to #3.
-11. Give a realistic score from 0 to 100.
-12. Include advantages.
-13. Include disadvantages.
-14. Include maintenance information.
-15. Include trunk capacity when known.
-16. Include dimensions when known.
-17. Include manufacturer.
-18. Include an official manufacturer configurator URL only when genuinely known.
-19. Do not generate image URLs.
-20. Images are searched separately by the backend.
-21. All descriptive text must use the user's language.
-22. Do not output reasoning.
-23. Do not output thinking.
-24. Do not output markdown.
-25. Do not output safety labels.
-26. Never output "User Safety: safe".
-27. Do not write anything before the JSON.
-28. Do not write anything after the JSON.
-29. Return exactly ONE JSON object.
-30. The JSON object must contain exactly 3 cars.
+The current date is September 2026.
 
-PRICE RULE:
+When the user asks for a current/new/recent vehicle:
 
-Never guess a price.
+- Prefer the latest genuinely available generation.
+- Prefer 2026 model year when genuinely available.
+- Prefer 2027 model year when genuinely available.
+- Do NOT automatically use 2024 or 2025.
+- Do NOT use an old model year merely because you know it better.
+- If a vehicle has received a facelift, use the facelift/current version.
+- If a completely new generation exists, NEVER recommend the previous generation as the current one.
+- Never confuse production year with model year.
+- Never invent a model year.
+- If the exact current model year cannot be established with reasonable confidence, write "2026" only when it is genuinely appropriate for the current generation; otherwise use "Aktuálna generácia".
 
-If a reliable price is genuinely known:
+IMPORTANT:
+A vehicle being known from 2024 does NOT mean that 2024 is its current model year.
 
-"price": "actual known price"
+==========================================================
+PRICE RULES
+==========================================================
+
+PRICE IS IMPORTANT.
+
+Always try to provide a real current price when it is reasonably known.
+
+For European-market vehicles, prefer the current European starting MSRP/list price.
+
+For Slovakia/EU users:
+- Prefer Slovak/EU pricing when known.
+- If Slovak price is unavailable but EU pricing is known, use the EU price.
+- Clearly identify the market/type of price in priceType.
+- Never convert currencies unless necessary.
+- Never invent a price.
+
+If a reliable current price is known:
+
+"price": "€XX XXX"
 "priceVerified": true
 
-If no reliable price is known:
+If a current price is not reliably known:
 
 "price": "Cena nie je dostupná"
 "priceVerified": false
 
-Never use approximate prices.
-
-Never use:
+Do NOT use:
 - around
 - approximately
 - about
 - roughly
 - estimated
 - similar price
+- odhad
+- približne
 
-If you cannot confidently verify a price, use:
+If you know a current manufacturer's starting price, use it.
 
-"price": "Cena nie je dostupná"
-"priceVerified": false
+priceSource should describe the source type when known, for example:
+"Oficiálny cenník výrobcu"
+"Oficiálna cena výrobcu"
+"EU starting MSRP"
 
-JSON FORMAT:
+priceType examples:
+"Slovakia"
+"EU"
+"Germany"
+"UK"
+"US"
+"Global"
+"unknown"
+
+==========================================================
+MAINTENANCE RULES
+==========================================================
+
+Maintenance information must be specific to the selected vehicle.
+
+DO NOT write generic text such as:
+
+"Vyžaduje špecializovaný servis Audi."
+
+Instead mention useful vehicle-specific information such as:
+
+- typical service interval when known
+- oil service when applicable
+- EV battery/electric drivetrain maintenance
+- brakes
+- tires
+- transmission service when applicable
+- quattro/AWD maintenance when applicable
+- hybrid system considerations
+- diesel DPF/AdBlue considerations when applicable
+- major maintenance items
+- expected maintenance complexity
+
+Do not invent exact service intervals.
+
+If exact intervals are unknown, describe the maintenance characteristics without inventing numbers.
+
+==========================================================
+SPECIFICATION RULES
+==========================================================
+
+Never invent:
+
+- horsepower
+- kW
+- torque
+- seats
+- trunk volume
+- dimensions
+- drivetrain
+- fuel type
+- generation
+- model year
+- price
+- configurator URL
+
+Use the most appropriate current specification when confidently known.
+
+For variants with multiple engines, clearly describe the relevant version.
+
+==========================================================
+RECOMMENDATION RULES
+==========================================================
+
+Your task is to recommend EXACTLY 3 vehicles.
+
+Consider manufacturers worldwide.
+
+Match ALL important user requirements:
+
+- budget
+- seats
+- power
+- trunk
+- drivetrain
+- fuel
+- body
+- vehicle length
+- model year
+- performance
+- practicality
+- maintenance
+- brands to avoid
+- other filters
+
+If the user explicitly asks for a powerful vehicle, do NOT recommend weak mainstream vehicles merely because they are popular.
+
+If the user requests 2 seats, do NOT recommend 5-seat vehicles unless absolutely necessary.
+
+If the user requests large trunk capacity, prioritize genuinely large trunks.
+
+If the user excludes brands, NEVER recommend those brands.
+
+Do not default to:
+- Škoda Superb
+- Mercedes E-Class
+- Audi A6
+
+unless they genuinely satisfy the user's request.
+
+Return the best three matches, not three generic popular cars.
+
+==========================================================
+OUTPUT RULES
+==========================================================
+
+Return EXACTLY ONE JSON object.
+
+Return EXACTLY 3 cars.
+
+No markdown.
+
+No explanation outside JSON.
+
+No reasoning.
+
+No thinking.
+
+No safety labels.
+
+Never output:
+"User Safety: safe"
+
+All descriptive text must be written in the user's language.
+
+==========================================================
+JSON FORMAT
+==========================================================
 
 {
   "language": "string",
@@ -278,7 +397,7 @@ RETURN ONLY JSON.
 `;
 
     /* ===================================================
-       MODEL CONFIGURATION
+       FREE MODELS
        =================================================== */
 
     const FREE_MODELS = [
@@ -287,6 +406,10 @@ RETURN ONLY JSON.
       "nvidia/nemotron-3-super-120b-a12b:free",
       "openrouter/free"
     ];
+
+    /* ===================================================
+       PAID FALLBACK
+       =================================================== */
 
     const PAID_MODEL =
       process.env.PAID_FALLBACK_MODEL ||
@@ -303,7 +426,7 @@ RETURN ONLY JSON.
        =================================================== */
 
     const REQUEST_TIMEOUT =
-      45000;
+      25000;
 
     /* ===================================================
        SLEEP
@@ -320,11 +443,10 @@ RETURN ONLY JSON.
         );
 
     /* ===================================================
-       CLEAN AI OUTPUT
+       CLEAN AI TEXT
        =================================================== */
 
     function cleanAIText(input) {
-
       let text =
         String(
           input || ""
@@ -362,7 +484,6 @@ RETURN ONLY JSON.
        =================================================== */
 
     function extractJSON(input) {
-
       const text =
         cleanAIText(input);
 
@@ -386,7 +507,6 @@ RETURN ONLY JSON.
         i < text.length;
         i++
       ) {
-
         const char =
           text[i];
 
@@ -415,11 +535,9 @@ RETURN ONLY JSON.
         }
 
         if (char === "}") {
-
           depth--;
 
           if (depth === 0) {
-
             const candidate =
               text.slice(
                 start,
@@ -427,13 +545,10 @@ RETURN ONLY JSON.
               );
 
             try {
-
               return JSON.parse(
                 candidate
               );
-
             } catch {
-
               return null;
             }
           }
@@ -444,11 +559,10 @@ RETURN ONLY JSON.
     }
 
     /* ===================================================
-       VALIDATE AI RESULT
+       VALIDATE RESULT
        =================================================== */
 
     function validateResult(data) {
-
       if (
         !data ||
         typeof data !== "object"
@@ -473,18 +587,15 @@ RETURN ONLY JSON.
       for (
         const car of data.cars
       ) {
-
         if (
           !car ||
-          typeof car !==
-            "object"
+          typeof car !== "object"
         ) {
           return false;
         }
 
         if (
-          typeof car.name !==
-            "string" ||
+          typeof car.name !== "string" ||
           !car.name.trim()
         ) {
           return false;
@@ -492,7 +603,7 @@ RETURN ONLY JSON.
 
         if (
           typeof car.manufacturer !==
-            "string"
+          "string"
         ) {
           return false;
         }
@@ -512,6 +623,25 @@ RETURN ONLY JSON.
         ) {
           return false;
         }
+
+        if (
+          typeof car.year !== "string"
+        ) {
+          return false;
+        }
+
+        if (
+          typeof car.price !== "string"
+        ) {
+          return false;
+        }
+
+        if (
+          typeof car.maintenance !==
+          "string"
+        ) {
+          return false;
+        }
       }
 
       return true;
@@ -521,10 +651,7 @@ RETURN ONLY JSON.
        ASK MODEL
        =================================================== */
 
-    async function askModel(
-      model
-    ) {
-
+    async function askModel(model) {
       const controller =
         new AbortController();
 
@@ -536,55 +663,40 @@ RETURN ONLY JSON.
         );
 
       try {
-
         const body = {
-
           model,
 
           messages: [
-
             {
-              role:
-                "system",
-
+              role: "system",
               content:
-                "Return ONLY one valid JSON object. Never return markdown, reasoning, thinking, safety labels, commentary, or User Safety messages."
+                "Return ONLY one valid JSON object. Do not return markdown, reasoning, thinking, commentary, safety labels, or User Safety messages. Use current automotive information for September 2026 whenever known."
             },
 
             {
-              role:
-                "user",
-
+              role: "user",
               content:
                 prompt
             }
-
           ],
 
           temperature:
             0.1,
 
           max_tokens:
-            3500,
-
-          response_format: {
-            type:
-              "json_object"
-          }
+            4000
         };
 
         const response =
           await fetch(
             "https://openrouter.ai/api/v1/chat/completions",
             {
-              method:
-                "POST",
+              method: "POST",
 
               signal:
                 controller.signal,
 
               headers: {
-
                 "Authorization":
                   `Bearer ${apiKey}`,
 
@@ -608,21 +720,11 @@ RETURN ONLY JSON.
         const raw =
           await response.text();
 
-        /* ---------------------------------------------
-           PROVIDER ERROR
-           --------------------------------------------- */
-
-        if (
-          !response.ok
-        ) {
-
+        if (!response.ok) {
           return {
-
             ok: false,
-
             status:
               response.status,
-
             error:
               raw.substring(
                 0,
@@ -631,35 +733,34 @@ RETURN ONLY JSON.
           };
         }
 
-        /* ---------------------------------------------
-           OPENROUTER JSON
-           --------------------------------------------- */
-
         let data;
 
         try {
-
           data =
             JSON.parse(
               raw
             );
-
         } catch {
-
           return {
-
             ok: false,
-
             status: 502,
-
             error:
               "OpenRouter returned invalid JSON"
           };
         }
 
-        /* ---------------------------------------------
-           GET CONTENT
-           --------------------------------------------- */
+        if (data?.error) {
+          return {
+            ok: false,
+            status:
+              Number(
+                data.error.code
+              ) || 502,
+            error:
+              data.error.message ||
+              "OpenRouter returned an API error"
+          };
+        }
 
         let content =
           data
@@ -673,12 +774,10 @@ RETURN ONLY JSON.
             content
           )
         ) {
-
           content =
             content
               .map(
                 (part) => {
-
                   if (
                     typeof part ===
                     "string"
@@ -701,21 +800,13 @@ RETURN ONLY JSON.
           );
 
         if (!content) {
-
           return {
-
             ok: false,
-
             status: 502,
-
             error:
               "AI returned an empty response"
           };
         }
-
-        /* ---------------------------------------------
-           PARSE CAR JSON
-           --------------------------------------------- */
 
         const parsed =
           extractJSON(
@@ -728,16 +819,11 @@ RETURN ONLY JSON.
             parsed
           )
         ) {
-
           return {
-
             ok: false,
-
             status: 502,
-
             error:
               "AI returned invalid JSON or not exactly 3 cars",
-
             raw:
               content.substring(
                 0,
@@ -746,53 +832,37 @@ RETURN ONLY JSON.
           };
         }
 
-        /* ---------------------------------------------
-           SUCCESS
-           --------------------------------------------- */
-
         return {
-
           ok: true,
-
           result:
             parsed,
-
           model:
             data?.model ||
             model
         };
 
       } catch (error) {
-
         if (
           error?.name ===
           "AbortError"
         ) {
-
           return {
-
             ok: false,
-
             status: 504,
-
             error:
               "AI model timeout"
           };
         }
 
         return {
-
           ok: false,
-
           status: 500,
-
           error:
             error?.message ||
             "AI request failed"
         };
 
       } finally {
-
         clearTimeout(
           timer
         );
@@ -800,51 +870,24 @@ RETURN ONLY JSON.
     }
 
     /* ===================================================
-       FREE AI FAILOVER
+       FREE ROUND 1
        =================================================== */
 
-    let result =
-      null;
-
-    let successfulModel =
-      "";
+    let result = null;
+    let successfulModel = "";
 
     const errors = [];
-
-    console.log(
-      "CARMATCH AI: STARTING INDIVIDUAL FREE MODEL FAILOVER",
-      FREE_MODELS
-    );
-
-    /*
-      IMPORTANT:
-
-      Models are called ONE BY ONE.
-
-      If one model:
-      - returns 429
-      - returns 500
-      - returns 503
-      - times out
-      - returns empty content
-      - returns invalid JSON
-      - returns anything other than exactly 3 cars
-
-      the backend automatically tries the next model.
-    */
 
     for (
       let i = 0;
       i < FREE_MODELS.length;
       i++
     ) {
-
       const model =
         FREE_MODELS[i];
 
       console.log(
-        `CARMATCH AI: TRYING FREE MODEL ${i + 1}/${FREE_MODELS.length}:`,
-        model
+        `CARMATCH AI: FREE MODEL ${i + 1}/${FREE_MODELS.length}: ${model}`
       );
 
       const response =
@@ -855,7 +898,6 @@ RETURN ONLY JSON.
       if (
         response.ok
       ) {
-
         result =
           response.result;
 
@@ -863,67 +905,41 @@ RETURN ONLY JSON.
           response.model ||
           model;
 
-        console.log(
-          "CARMATCH AI FREE SUCCESS:",
-          successfulModel
-        );
-
         break;
       }
 
       errors.push({
-
         tier:
           "free",
-
         attempt:
           i + 1,
-
         model,
-
         status:
           response.status,
-
         error:
           response.error,
-
         raw:
           response.raw
       });
-
-      console.error(
-        "CARMATCH AI FREE MODEL FAILED:",
-        model,
-        response
-      );
     }
 
     /* ===================================================
-       SECOND FREE ROUND
+       FREE ROUND 2
        =================================================== */
 
     if (!result) {
-
-      await sleep(
-        1000
-      );
-
-      console.log(
-        "CARMATCH AI: STARTING SECOND FREE ROUND"
-      );
+      await sleep(1000);
 
       for (
         let i = 0;
         i < FREE_MODELS.length;
         i++
       ) {
-
         const model =
           FREE_MODELS[i];
 
         console.log(
-          `CARMATCH AI: RETRYING FREE MODEL ${i + 1}/${FREE_MODELS.length}:`,
-          model
+          `CARMATCH AI: FREE RETRY ${i + 1}/${FREE_MODELS.length}: ${model}`
         );
 
         const response =
@@ -934,7 +950,6 @@ RETURN ONLY JSON.
         if (
           response.ok
         ) {
-
           result =
             response.result;
 
@@ -942,39 +957,22 @@ RETURN ONLY JSON.
             response.model ||
             model;
 
-          console.log(
-            "CARMATCH AI FREE RETRY SUCCESS:",
-            successfulModel
-          );
-
           break;
         }
 
         errors.push({
-
           tier:
             "free-retry",
-
           attempt:
             i + 1,
-
           model,
-
           status:
             response.status,
-
           error:
             response.error,
-
           raw:
             response.raw
         });
-
-        console.error(
-          "CARMATCH AI FREE RETRY FAILED:",
-          model,
-          response
-        );
       }
     }
 
@@ -986,12 +984,6 @@ RETURN ONLY JSON.
       !result &&
       PAID_FALLBACK_ENABLED
     ) {
-
-      console.log(
-        "CARMATCH AI: STARTING PAID FALLBACK:",
-        PAID_MODEL
-      );
-
       const response =
         await askModel(
           PAID_MODEL
@@ -1000,53 +992,31 @@ RETURN ONLY JSON.
       if (
         response.ok
       ) {
-
         result =
           response.result;
 
         successfulModel =
           response.model ||
           PAID_MODEL;
-
-        console.log(
-          "CARMATCH AI PAID SUCCESS:",
-          successfulModel
-        );
-
       } else {
-
         errors.push({
-
           tier:
             "paid",
-
           attempt:
             1,
-
           model:
             PAID_MODEL,
-
           status:
             response.status,
-
           error:
             response.error,
-
           raw:
             response.raw
         });
-
-        console.error(
-          "CARMATCH AI PAID FAILED:",
-          response
-        );
       }
 
       if (!result) {
-
-        await sleep(
-          800
-        );
+        await sleep(800);
 
         const retryResponse =
           await askModel(
@@ -1056,82 +1026,43 @@ RETURN ONLY JSON.
         if (
           retryResponse.ok
         ) {
-
           result =
             retryResponse.result;
 
           successfulModel =
             retryResponse.model ||
             PAID_MODEL;
-
-          console.log(
-            "CARMATCH AI PAID RETRY SUCCESS:",
-            successfulModel
-          );
-
         } else {
-
           errors.push({
-
             tier:
               "paid-retry",
-
             attempt:
               2,
-
             model:
               PAID_MODEL,
-
             status:
               retryResponse.status,
-
             error:
               retryResponse.error,
-
             raw:
               retryResponse.raw
           });
-
-          console.error(
-            "CARMATCH AI PAID RETRY FAILED:",
-            retryResponse
-          );
         }
       }
-
-    } else if (
-      !result &&
-      !PAID_FALLBACK_ENABLED
-    ) {
-
-      console.log(
-        "CARMATCH AI: PAID FALLBACK IS DISABLED"
-      );
     }
 
     /* ===================================================
-       EVERYTHING FAILED
+       FAILURE
        =================================================== */
 
     if (!result) {
-
-      console.error(
-        "ALL CARMATCH AI ATTEMPTS FAILED:",
-        JSON.stringify(
-          errors,
-          null,
-          2
-        )
-      );
-
       return res.status(503).json({
-
         error:
           "AI is temporarily unavailable",
 
         message:
           PAID_FALLBACK_ENABLED
-            ? "CARMATCH AI momentálne nedostal použiteľnú odpoveď ani z bezplatných, ani z plateného AI modelu."
+            ? "CARMATCH AI momentálne nedostal použiteľnú odpoveď."
             : "CARMATCH AI momentálne nedostal použiteľnú odpoveď z bezplatných AI modelov.",
 
         retryable:
@@ -1152,10 +1083,7 @@ RETURN ONLY JSON.
        WIKIMEDIA IMAGE SEARCH
        =================================================== */
 
-    async function searchWikimedia(
-      query
-    ) {
-
+    async function searchWikimedia(query) {
       const controller =
         new AbortController();
 
@@ -1167,10 +1095,8 @@ RETURN ONLY JSON.
         );
 
       try {
-
         const params =
           new URLSearchParams({
-
             action:
               "query",
 
@@ -1184,7 +1110,7 @@ RETURN ONLY JSON.
               "6",
 
             gsrlimit:
-              "5",
+              "8",
 
             prop:
               "imageinfo",
@@ -1211,9 +1137,7 @@ RETURN ONLY JSON.
             }
           );
 
-        if (
-          !response.ok
-        ) {
+        if (!response.ok) {
           return null;
         }
 
@@ -1222,14 +1146,13 @@ RETURN ONLY JSON.
 
         const pages =
           Object.values(
-            data?.query
-              ?.pages || {}
+            data?.query?.pages ||
+            {}
           );
 
         for (
           const page of pages
         ) {
-
           const info =
             page
               ?.imageinfo?.[0];
@@ -1248,7 +1171,8 @@ RETURN ONLY JSON.
 
           const mime =
             String(
-              info.mime || ""
+              info.mime ||
+              ""
             ).toLowerCase();
 
           if (
@@ -1261,36 +1185,23 @@ RETURN ONLY JSON.
 
           const title =
             String(
-              page.title || ""
+              page.title ||
+              ""
             ).toLowerCase();
 
           if (
-            title.includes(
-              "logo"
-            ) ||
-            title.includes(
-              "emblem"
-            ) ||
-            title.includes(
-              "icon"
-            ) ||
-            title.includes(
-              "badge"
-            ) ||
-            title.includes(
-              "symbol"
-            ) ||
-            title.includes(
-              "flag"
-            )
+            title.includes("logo") ||
+            title.includes("emblem") ||
+            title.includes("icon") ||
+            title.includes("badge") ||
+            title.includes("symbol") ||
+            title.includes("flag")
           ) {
             continue;
           }
 
           return {
-
             image,
-
             photoSource:
               "Wikimedia Commons"
           };
@@ -1299,11 +1210,9 @@ RETURN ONLY JSON.
         return null;
 
       } catch {
-
         return null;
 
       } finally {
-
         clearTimeout(
           timer
         );
@@ -1314,40 +1223,36 @@ RETURN ONLY JSON.
        FIND CAR IMAGE
        =================================================== */
 
-    async function findCarImage(
-      car
-    ) {
-
+    async function findCarImage(car) {
       const name =
         String(
-          car.name || ""
+          car.name ||
+          ""
         ).trim();
 
       const generation =
         String(
-          car.generation || ""
+          car.generation ||
+          ""
         ).trim();
 
       const manufacturer =
         String(
-          car.manufacturer || ""
+          car.manufacturer ||
+          ""
         ).trim();
 
       const queries = [
-
-        `${manufacturer} ${name} ${generation}`,
-
+        `${manufacturer} ${name} ${generation} 2026`,
+        `${manufacturer} ${name} 2026`,
         `${name} ${generation}`,
-
         `${manufacturer} ${name} car`,
-
         `${name} automobile`
       ];
 
       for (
         const query of queries
       ) {
-
         const photo =
           await searchWikimedia(
             query
@@ -1356,23 +1261,20 @@ RETURN ONLY JSON.
         if (
           photo?.image
         ) {
-
           return photo;
         }
       }
 
       return {
-
         image:
           "",
-
         photoSource:
           ""
       };
     }
 
     /* ===================================================
-       SEARCH ALL 3 IMAGES IN PARALLEL
+       IMAGES
        =================================================== */
 
     const photos =
@@ -1388,7 +1290,7 @@ RETURN ONLY JSON.
       );
 
     /* ===================================================
-       FINAL CAR DATA
+       FINAL DATA
        =================================================== */
 
     const cars =
@@ -1399,7 +1301,6 @@ RETURN ONLY JSON.
             car,
             index
           ) => {
-
             const photo =
               photos[index] ||
               {};
@@ -1427,18 +1328,17 @@ RETURN ONLY JSON.
               );
 
             return {
-
               name:
                 car.name ||
                 "Neznáme auto",
 
               generation:
                 car.generation ||
-                "Neznáma generácia",
+                "Aktuálna generácia",
 
               year:
                 car.year ||
-                "",
+                "Aktuálna generácia",
 
               score,
 
@@ -1510,7 +1410,7 @@ RETURN ONLY JSON.
 
               cons:
                 Array.isArray(
-                  
+                  car.cons
                 )
                   ? car.cons.slice(
                       0,
@@ -1520,7 +1420,7 @@ RETURN ONLY JSON.
 
               maintenance:
                 car.maintenance ||
-                "Údaj nie je dostupný",
+                "Informácie o údržbe nie sú dostupné.",
 
               manufacturer:
                 car.manufacturer ||
@@ -1537,11 +1437,10 @@ RETURN ONLY JSON.
         );
 
     /* ===================================================
-       SUCCESS RESPONSE
+       SUCCESS
        =================================================== */
 
     return res.status(200).json({
-
       language:
         result.language ||
         language,
@@ -1553,7 +1452,6 @@ RETURN ONLY JSON.
       cars,
 
       ai: {
-
         model:
           successfulModel,
 
@@ -1567,14 +1465,12 @@ RETURN ONLY JSON.
     });
 
   } catch (error) {
-
     console.error(
       "CARMATCH BACKEND ERROR:",
       error
     );
 
     return res.status(500).json({
-
       error:
         "Backend error",
 
@@ -1590,10 +1486,7 @@ RETURN ONLY JSON.
    URL VALIDATION
    ======================================================= */
 
-function isValidURL(
-  value
-) {
-
+function isValidURL(value) {
   if (
     typeof value !==
     "string"
@@ -1602,19 +1495,15 @@ function isValidURL(
   }
 
   try {
-
     const url =
       new URL(value);
 
     return (
-      url.protocol ===
-        "https:" ||
-      url.protocol ===
-        "http:"
+      url.protocol === "https:" ||
+      url.protocol === "http:"
     );
-
   } catch {
-
     return false;
   }
 }
+```0
