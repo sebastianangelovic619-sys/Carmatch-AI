@@ -350,3 +350,10 @@ select {
 .configure:hover {
   transform: translateY(-1px);
 }
+.helper-text {
+text-align: center;
+margin-top: 10px;
+color: #888;
+font-size: 12px;
+line-height: 1.4;
+}
