@@ -25,7 +25,7 @@ module.exports = async function handler(req, res) {
     // OPENROUTER API KEY
     // =========================================================
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
+    var apiKey = process.env.OPENROUTER_API_KEY;
 
     if (!apiKey) {
       return res.status(500).json({
@@ -61,7 +61,7 @@ module.exports = async function handler(req, res) {
     var market = getMarket(language);
 
     // =========================================================
-    // AI PROMPT
+    // PROMPT
     // =========================================================
 
     var prompt = createPrompt(
@@ -72,14 +72,18 @@ module.exports = async function handler(req, res) {
     );
 
     // =========================================================
-    // AI MODEL ORDER
+    // FREE MODELS
+    // =========================================================
+    // OpenRouter currently lists these free models.
+    // openrouter/free automatically selects an available
+    // compatible free model.
     // =========================================================
 
     var models = [
+      "openrouter/free",
       "google/gemma-4-26b-a4b-it:free",
       "google/gemma-4-31b-it:free",
-      "nvidia/nemotron-3-super-120b-a12b:free",
-      "openrouter/free"
+      "nvidia/nemotron-3-super-120b-a12b:free"
     ];
 
     var paidEnabled =
@@ -96,14 +100,10 @@ module.exports = async function handler(req, res) {
     var errors = [];
 
     // =========================================================
-    // TRY FREE MODELS
+    // ROUND 1
     // =========================================================
 
     for (var i = 0; i < models.length; i++) {
-      if (result) {
-        break;
-      }
-
       var attempt = await callAI(
         apiKey,
         models[i],
@@ -124,33 +124,29 @@ module.exports = async function handler(req, res) {
     }
 
     // =========================================================
-    // SECOND FREE ROUND
+    // SHORT RETRY
     // =========================================================
 
     if (!result) {
-      await wait(700);
+      await wait(500);
 
-      for (var j = 0; j < models.length; j++) {
-        if (result) {
-          break;
-        }
+      // Najprv skúsime router znova, pretože vyberá
+      // dostupný free provider automaticky.
+      var retry = await callAI(
+        apiKey,
+        "openrouter/free",
+        prompt
+      );
 
-        var retry = await callAI(
-          apiKey,
-          models[j],
-          prompt
-        );
-
-        if (retry.ok) {
-          result = retry.data;
-          usedModel = retry.model || models[j];
-          break;
-        }
-
+      if (retry.ok) {
+        result = retry.data;
+        usedModel =
+          retry.model || "openrouter/free";
+      } else {
         errors.push({
-          model: models[j],
+          model: "openrouter/free-retry",
           status: retry.status || 0,
-          error: retry.error || "Unknown AI error"
+          error: retry.error || "Retry failed"
         });
       }
     }
@@ -182,10 +178,15 @@ module.exports = async function handler(req, res) {
     }
 
     // =========================================================
-    // AI FAILED
+    // COMPLETE FAILURE
     // =========================================================
 
     if (!result) {
+      console.error(
+        "CARMATCH AI FREE MODEL ERRORS:",
+        JSON.stringify(errors)
+      );
+
       return res.status(503).json({
         error: "AI is temporarily unavailable",
 
@@ -201,13 +202,27 @@ module.exports = async function handler(req, res) {
     }
 
     // =========================================================
-    // PREPARE EXACTLY 3 CARS
+    // EXACTLY 3 CARS
     // =========================================================
 
-    var selectedCars = result.cars.slice(0, 3);
+    if (
+      !Array.isArray(result.cars) ||
+      result.cars.length < 3
+    ) {
+      return res.status(503).json({
+        error: "AI returned insufficient results",
+        message:
+          "AI nevrátila tri použiteľné vozidlá.",
+        retryable: true,
+        paidFallbackEnabled: paidEnabled
+      });
+    }
+
+    var selectedCars =
+      result.cars.slice(0, 3);
 
     // =========================================================
-    // IMAGE SEARCH
+    // IMAGES
     // =========================================================
 
     var cars = [];
@@ -272,7 +287,7 @@ module.exports = async function handler(req, res) {
 
 
 // ===========================================================
-// LANGUAGE DETECTION
+// LANGUAGE
 // ===========================================================
 
 function detectLanguage(text) {
@@ -357,9 +372,7 @@ function createPrompt(
   market
 ) {
   return `
-You are CARMATCH AI.
-
-You are a worldwide vehicle recommendation engine.
+You are CARMATCH AI, a worldwide vehicle recommendation engine.
 
 CURRENT DATE:
 September 2026
@@ -377,26 +390,26 @@ FILTERS:
 ${JSON.stringify(filters, null, 2)}
 
 ============================================================
-IMPORTANT
+TASK
 ============================================================
 
-You must return EXACTLY 3 real production vehicles.
+Return EXACTLY 3 real production vehicles.
 
-You must match the user's requirements as closely as possible.
+Match the user's requirements as closely as possible.
 
 Consider vehicles from manufacturers worldwide.
 
-Do not recommend cars just because they are famous or common.
+Never recommend an excluded brand.
 
 Do not automatically recommend:
 - Škoda Superb
 - Mercedes-Benz E-Class
 - Audi A6
 
-unless they genuinely satisfy the user's requirements.
+unless they genuinely match the request.
 
 ============================================================
-FILTERS
+IMPORTANT FILTERS
 ============================================================
 
 Respect:
@@ -428,37 +441,36 @@ Respect:
 - maintenance
 - brands to avoid
 - specific brands
-- any other user requirement
+- all other explicit requirements
 
-If a brand is excluded:
-NEVER recommend that brand.
+If the user specifies 2 seats:
+prefer genuine 2-seat vehicles.
 
-If the user requests 2 seats:
-Prefer real 2-seat cars.
+If high performance is required:
+do not replace them with weak mainstream vehicles.
 
-If the user requires high power:
-Do not replace them with a weak mainstream vehicle.
-
-If the user requires a large trunk:
-Prioritize genuinely large practical trunks.
+If a large trunk is required:
+prioritize genuinely practical luggage capacity.
 
 ============================================================
-CURRENT MODEL YEAR
+MODEL YEAR
 ============================================================
 
 Current date is September 2026.
 
-For current or new vehicles:
+Prefer the newest genuinely available generation.
 
-- Prefer the newest genuinely available generation.
-- Prefer current 2026 vehicles.
-- Use 2027 only when genuinely available.
-- Do not automatically use 2024 or 2025.
-- Never present an old 2024 specification as today's current model.
-- Never confuse facelift and generation.
-- Never confuse production year and model year.
-- If an old generation has been replaced, use the current generation.
-- Never invent a model year.
+Prefer current 2026 vehicles.
+
+Use 2027 only when genuinely available.
+
+Never invent a model year.
+
+Never confuse:
+- production year
+- model year
+- facelift
+- generation
 
 If exact model year is uncertain:
 use "Aktuálna generácia".
@@ -467,42 +479,24 @@ use "Aktuálna generácia".
 PRICE
 ============================================================
 
-Always try to provide a real current starting/list price.
+Try to provide a real current starting price.
 
 For Slovakia/EU:
-prefer current Slovak price.
+prefer current Slovak pricing.
 
 If unavailable:
-use current EU price when reliably known.
+use current EU pricing when reliable.
 
 Never invent a price.
 
-When a reliable price is known:
+If a reliable current price is known:
 
 priceVerified = true
 
-When a reliable current price cannot be established:
+Otherwise:
 
 price = "Cena nie je dostupná"
 priceVerified = false
-
-Do not use approximate invented prices.
-
-priceSource should contain something like:
-
-"Oficiálny cenník výrobcu"
-"Oficiálna cena výrobcu"
-"EU starting MSRP"
-
-priceType should be:
-
-"Slovakia"
-"EU"
-"Germany"
-"UK"
-"US"
-"Global"
-"unknown"
 
 ============================================================
 SPECIFICATIONS
@@ -517,99 +511,86 @@ Never invent:
 - seats
 - trunk
 - dimensions
-- drive
+- drivetrain
 - fuel
 - generation
 - year
 - price
 
-For multiple-engine cars:
-state which relevant version the specifications describe.
+If multiple engines exist:
+state which version the specifications describe.
 
 ============================================================
 MAINTENANCE
 ============================================================
 
-Maintenance information MUST be vehicle-specific.
+Maintenance must be specific to the selected vehicle.
 
-Never write generic sentences such as:
+Discuss relevant factors such as:
 
-"Requires specialized dealer service."
-
-Instead describe relevant maintenance characteristics.
-
-Examples:
-
-- engine oil service
-- transmission service
-- AWD maintenance
-- differential service
+- engine oil
+- transmission
+- AWD system
+- differential
 - brakes
 - tires
 - DPF
 - AdBlue
 - spark plugs
-- timing belt/chain
-- cooling system
+- timing belt or chain
+- cooling
 - EV battery
 - electric motor
 - hybrid system
-- expensive components
 - complexity
-- typical ownership maintenance
+- potentially expensive components
 
-Never invent exact service intervals.
+Do not invent exact service intervals.
 
 ============================================================
 PROS AND CONS
 ============================================================
 
-Pros and cons must be specific to the selected vehicle.
-
-Do not use generic text that could describe any car.
+Pros and cons must be specific to the actual vehicle.
 
 ============================================================
 CONFIGURATOR
 ============================================================
 
-Provide an official manufacturer configurator URL if confidently known.
+Provide an official manufacturer configurator URL only when confidently known.
 
-Never invent a URL.
+Never invent URLs.
 
-If unknown:
-use an empty string.
-
-============================================================
-SCORING
-============================================================
-
-score must be between 0 and 100.
-
-Score means:
-How well the vehicle matches the user's exact requirements.
+Otherwise:
+"".
 
 ============================================================
-OUTPUT
+SCORE
+============================================================
+
+score must be an integer from 0 to 100.
+
+It represents how well the vehicle matches the user's exact requirements.
+
+============================================================
+LANGUAGE
+============================================================
+
+All descriptive text must be in the user's language.
+
+============================================================
+JSON
 ============================================================
 
 Return ONLY valid JSON.
 
 No markdown.
-
 No code block.
-
 No explanation.
-
 No reasoning.
+No commentary.
 
-No safety text.
-
-Do NOT output:
-"User Safety: safe"
-
-All descriptive text must be in the user's language.
-
-Use exactly this structure:
+Use this structure:
 
 {
   "language": "${language}",
@@ -647,7 +628,7 @@ EXACTLY 3 CARS.
 
 
 // ===========================================================
-// OPENROUTER CALL
+// OPENROUTER
 // ===========================================================
 
 async function callAI(
@@ -658,63 +639,62 @@ async function callAI(
   var controller =
     new AbortController();
 
-  var timeout =
-    setTimeout(
-      function () {
-        controller.abort();
-      },
-      22000
-    );
+  var timeout = setTimeout(
+    function () {
+      controller.abort();
+    },
+    14000
+  );
 
   try {
-    var response =
-      await fetch(
-        "https://openrouter.ai/api/v1/chat/completions",
+    var body = {
+      model: model,
+
+      messages: [
         {
-          method: "POST",
-
-          headers: {
-            Authorization:
-              "Bearer " + apiKey,
-
-            "Content-Type":
-              "application/json",
-
-            "HTTP-Referer":
-              "https://carmatchai.vercel.app",
-
-            "X-Title":
-              "CARMATCH AI"
-          },
-
-          signal:
-            controller.signal,
-
-          body:
-            JSON.stringify({
-              model: model,
-
-              messages: [
-                {
-                  role: "system",
-
-                  content:
-                    "Return ONLY valid JSON. Exactly 3 real cars. No markdown. No reasoning. No commentary."
-                },
-
-                {
-                  role: "user",
-
-                  content: prompt
-                }
-              ],
-
-              temperature: 0.1,
-
-              max_tokens: 4500
-            })
+          role: "system",
+          content:
+            "Return ONLY valid JSON. Exactly 3 real production cars. No markdown. No reasoning."
+        },
+        {
+          role: "user",
+          content: prompt
         }
-      );
+      ],
+
+      temperature: 0.1,
+
+      max_tokens: 5000,
+
+      response_format: {
+        type: "json_object"
+      }
+    };
+
+    var response = await fetch(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+
+        headers: {
+          Authorization:
+            "Bearer " + apiKey,
+
+          "Content-Type":
+            "application/json",
+
+          "HTTP-Referer":
+            "https://carmatchai.vercel.app",
+
+          "X-Title":
+            "CARMATCH AI"
+        },
+
+        signal: controller.signal,
+
+        body: JSON.stringify(body)
+      }
+    );
 
     var text =
       await response.text();
@@ -723,20 +703,20 @@ async function callAI(
       return {
         ok: false,
         status: response.status,
-        error: text.slice(0, 1000)
+        error: text.slice(0, 1200)
       };
     }
 
     var data;
 
     try {
-      data =
-        JSON.parse(text);
+      data = JSON.parse(text);
     } catch (e) {
       return {
         ok: false,
         status: 502,
-        error: "OpenRouter returned invalid JSON"
+        error:
+          "OpenRouter returned invalid JSON"
       };
     }
 
@@ -764,28 +744,22 @@ async function callAI(
         ? data.choices[0].message.content
         : "";
 
-    if (
-      Array.isArray(content)
-    ) {
+    if (Array.isArray(content)) {
       content =
         content
-          .map(
-            function (item) {
-              if (
-                typeof item ===
-                "string"
-              ) {
-                return item;
-              }
-
-              return (
-                item &&
-                item.text
-                  ? item.text
-                  : ""
-              );
+          .map(function (item) {
+            if (
+              typeof item ===
+              "string"
+            ) {
+              return item;
             }
-          )
+
+            return item &&
+              item.text
+              ? item.text
+              : "";
+          })
           .join("");
     }
 
@@ -795,20 +769,20 @@ async function callAI(
     var parsed =
       extractJSON(content);
 
-    if (
-      !isValidResult(parsed)
-    ) {
+    if (!isValidResult(parsed)) {
       return {
         ok: false,
         status: 502,
         error:
-          "AI returned invalid JSON or not exactly 3 cars"
+          "AI returned invalid JSON or fewer than 3 cars"
       };
     }
 
     return {
       ok: true,
+
       data: parsed,
+
       model:
         data.model || model
     };
@@ -835,7 +809,7 @@ async function callAI(
 
 
 // ===========================================================
-// CLEAN AI TEXT
+// CLEAN TEXT
 // ===========================================================
 
 function cleanText(text) {
@@ -947,7 +921,7 @@ function extractJSON(text) {
 
 
 // ===========================================================
-// VALIDATE AI RESULT
+// VALIDATE
 // ===========================================================
 
 function isValidResult(data) {
@@ -965,14 +939,14 @@ function isValidResult(data) {
   }
 
   if (
-    data.cars.length !== 3
+    data.cars.length < 3
   ) {
     return false;
   }
 
   for (
     var i = 0;
-    i < data.cars.length;
+    i < 3;
     i++
   ) {
     var car =
@@ -1021,17 +995,13 @@ function isValidResult(data) {
     }
 
     if (
-      !Array.isArray(
-        car.pros
-      )
+      !Array.isArray(car.pros)
     ) {
       return false;
     }
 
     if (
-      !Array.isArray(
-        car.cons
-      )
+      !Array.isArray(car.cons)
     ) {
       return false;
     }
@@ -1049,7 +1019,7 @@ function isValidResult(data) {
 
 
 // ===========================================================
-// WIKIMEDIA
+// WIKIMEDIA IMAGE SEARCH
 // ===========================================================
 
 async function findWikimediaImage(
@@ -1058,27 +1028,21 @@ async function findWikimediaImage(
   generation
 ) {
   var queries = [
-    (
-      manufacturer +
+    manufacturer +
       " " +
       name +
       " " +
       generation +
-      " 2026"
-    ),
+      " 2026",
 
-    (
-      manufacturer +
+    manufacturer +
       " " +
       name +
-      " 2026"
-    ),
+      " 2026",
 
-    (
-      manufacturer +
+    manufacturer +
       " " +
       name
-    )
   ];
 
   for (
@@ -1106,6 +1070,10 @@ async function findWikimediaImage(
 }
 
 
+// ===========================================================
+// WIKIMEDIA
+// ===========================================================
+
 async function searchWikimedia(
   query
 ) {
@@ -1117,7 +1085,7 @@ async function searchWikimedia(
       function () {
         controller.abort();
       },
-      3500
+      3000
     );
 
   try {
@@ -1138,16 +1106,14 @@ async function searchWikimedia(
     var response =
       await fetch(
         "https://commons.wikimedia.org/w/api.php?" +
-        parameters.toString(),
+          parameters.toString(),
         {
           signal:
             controller.signal
         }
       );
 
-    if (
-      !response.ok
-    ) {
+    if (!response.ok) {
       return null;
     }
 
@@ -1357,7 +1323,8 @@ function normalizeCar(
 
     reason:
       String(
-        car.reason || ""
+        car.reason ||
+        "Vysvetlenie nie je dostupné."
       ),
 
     pros:
@@ -1387,7 +1354,7 @@ function normalizeCar(
 
 
 // ===========================================================
-// URL
+// URL VALIDATION
 // ===========================================================
 
 function isValidURL(value) {
