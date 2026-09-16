@@ -104,7 +104,7 @@ console.error(error);
 
 // Používateľovi nezobrazujeme technický Backend 503
 statusBox.textContent =
-  "Vyhľadávanie sa nepodarilo dokončiť. Skús to znova.";
+  "Chyba: " + error.message;
 
 resultsBox.innerHTML = `
   <div class="info">
