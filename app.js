@@ -7,95 +7,136 @@ const resultsBox = document.getElementById("results");
 button.addEventListener("click", searchCars);
 
 function value(id) {
-  const element = document.getElementById(id);
-  return element ? element.value.trim() : "";
+const element = document.getElementById(id);
+return element ? element.value.trim() : "";
 }
 
 function collectRequest() {
-  return {
-    naturalLanguage: value("aiRequest"),
+return {
+naturalLanguage: value("aiRequest"),
 
-    filters: {
-      budget: value("budget"),
-      seats: value("seats"),
-      powerKW: value("power"),
-      trunkLitres: value("trunk"),
-      drive: value("drive"),
-      fuel: value("fuel"),
-      body: value("body"),
-      style: value("style"),
-      maxLength: value("length"),
-      year: value("year"),
-      avoidBrands: value("avoid")
-    },
+filters: {
+  budget: value("budget"),
+  seats: value("seats"),
+  powerKW: value("power"),
+  trunkLitres: value("trunk"),
+  drive: value("drive"),
+  fuel: value("fuel"),
+  body: value("body"),
+  style: value("style"),
+  maxLength: value("length"),
+  year: value("year"),
+  avoidBrands: value("avoid")
+},
 
-    resultCount: 3
-  };
+resultCount: 3
+
+};
 }
 
 async function searchCars() {
-  const request = collectRequest();
+const request = collectRequest();
 
-  if (
-    !request.naturalLanguage &&
-    Object.values(request.filters).every(v => !v)
-  ) {
-    statusBox.textContent =
-      "Zadaj požiadavku alebo aspoň jeden filter.";
-    return;
-  }
+if (
+!request.naturalLanguage &&
+Object.values(request.filters).every(v => !v)
+) {
+statusBox.textContent =
+"Zadaj požiadavku alebo aspoň jeden filter.";
+return;
+}
 
-  button.disabled = true;
-  button.textContent = "🤖 AI VYBERÁ NAJLEPŠIE AUTÁ...";
-  statusBox.textContent =
-    "AI vyhodnocuje tvoje požiadavky…";
-  resultsBox.innerHTML = "";
+button.disabled = true;
+button.textContent = "🤖 AI VYBERÁ NAJLEPŠIE AUTÁ...";
+statusBox.textContent =
+"AI vyhodnocuje tvoje požiadavky…";
+resultsBox.innerHTML = "";
 
-  try {
-    const response = await fetch(API_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(request)
-    });
-
-    const responseText = await response.text();
-
-    if (!response.ok) {
-      throw new Error(
-        `Backend ${response.status}: ${responseText}`
-      );
-    }
-
-    let data;
-
-    try {
-      data = JSON.parse(responseText);
-    } catch {
-      throw new Error("Backend vrátil neplatnú odpoveď.");
-    }
-
-    if (!data.cars || !Array.isArray(data.cars)) {
-      throw new Error("AI nevrátila platné výsledky.");
-    }
-
-    renderResults(data.cars);
-
-    statusBox.textContent =
-      "Hotovo — AI vybrala 3 najvhodnejšie vozidlá.";
-// 🔔 Oznámenie o dokončení vyhľadávania
 try {
-  // 📳 Krátka vibrácia na podporovaných telefónoch
-  if ("vibrate" in navigator) {
-    navigator.vibrate([150, 80, 150]);
-  }
+const response = await fetch(API_ENDPOINT, {
+method: "POST",
+headers: {
+"Content-Type": "application/json"
+},
+body: JSON.stringify(request)
+});
 
-  // 🔊 Krátky zvuk
-  const audioContext = new (
-    window.AudioContext || window.webkitAudioContext
-  )();
+const responseText = await response.text();
 
+if (!response.ok) {
+  throw new Error(
+    `Backend ${response.status}: ${responseText}`
+  );
+}
+
+let data;
+
+try {
+  data = JSON.parse(responseText);
+} catch {
+  throw new Error("Backend vrátil neplatnú odpoveď.");
+}
+
+if (!data.cars || !Array.isArray(data.cars)) {
+  throw new Error("AI nevrátila platné výsledky.");
+}
+
+renderResults(data.cars);
+
+statusBox.textContent =
+  "Hotovo — AI vybrala 3 najvhodnejšie vozidlá.";
+
+// Oznámenie o dokončení
+notifySearchFinished();
+
+} catch (error) {
+console.error(error);
+
+// Technická chyba zostane iba v spodnom stavovom riadku.
+statusBox.textContent =
+  "Vyhľadávanie sa nepodarilo dokončiť. Skús to znova.";
+
+// Do výsledkov už nevkladáme technické údaje typu
+// „Backend 503...“
+resultsBox.innerHTML = `
+  <div class="info">
+    <strong>CARMATCH AI momentálne nedokázala pripraviť výsledky.</strong><br><br>
+    Skús vyhľadávanie zopakovať.
+  </div>
+`;
+
+} finally {
+button.disabled = false;
+button.innerHTML =
+'🤖 NÁJSŤ MOJE TOP 3 AUTÁ <span>→</span>';
+}
+}
+
+function notifySearchFinished() {
+// 📳 Vibrácia
+try {
+if (
+"vibrate" in navigator &&
+typeof navigator.vibrate === "function"
+) {
+navigator.vibrate([150, 80, 150]);
+}
+} catch (error) {
+console.log("Vibrácia nie je dostupná.");
+}
+
+// 🔊 Zvuk
+try {
+const AudioContext =
+window.AudioContext || window.webkitAudioContext;
+
+if (!AudioContext) {
+  return;
+}
+
+const audioContext = new AudioContext();
+
+const playTone = () => {
   const oscillator = audioContext.createOscillator();
   const gainNode = audioContext.createGain();
 
@@ -111,7 +152,7 @@ try {
   );
 
   gainNode.gain.exponentialRampToValueAtTime(
-    0.15,
+    0.18,
     audioContext.currentTime + 0.02
   );
 
@@ -125,160 +166,154 @@ try {
 
   oscillator.start();
   oscillator.stop(audioContext.currentTime + 0.35);
+};
 
-} catch (notificationError) {
-  console.log(
-    "Zvuk alebo vibrácia nie sú na tomto zariadení dostupné."
-  );
-}    
+if (audioContext.state === "suspended") {
+  audioContext.resume().then(playTone).catch(() => {});
+} else {
+  playTone();
+}
 
-  } catch (error) {
-    console.error(error);
+setTimeout(() => {
+  audioContext.close().catch(() => {});
+}, 500);
 
-    statusBox.textContent = error.message;
-
-    resultsBox.innerHTML = `
-      <div class="info">
-        <strong>CARMATCH AI sa nepodarilo dokončiť vyhľadávanie.</strong><br><br>
-        ${escapeHTML(error.message)}
-      </div>
-    `;
-  } finally {
-    button.disabled = false;
-    button.innerHTML =
-      '🤖 NÁJSŤ MOJE TOP 3 AUTÁ <span>→</span>';
-  }
+} catch (error) {
+console.log("Zvuk nie je dostupný.");
+}
 }
 
 function renderResults(cars) {
-  resultsBox.innerHTML = `
-    <h2 class="results-title">
-      Tvoje TOP 3 autá
-    </h2>
+resultsBox.innerHTML = `
+<h2 class="results-title">
+Tvoje TOP 3 autá
+</h2>
 
-    <div class="results">
-      ${cars.map((car, index) => createCard(car, index)).join("")}
-    </div>
-  `;
+<div class="results">
+  ${cars.map((car, index) => createCard(car, index)).join("")}
+</div>
+
+`;
 }
 
 function createCard(car, index) {
-  const pros = Array.isArray(car.pros)
-    ? car.pros.map(x => `<li>${escapeHTML(x)}</li>`).join("")
-    : "<li>Údaj nie je dostupný.</li>";
+const pros = Array.isArray(car.pros)
+? car.pros.map(x => "<li>${escapeHTML(x)}</li>").join("")
+: "<li>Údaj nie je dostupný.</li>";
 
-  const cons = Array.isArray(car.cons)
-    ? car.cons.map(x => `<li>${escapeHTML(x)}</li>`).join("")
-    : "<li>Údaj nie je dostupný.</li>";
+const cons = Array.isArray(car.cons)
+? car.cons.map(x => "<li>${escapeHTML(x)}</li>").join("")
+: "<li>Údaj nie je dostupný.</li>";
 
-  const image =
-    car.image ||
-    "https://placehold.co/1200x700/e9eaec/555?text=Car";
+const image =
+car.image ||
+"https://placehold.co/1200x700/e9eaec/555?text=Car";
 
-  return `
-    <article class="car">
+return `
+<article class="car">
 
-      <img
-        class="car-image"
-        src="${escapeAttribute(image)}"
-        alt="${escapeAttribute(car.name || "Automobil")}"
-        loading="lazy"
-        onerror="this.src='https://placehold.co/1200x700/e9eaec/555?text=Car'"
-      >
+  <img
+    class="car-image"
+    src="${escapeAttribute(image)}"
+    alt="${escapeAttribute(car.name || "Automobil")}"
+    loading="lazy"
+    onerror="this.src='https://placehold.co/1200x700/e9eaec/555?text=Car'"
+  >
 
-      <div class="car-body">
+  <div class="car-body">
 
-        <div class="rank">
-          #${index + 1} — NAJLEPŠIA ZHODA
-        </div>
+    <div class="rank">
+      #${index + 1} — NAJLEPŠIA ZHODA
+    </div>
 
-        <div class="car-name">
-          ${escapeHTML(car.name || "Neznáme auto")}
-        </div>
+    <div class="car-name">
+      ${escapeHTML(car.name || "Neznáme auto")}
+    </div>
 
-        <div class="generation">
-          ${escapeHTML(car.generation || "")}
-          ${
-            car.year
-              ? " · modelový rok " +
-                escapeHTML(String(car.year))
-              : ""
-          }
-        </div>
+    <div class="generation">
+      ${escapeHTML(car.generation || "")}
+      ${
+        car.year
+          ? " · modelový rok " +
+            escapeHTML(String(car.year))
+          : ""
+      }
+    </div>
 
-        <div class="score">
-          ${escapeHTML(String(car.score ?? "—"))}%
-        </div>
+    <div class="score">
+      ${escapeHTML(String(car.score ?? "—"))}%
+    </div>
 
-        <div class="specs">
-          💰 Cena: ${escapeHTML(car.price || "—")}<br>
-          ⚡ Výkon: ${escapeHTML(car.power || "—")}<br>
-          🪑 Miesta: ${escapeHTML(String(car.seats || "—"))}<br>
-          🧳 Kufor: ${escapeHTML(car.trunk || "—")}<br>
-          🚗 Pohon: ${escapeHTML(car.drive || "—")}<br>
-          🔋 Palivo: ${escapeHTML(car.fuel || "—")}
-        </div>
+    <div class="specs">
+      💰 Cena: ${escapeHTML(car.price || "—")}<br>
+      ⚡ Výkon: ${escapeHTML(car.power || "—")}<br>
+      🪑 Miesta: ${escapeHTML(String(car.seats || "—"))}<br>
+      🧳 Kufor: ${escapeHTML(car.trunk || "—")}<br>
+      🚗 Pohon: ${escapeHTML(car.drive || "—")}<br>
+      🔋 Palivo: ${escapeHTML(car.fuel || "—")}
+    </div>
 
-        <div class="section">
-          <strong>🤖 Prečo ho AI vybrala</strong>
-          ${escapeHTML(
-            car.reason || "Vysvetlenie nie je dostupné."
-          )}
-        </div>
+    <div class="section">
+      <strong>🤖 Prečo ho AI vybrala</strong>
+      ${escapeHTML(
+        car.reason || "Vysvetlenie nie je dostupné."
+      )}
+    </div>
 
-        <div class="section pros">
-          <strong>✅ Výhody</strong>
-          <ul>${pros}</ul>
-        </div>
+    <div class="section pros">
+      <strong>✅ Výhody</strong>
+      <ul>${pros}</ul>
+    </div>
 
-        <div class="section cons">
-          <strong>❌ Nevýhody</strong>
-          <ul>${cons}</ul>
-        </div>
+    <div class="section cons">
+      <strong>❌ Nevýhody</strong>
+      <ul>${cons}</ul>
+    </div>
 
-        <div class="section">
-          <strong>🔧 Údržba</strong>
-          ${escapeHTML(
-            car.maintenance || "Údaj nie je dostupný."
-          )}
-        </div>
+    <div class="section">
+      <strong>🔧 Údržba</strong>
+      ${escapeHTML(
+        car.maintenance || "Údaj nie je dostupný."
+      )}
+    </div>
 
-        <div class="section">
-          <strong>📸 Zdroj fotografie</strong>
-          ${escapeHTML(
-            car.photoSource || "Automatický zdroj"
-          )}
-        </div>
+    <div class="section">
+      <strong>📸 Zdroj fotografie</strong>
+      ${escapeHTML(
+        car.photoSource || "Automatický zdroj"
+      )}
+    </div>
 
-        ${
-          car.configurator
-            ? `
-              <a
-                class="configure"
-                href="${escapeAttribute(car.configurator)}"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                ⚙️ OFICIÁLNY KONFIGURÁTOR →
-              </a>
-            `
-            : ""
-        }
+    ${
+      car.configurator
+        ? `
+          <a
+            class="configure"
+            href="${escapeAttribute(car.configurator)}"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            ⚙️ OFICIÁLNY KONFIGURÁTOR →
+          </a>
+        `
+        : ""
+    }
 
-      </div>
-    </article>
-  `;
+  </div>
+</article>
+
+`;
 }
 
 function escapeHTML(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+return String(value)
+.replaceAll("&", "&")
+.replaceAll("<", "<")
+.replaceAll(">", ">")
+.replaceAll('"', """)
+.replaceAll("'", "'");
 }
 
 function escapeAttribute(value) {
-  return escapeHTML(value);
+return escapeHTML(value);
 }
