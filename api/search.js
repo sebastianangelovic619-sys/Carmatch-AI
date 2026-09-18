@@ -1,7 +1,8 @@
 // ============================================================
-// CARMATCH AI
-// Backend: Supabase usage limit + Groq Compound web search
-//         + OpenRouter fallback
+// CARMATCH AI - FINAL BACKEND
+// Supabase anonymous auth + 5 searches/day
+// Groq Compound live web research
+// OpenRouter safe fallback
 // ============================================================
 
 const GROQ_URL =
@@ -26,42 +27,57 @@ const MAX_SEARCHES_PER_DAY = 5;
 
 
 // ============================================================
-// BASIC HELPERS
+// RESPONSE HELPER
 // ============================================================
 
-function json(res, status, data) {
-  res.status(status).json(data);
+function sendJson(res, status, data) {
+  return res.status(status).json(data);
 }
 
 
-function cleanText(value, max = 5000) {
-  if (value === undefined || value === null) return "";
+// ============================================================
+// SAFE TEXT
+// ============================================================
+
+function text(value, maxLength = 5000) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return "";
+  }
 
   return String(value)
     .replace(/\u0000/g, "")
-    .slice(0, max);
+    .slice(0, maxLength);
 }
 
 
-function safeArray(value) {
-  if (!Array.isArray(value)) return [];
-
-  return value
-    .map(x => cleanText(x, 500))
-    .filter(Boolean)
-    .slice(0, 10);
-}
-
-
-function extractJson(text) {
-  if (!text) {
-    throw new Error("AI returned empty response");
+function arrayText(value, maxItems = 10) {
+  if (!Array.isArray(value)) {
+    return [];
   }
 
-  let cleaned = String(text).trim();
+  return value
+    .map(item => text(item, 500))
+    .filter(Boolean)
+    .slice(0, maxItems);
+}
+
+
+// ============================================================
+// JSON EXTRACTION
+// ============================================================
+
+function parseAIJson(raw) {
+  if (!raw) {
+    throw new Error("AI returned an empty response");
+  }
+
+  let value = String(raw).trim();
 
   // Remove markdown code fences
-  cleaned = cleaned
+  value = value
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
     .replace(/\s*```$/i, "")
@@ -69,18 +85,26 @@ function extractJson(text) {
 
   // Direct JSON
   try {
-    return JSON.parse(cleaned);
+    return JSON.parse(value);
   } catch (_) {}
 
-  // Find first JSON object
-  const first = cleaned.indexOf("{");
-  const last = cleaned.lastIndexOf("}");
+  // Search for JSON object inside text
+  const firstBrace = value.indexOf("{");
+  const lastBrace = value.lastIndexOf("}");
 
-  if (first !== -1 && last !== -1 && last > first) {
-    const possible = cleaned.slice(first, last + 1);
+  if (
+    firstBrace !== -1 &&
+    lastBrace !== -1 &&
+    lastBrace > firstBrace
+  ) {
+    const extracted =
+      value.slice(
+        firstBrace,
+        lastBrace + 1
+      );
 
     try {
-      return JSON.parse(possible);
+      return JSON.parse(extracted);
     } catch (_) {}
   }
 
@@ -89,40 +113,70 @@ function extractJson(text) {
 
 
 // ============================================================
-// SUPABASE AUTH
+// SUPABASE USER VERIFICATION
 // ============================================================
 
-async function verifySupabaseUser(accessToken) {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    throw new Error("Supabase environment variables are missing");
+async function verifyUser(accessToken) {
+  if (
+    !SUPABASE_URL ||
+    !SUPABASE_ANON_KEY
+  ) {
+    throw new Error(
+      "Supabase environment variables are missing"
+    );
   }
 
   if (!accessToken) {
     return null;
   }
 
-  const response = await fetch(
-    `${SUPABASE_URL}/auth/v1/user`,
-    {
-      method: "GET",
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${accessToken}`
-      }
+  const controller =
+    new AbortController();
+
+  const timer =
+    setTimeout(
+      () => controller.abort(),
+      10000
+    );
+
+  try {
+    const response =
+      await fetch(
+        `${SUPABASE_URL}/auth/v1/user`,
+        {
+          method: "GET",
+
+          headers: {
+            apikey:
+              SUPABASE_ANON_KEY,
+
+            Authorization:
+              `Bearer ${accessToken}`
+          },
+
+          signal: controller.signal
+        }
+      );
+
+    if (!response.ok) {
+      return null;
     }
-  );
 
-  if (!response.ok) {
-    return null;
+    const user =
+      await response.json();
+
+    if (
+      !user ||
+      !user.id
+    ) {
+      return null;
+    }
+
+    return user;
+
+  } finally {
+    clearTimeout(timer);
   }
-
-  const user = await response.json();
-
-  if (!user || !user.id) {
-    return null;
-  }
-
-  return user;
 }
 
 
@@ -130,53 +184,88 @@ async function verifySupabaseUser(accessToken) {
 // SUPABASE RPC
 // ============================================================
 
-async function supabaseRPC(functionName, accessToken) {
-  const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/rpc/${functionName}`,
-    {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json"
-      },
-      body: "{}"
-    }
-  );
+async function callSupabaseRPC(
+  functionName,
+  accessToken
+) {
+  const controller =
+    new AbortController();
 
-  const text = await response.text();
-
-  let data;
+  const timer =
+    setTimeout(
+      () => controller.abort(),
+      10000
+    );
 
   try {
-    data = JSON.parse(text);
-  } catch (_) {
-    throw new Error(
-      `Supabase RPC returned invalid response: ${text}`
-    );
-  }
+    const response =
+      await fetch(
+        `${SUPABASE_URL}/rest/v1/rpc/${functionName}`,
+        {
+          method: "POST",
 
-  if (!response.ok) {
-    throw new Error(
-      `Supabase RPC error: ${text}`
-    );
-  }
+          headers: {
+            apikey:
+              SUPABASE_ANON_KEY,
 
-  return data;
+            Authorization:
+              `Bearer ${accessToken}`,
+
+            "Content-Type":
+              "application/json",
+
+            Accept:
+              "application/json"
+          },
+
+          body: "{}",
+
+          signal: controller.signal
+        }
+      );
+
+    const raw =
+      await response.text();
+
+    let data;
+
+    try {
+      data = JSON.parse(raw);
+    } catch (_) {
+      throw new Error(
+        `Supabase returned invalid JSON`
+      );
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Supabase RPC ${functionName} failed`
+      );
+    }
+
+    return data;
+
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 
 // ============================================================
-// SEARCH USAGE
+// USE SEARCH
 // ============================================================
 
-async function consumeSearch(accessToken) {
-  const result = await supabaseRPC(
-    "use_search",
-    accessToken
-  );
+async function useSearch(accessToken) {
+  const result =
+    await callSupabaseRPC(
+      "use_search",
+      accessToken
+    );
 
-  if (!result || result.allowed !== true) {
+  if (
+    !result ||
+    result.allowed !== true
+  ) {
     return {
       allowed: false,
       remaining: 0
@@ -185,102 +274,156 @@ async function consumeSearch(accessToken) {
 
   return {
     allowed: true,
+
     remaining:
-      typeof result.remaining === "number"
-        ? result.remaining
+      Number.isFinite(
+        Number(result.remaining)
+      )
+        ? Number(result.remaining)
         : 0
   };
 }
 
 
+// ============================================================
+// REFUND SEARCH IF ALL AI PROVIDERS FAIL
+// ============================================================
+
 async function refundSearch(accessToken) {
   try {
-    return await supabaseRPC(
+    return await callSupabaseRPC(
       "refund_search",
       accessToken
     );
-  } catch (_) {
+  } catch (error) {
+    console.error(
+      "CARMATCH AI refund failed:",
+      error
+    );
+
     return null;
   }
 }
 
 
 // ============================================================
-// REQUEST VALIDATION
+// REQUEST NORMALIZATION
 // ============================================================
 
-function validateRequest(body) {
-  const naturalLanguage = cleanText(
-    body?.naturalLanguage,
-    3000
-  );
-
+function normalizeRequest(body) {
   const filters =
-    body?.filters && typeof body.filters === "object"
+    body &&
+    typeof body.filters === "object" &&
+    body.filters !== null
       ? body.filters
       : {};
 
   return {
-    naturalLanguage,
+    naturalLanguage:
+      text(
+        body?.naturalLanguage,
+        3000
+      ),
+
     filters: {
-      budget: cleanText(filters.budget, 100),
-      seats: cleanText(filters.seats, 100),
-      power: cleanText(filters.power, 100),
-      trunk: cleanText(filters.trunk, 100),
-      drive: cleanText(filters.drive, 100),
-      fuel: cleanText(filters.fuel, 100),
-      body: cleanText(filters.body, 100),
-      style: cleanText(filters.style, 100),
-      length: cleanText(filters.length, 100),
-      year: cleanText(filters.year, 100),
-      avoid: cleanText(filters.avoid, 500)
+      budget:
+        text(filters.budget, 100),
+
+      seats:
+        text(filters.seats, 100),
+
+      power:
+        text(filters.power, 100),
+
+      trunk:
+        text(filters.trunk, 100),
+
+      drive:
+        text(filters.drive, 100),
+
+      fuel:
+        text(filters.fuel, 100),
+
+      body:
+        text(filters.body, 100),
+
+      style:
+        text(filters.style, 100),
+
+      length:
+        text(filters.length, 100),
+
+      year:
+        text(filters.year, 100),
+
+      avoid:
+        text(filters.avoid, 500)
     }
   };
 }
 
 
 // ============================================================
-// LANGUAGE / MARKET
+// LANGUAGE
 // ============================================================
 
-function detectLanguage(text) {
-  const value = String(text || "").toLowerCase();
+function detectLanguage(request) {
+  const content =
+    `${request.naturalLanguage} ${
+      JSON.stringify(request.filters)
+    }`.toLowerCase();
 
-  const slovakWords = [
-    "chcem",
-    "potrebujem",
-    "auto",
-    "vozidlo",
-    "rozpočet",
-    "sedadlá",
-    "kufor",
-    "výkon",
-    "pohon",
-    "benzín",
-    "nafta",
-    "elektrické",
-    "hybrid",
-    "rok",
-    "nové",
-    "najnovšie"
-  ];
+  const slovak =
+    [
+      "chcem",
+      "potrebujem",
+      "auto",
+      "autá",
+      "vozidlo",
+      "rozpočet",
+      "sedadlá",
+      "kufor",
+      "výkon",
+      "pohon",
+      "benzín",
+      "nafta",
+      "elektrické",
+      "elektromobil",
+      "hybrid",
+      "rok",
+      "nové",
+      "najnovšie",
+      "lacné",
+      "športové",
+      "luxusné"
+    ];
 
-  const count = slovakWords.filter(
-    word => value.includes(word)
-  ).length;
+  const count =
+    slovak.filter(
+      word => content.includes(word)
+    ).length;
 
-  return count >= 1 ? "slovak" : "english";
+  return count > 0
+    ? "Slovak"
+    : "English";
 }
 
 
-function detectMarket(text) {
-  const value = String(text || "").toLowerCase();
+// ============================================================
+// MARKET
+// ============================================================
+
+function detectMarket(request) {
+  const content =
+    `${request.naturalLanguage} ${
+      JSON.stringify(request.filters)
+    }`.toLowerCase();
 
   if (
-    value.includes("slovensko") ||
-    value.includes("slovakia") ||
-    value.includes("eur") ||
-    value.includes("€")
+    content.includes("slovensko") ||
+    content.includes("slovakia") ||
+    content.includes("eur") ||
+    content.includes("€")
   ) {
     return "Slovakia / European Union";
   }
@@ -290,277 +433,185 @@ function detectMarket(text) {
 
 
 // ============================================================
-// CAR SCHEMA NORMALIZATION
+// CURRENT DATE
 // ============================================================
 
-function normalizeCar(car) {
-  if (!car || typeof car !== "object") {
-    throw new Error("Invalid car object");
-  }
-
-  const normalized = {
-    name: cleanText(car.name, 200),
-    generation: cleanText(car.generation, 300),
-    year: Number(car.year) || null,
-    score: Number(car.score) || 0,
-
-    price: cleanText(car.price, 150),
-
-    power: cleanText(car.power, 150),
-    seats:
-      Number(car.seats) ||
-      null,
-
-    trunk: cleanText(car.trunk, 150),
-    drive: cleanText(car.drive, 100),
-    fuel: cleanText(car.fuel, 150),
-
-    reason: cleanText(car.reason, 1500),
-
-    pros: safeArray(car.pros),
-    cons: safeArray(car.cons),
-
-    maintenance: cleanText(
-      car.maintenance,
-      1500
-    ),
-
-    image: cleanText(car.image, 1500),
-
-    photoSource: cleanText(
-      car.photoSource,
-      1500
-    ),
-
-    configurator: cleanText(
-      car.configurator,
-      1500
-    ),
-
-    priceSource: cleanText(
-      car.priceSource,
-      1500
-    ),
-
-    dataSources: safeArray(
-      car.dataSources
-    )
-  };
-
-  if (!normalized.name) {
-    throw new Error("Car name missing");
-  }
-
-  if (!normalized.generation) {
-    throw new Error(
-      `Generation missing for ${normalized.name}`
-    );
-  }
-
-  if (!normalized.year) {
-    throw new Error(
-      `Model year missing for ${normalized.name}`
-    );
-  }
-
-  if (!normalized.reason) {
-    throw new Error(
-      `Reason missing for ${normalized.name}`
-    );
-  }
-
-  return normalized;
-}
-
-
-function validateCars(data) {
-  if (
-    !data ||
-    !Array.isArray(data.cars)
-  ) {
-    throw new Error(
-      "AI response does not contain cars array"
-    );
-  }
-
-  if (data.cars.length !== 3) {
-    throw new Error(
-      `AI returned ${data.cars.length} cars instead of exactly 3`
-    );
-  }
-
-  return data.cars.map(normalizeCar);
+function currentDate() {
+  return new Date()
+    .toISOString()
+    .slice(0, 10);
 }
 
 
 // ============================================================
-// MAIN AI PROMPT
+// PROMPT
 // ============================================================
 
 function buildPrompt(request) {
   const language =
-    detectLanguage(request.naturalLanguage);
+    detectLanguage(request);
 
   const market =
-    detectMarket(
-      `${request.naturalLanguage} ${JSON.stringify(
-        request.filters
-      )}`
-    );
-
-  const today =
-    new Date()
-      .toISOString()
-      .slice(0, 10);
+    detectMarket(request);
 
   return `
 You are CARMATCH AI, a professional automotive research assistant.
 
-CURRENT DATE:
-${today}
+TODAY:
+${currentDate()}
 
 TARGET MARKET:
 ${market}
 
-USER LANGUAGE:
-${language === "slovak" ? "Slovak" : "English"}
+RESPONSE LANGUAGE:
+${language}
 
 USER REQUEST:
-${request.naturalLanguage || "No natural-language request provided."}
+${request.naturalLanguage || "No text request."}
 
 FILTERS:
-${JSON.stringify(request.filters, null, 2)}
-
-YOUR TASK:
-
-Find exactly 3 currently relevant cars that best satisfy the user's
-request and filters.
-
-IMPORTANT:
-This is NOT a generic car knowledge task.
-
-You MUST research CURRENT information on the web before answering.
-
-You must prioritize:
-1. Official manufacturer websites.
-2. Official configurators.
-3. Official price lists.
-4. Official regional manufacturer websites.
-5. Reliable automotive sources only when an official source is unavailable.
+${JSON.stringify(
+  request.filters,
+  null,
+  2
+)}
 
 ============================================================
-VEHICLE IDENTIFICATION
+MAIN TASK
 ============================================================
 
-For every car identify the EXACT:
+Find EXACTLY 3 real production vehicles that match the user's
+requirements as closely as possible.
 
-- manufacturer
-- model
-- generation
+You MUST perform current web research before answering.
+
+Use current information, not only your internal knowledge.
+
+============================================================
+SOURCE PRIORITY
+============================================================
+
+Use sources in this order:
+
+1. Official manufacturer website
+2. Official manufacturer regional website
+3. Official configurator
+4. Official price list
+5. Reliable automotive publication
+
+For current prices and configurators, prefer official manufacturer
+sources.
+
+============================================================
+EXACT VEHICLE
+============================================================
+
+For every vehicle determine:
+
+- brand
+- exact model
+- exact generation
+- facelift/version if applicable
 - model year
-- current version/variant when relevant
+- current variant when relevant
 
-Do NOT mix:
-- old generation photos with new generation data
-- old prices with current cars
-- facelift and pre-facelift information
-- different generations
-- concept cars with production cars
-- discontinued versions with current versions
+NEVER mix different generations.
 
-If the user asks for "newest", use the newest generation/version
-that is actually currently available or officially announced for sale.
+NEVER use an old generation with a newer generation's price.
 
-Do NOT invent future models.
+NEVER use a facelift image for a clearly different pre-facelift car.
+
+NEVER recommend a concept car unless the user explicitly asks for
+concept cars.
+
+NEVER invent a vehicle.
 
 ============================================================
-PRICE
+CURRENT PRICE
 ============================================================
 
-This is extremely important.
+The price must be the CURRENT official starting price for the
+target market whenever it can be verified.
 
-The price field must represent the CURRENT "starting from" price
-for the relevant market whenever an official price is available.
-
-Prefer:
+Use wording such as:
 
 "€XX XXX"
 
 or
 
-"€XX XXX od"
-
-depending on the source.
-
-The price should come from:
-- official manufacturer website
-- official configurator
-- official price list
+"Od €XX XXX"
 
 Do NOT use:
-- random used-car prices
-- dealer discount prices
-- leasing monthly payments
-- old launch prices
-- estimated prices
-- guessed prices
 
-If a current official price cannot be verified, write:
+- used-car price
+- dealer discount
+- leasing payment
+- old launch price
+- approximate guessed price
+- estimated future price
+
+NEVER invent a number.
+
+If the current official price cannot be verified, use exactly:
 
 "Cena na vyžiadanie"
 
-and explain why in priceSource.
+Then explain that the official current price could not be verified.
 
-NEVER invent a price.
+priceSource must contain the source URL when available.
+
+============================================================
+CURRENT / NEWEST MODEL
+============================================================
+
+If the user requests "newest", "najnovšie", "2026", "2027", or
+similar wording, prefer the newest currently sold or officially
+announced production generation relevant to the target market.
+
+Do NOT invent future availability.
 
 ============================================================
 IMAGE
 ============================================================
 
-The image must correspond to the EXACT car.
+The image should represent the exact vehicle whenever possible.
 
-Prefer an official manufacturer image or a reliable image
-showing the same:
-
-- model
-- generation
-- facelift/version
-- model year when possible
+Prefer:
+- manufacturer media image
+- official manufacturer page
+- reliable source showing the same generation
 
 Do NOT return:
-- generic brand logos
-- unrelated model images
-- old-generation images
-- stock images of a different generation
-- random search-result images
+- brand logo
+- unrelated model
+- old generation
+- random unrelated car
+- stock image of another generation
 
-The image URL must be a direct usable image URL whenever possible.
+If an exact direct image URL cannot be verified, return an empty
+image string instead of inventing a URL.
 
-photoSource must identify where the image came from.
+photoSource must explain the image source.
 
 ============================================================
 OFFICIAL CONFIGURATOR
 ============================================================
 
-Find the official manufacturer configurator for the exact vehicle
-whenever one exists.
+configurator must contain only an official manufacturer URL.
 
-The configurator field must contain ONLY an official manufacturer
-website URL.
+Never use:
+- dealer configurator
+- marketplace
+- Google search
+- third-party website
 
-Do NOT use:
-- dealer websites
-- car marketplaces
-- Google search URLs
-- third-party configurators
-
-If no official configurator exists, use an empty string.
+If there is no official configurator, return an empty string.
 
 ============================================================
 USER FILTERS
 ============================================================
 
-Respect the user's filters.
+Respect every available filter:
 
 Budget:
 ${request.filters.budget || "not specified"}
@@ -592,90 +643,278 @@ ${request.filters.length || "not specified"}
 Year:
 ${request.filters.year || "not specified"}
 
-Brands/models to avoid:
+Avoid:
 ${request.filters.avoid || "none"}
 
 ============================================================
-RECOMMENDATION QUALITY
+IMPORTANT FILTER LOGIC
 ============================================================
 
-Do not automatically recommend generic popular cars.
+Do not ignore strong requirements.
 
-If the user asks for:
-- high performance
-- two seats
-- sports car
-- luxury
-- 4x4
-- large trunk
-- unusual/exotic vehicle
+Example:
 
-then the results must actually satisfy those requirements.
+If user requests 2 seats + high power + sports car,
+do not recommend a normal 5-seat family car.
 
-Do not recommend a normal family sedan just because it is popular.
+If user requests large trunk,
+do not recommend a car with a small trunk merely because it is
+popular.
+
+If user requests 4x4,
+prefer actual AWD/4WD vehicles.
+
+If user specifies brands to avoid,
+do not return those brands.
 
 ============================================================
 MAINTENANCE
 ============================================================
 
-Give a realistic short maintenance assessment.
+Give a realistic short maintenance description.
 
-Mention:
-- expected servicing complexity
-- expensive components if relevant
-- EV battery / hybrid system considerations if relevant
-- performance-car costs if relevant
+Mention relevant factors such as:
+- servicing complexity
+- performance-car maintenance
+- hybrid system complexity
+- EV battery considerations
+- expensive brakes/tyres
+- drivetrain complexity
 
-Do NOT invent exact annual costs unless verified.
+Do not invent exact annual costs.
 
 ============================================================
-OUTPUT
+RESULT FORMAT
 ============================================================
 
 Return ONLY valid JSON.
 
-Do not use markdown.
-Do not use code fences.
-Do not write anything before or after the JSON.
+No markdown.
+No code fences.
+No explanation outside JSON.
 
-Format:
+The JSON must have this exact top-level structure:
 
 {
   "cars": [
     {
-      "name": "...",
-      "generation": "...",
+      "name": "",
+      "generation": "",
       "year": 2026,
       "score": 95,
-      "price": "...",
-      "power": "...",
+      "price": "",
+      "power": "",
       "seats": 5,
-      "trunk": "...",
-      "drive": "...",
-      "fuel": "...",
-      "reason": "...",
-      "pros": ["...", "...", "..."],
-      "cons": ["...", "..."],
-      "maintenance": "...",
-      "image": "...",
-      "photoSource": "...",
-      "configurator": "...",
-      "priceSource": "...",
-      "dataSources": ["...", "..."]
+      "trunk": "",
+      "drive": "",
+      "fuel": "",
+      "reason": "",
+      "pros": [],
+      "cons": [],
+      "maintenance": "",
+      "image": "",
+      "photoSource": "",
+      "configurator": "",
+      "priceSource": "",
+      "dataSources": []
     }
   ]
 }
 
-There MUST be exactly 3 cars.
+Exactly 3 cars.
 
-The score is NOT a political or subjective rating.
-It is only a technical matching score from 0-100 showing how closely
-the vehicle satisfies the user's explicitly stated automotive criteria.
+year must be a number.
 
-Most importantly:
-VERIFY CURRENT INFORMATION ON THE WEB.
-Do not rely only on your internal knowledge.
+seats must be a number.
+
+score must be a number from 0 to 100.
+
+pros and cons must be arrays.
+
+dataSources must contain URLs or identifiable source names.
+
+MOST IMPORTANT:
+Research the web first.
+Use current information.
+Never invent prices.
+Never invent URLs.
+Never mix generations.
 `;
+}
+
+
+// ============================================================
+// NORMALIZE ONE CAR
+// ============================================================
+
+function normalizeCar(car) {
+  if (
+    !car ||
+    typeof car !== "object"
+  ) {
+    throw new Error(
+      "Invalid vehicle object"
+    );
+  }
+
+  const result = {
+    name:
+      text(car.name, 200),
+
+    generation:
+      text(car.generation, 300),
+
+    year:
+      Number(car.year),
+
+    score:
+      Number(car.score),
+
+    price:
+      text(car.price, 150),
+
+    power:
+      text(car.power, 150),
+
+    seats:
+      Number(car.seats),
+
+    trunk:
+      text(car.trunk, 150),
+
+    drive:
+      text(car.drive, 150),
+
+    fuel:
+      text(car.fuel, 150),
+
+    reason:
+      text(car.reason, 1500),
+
+    pros:
+      arrayText(car.pros),
+
+    cons:
+      arrayText(car.cons),
+
+    maintenance:
+      text(
+        car.maintenance,
+        1500
+      ),
+
+    image:
+      text(
+        car.image,
+        2000
+      ),
+
+    photoSource:
+      text(
+        car.photoSource,
+        2000
+      ),
+
+    configurator:
+      text(
+        car.configurator,
+        2000
+      ),
+
+    priceSource:
+      text(
+        car.priceSource,
+        2000
+      ),
+
+    dataSources:
+      arrayText(
+        car.dataSources,
+        10
+      )
+  };
+
+  if (!result.name) {
+    throw new Error(
+      "Vehicle name missing"
+    );
+  }
+
+  if (!result.generation) {
+    throw new Error(
+      `Generation missing for ${result.name}`
+    );
+  }
+
+  if (
+    !Number.isFinite(result.year) ||
+    result.year < 2000 ||
+    result.year > 2100
+  ) {
+    throw new Error(
+      `Invalid model year for ${result.name}`
+    );
+  }
+
+  if (
+    !Number.isFinite(result.score)
+  ) {
+    result.score = 0;
+  }
+
+  result.score =
+    Math.max(
+      0,
+      Math.min(
+        100,
+        Math.round(
+          result.score
+        )
+      )
+    );
+
+  if (
+    !Number.isFinite(result.seats) ||
+    result.seats < 1 ||
+    result.seats > 20
+  ) {
+    result.seats = null;
+  }
+
+  if (!result.reason) {
+    result.reason =
+      "Spĺňa zadané požiadavky používateľa.";
+  }
+
+  return result;
+}
+
+
+// ============================================================
+// VALIDATE 3 CARS
+// ============================================================
+
+function validateCars(data) {
+  if (
+    !data ||
+    !Array.isArray(data.cars)
+  ) {
+    throw new Error(
+      "AI response does not contain cars"
+    );
+  }
+
+  if (
+    data.cars.length !== 3
+  ) {
+    throw new Error(
+      `AI returned ${data.cars.length} cars instead of 3`
+    );
+  }
+
+  return data.cars.map(
+    normalizeCar
+  );
 }
 
 
@@ -683,92 +922,95 @@ Do not rely only on your internal knowledge.
 // GROQ COMPOUND
 // ============================================================
 
-async function callGroqCompound(request) {
+async function callGroq(request) {
   if (!GROQ_API_KEY) {
-    throw new Error("GROQ_API_KEY is missing");
+    throw new Error(
+      "GROQ_API_KEY is not configured"
+    );
   }
-
-  const prompt =
-    buildPrompt(request);
 
   const controller =
     new AbortController();
 
-  const timeout =
+  const timer =
     setTimeout(
       () => controller.abort(),
-      45000
+      55000
     );
 
   try {
-    const response = await fetch(
-      GROQ_URL,
-      {
-        method: "POST",
-        signal: controller.signal,
+    const response =
+      await fetch(
+        GROQ_URL,
+        {
+          method: "POST",
 
-        headers: {
-          "Content-Type": "application/json",
-          Authorization:
-            `Bearer ${GROQ_API_KEY}`
-        },
+          headers: {
+            "Content-Type":
+              "application/json",
 
-        body: JSON.stringify({
-          model: "groq/compound",
+            Authorization:
+              `Bearer ${GROQ_API_KEY}`,
 
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are CARMATCH AI. Always research current web information and return only valid JSON matching the requested structure."
-            },
-            {
-              role: "user",
-              content: prompt
-            }
-          ],
-
-          response_format: {
-            type: "json_object"
+            "Groq-Model-Version":
+              "latest"
           },
 
-          temperature: 0.1,
+          body: JSON.stringify({
+            model:
+              "groq/compound",
 
-          max_completion_tokens: 7000,
+            messages: [
+              {
+                role: "system",
 
-          compound_custom: {
-            tools: {
-              enabled_tools: [
-                "web_search",
-                "visit_website"
-              ]
+                content:
+                  "You are CARMATCH AI. Use the built-in web search and website tools to research current automotive information. Return only the requested JSON."
+              },
+              {
+                role: "user",
+
+                content:
+                  buildPrompt(request)
+              }
+            ],
+
+            compound_custom: {
+              tools: {
+                enabled_tools: [
+                  "web_search",
+                  "visit_website"
+                ]
+              }
             }
-          }
-        })
-      }
-    );
+          }),
 
-    const text =
+          signal: controller.signal
+        }
+      );
+
+    const raw =
       await response.text();
 
     if (!response.ok) {
       throw new Error(
-        `Groq HTTP ${response.status}: ${text}`
+        `Groq HTTP ${response.status}`
       );
     }
 
-    let data;
+    let apiData;
 
     try {
-      data = JSON.parse(text);
+      apiData =
+        JSON.parse(raw);
     } catch (_) {
       throw new Error(
-        "Groq returned invalid API JSON"
+        "Groq API returned invalid JSON"
       );
     }
 
     const content =
-      data?.choices?.[0]?.message?.content;
+      apiData?.choices?.[0]?.message?.content;
 
     if (!content) {
       throw new Error(
@@ -777,19 +1019,23 @@ async function callGroqCompound(request) {
     }
 
     const parsed =
-      extractJson(content);
+      parseAIJson(content);
 
     const cars =
       validateCars(parsed);
 
     return {
       cars,
-      provider: "Groq Compound",
-      liveWeb: true
+
+      provider:
+        "Groq Compound",
+
+      liveWeb:
+        true
     };
 
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(timer);
   }
 }
 
@@ -801,135 +1047,147 @@ async function callGroqCompound(request) {
 async function callOpenRouter(request) {
   if (!OPENROUTER_API_KEY) {
     throw new Error(
-      "OPENROUTER_API_KEY is missing"
+      "OPENROUTER_API_KEY is not configured"
     );
   }
 
-  const prompt = `
-${buildPrompt(request)}
-
-IMPORTANT FALLBACK RULE:
-
-You may not have live web access.
-
-Therefore:
-- NEVER invent current prices.
-- NEVER pretend an unverified price is current.
-- If you cannot verify a current official price, use:
-  "Cena na vyžiadanie"
-- If you cannot verify an exact current image URL, use an empty string.
-- If you cannot verify an official configurator URL, use an empty string.
-
-Return only JSON.
-`;
-
   const models = [
-    "openai/gpt-oss-120b",
-    "openai/gpt-oss-20b"
+    "openrouter/free"
   ];
 
-  let lastError = null;
+  let lastError =
+    null;
 
   for (const model of models) {
     try {
-      const response =
-        await fetch(
-          OPENROUTER_URL,
-          {
-            method: "POST",
+      const controller =
+        new AbortController();
 
-            headers: {
-              "Content-Type":
-                "application/json",
-
-              Authorization:
-                `Bearer ${OPENROUTER_API_KEY}`,
-
-              "HTTP-Referer":
-                "https://carmatchai.vercel.app",
-
-              "X-Title":
-                "CARMATCH AI"
-            },
-
-            body: JSON.stringify({
-              model,
-
-              messages: [
-                {
-                  role: "system",
-                  content:
-                    "Return only valid JSON. Never invent current automotive prices or URLs."
-                },
-                {
-                  role: "user",
-                  content: prompt
-                }
-              ],
-
-              response_format: {
-                type: "json_object"
-              },
-
-              temperature: 0.1,
-
-              max_tokens: 7000
-            })
-          }
+      const timer =
+        setTimeout(
+          () => controller.abort(),
+          30000
         );
 
-      const text =
-        await response.text();
-
-      if (!response.ok) {
-        lastError =
-          new Error(
-            `OpenRouter ${model} HTTP ${response.status}: ${text}`
-          );
-
-        continue;
-      }
-
-      let data;
-
       try {
-        data = JSON.parse(text);
-      } catch (_) {
-        lastError =
-          new Error(
-            "OpenRouter returned invalid API JSON"
+        const response =
+          await fetch(
+            OPENROUTER_URL,
+            {
+              method: "POST",
+
+              headers: {
+                "Content-Type":
+                  "application/json",
+
+                Authorization:
+                  `Bearer ${OPENROUTER_API_KEY}`,
+
+                "HTTP-Referer":
+                  "https://carmatchai.vercel.app",
+
+                "X-Title":
+                  "CARMATCH AI"
+              },
+
+              body: JSON.stringify({
+                model,
+
+                messages: [
+                  {
+                    role:
+                      "system",
+
+                    content:
+                      "Return only valid JSON. Never invent current automotive prices, image URLs, or official configurator URLs. If current information cannot be verified, use empty fields or 'Cena na vyžiadanie'."
+                  },
+                  {
+                    role:
+                      "user",
+
+                    content:
+                      buildPrompt(request)
+                  }
+                ],
+
+                temperature:
+                  0.1,
+
+                max_tokens:
+                  7000,
+
+                response_format: {
+                  type:
+                    "json_object"
+                }
+              }),
+
+              signal:
+                controller.signal
+            }
           );
 
-        continue;
+        const raw =
+          await response.text();
+
+        if (!response.ok) {
+          lastError =
+            new Error(
+              `OpenRouter HTTP ${response.status}`
+            );
+
+          continue;
+        }
+
+        let apiData;
+
+        try {
+          apiData =
+            JSON.parse(raw);
+        } catch (_) {
+          lastError =
+            new Error(
+              "OpenRouter returned invalid API JSON"
+            );
+
+          continue;
+        }
+
+        const content =
+          apiData?.choices?.[0]?.message?.content;
+
+        if (!content) {
+          lastError =
+            new Error(
+              "OpenRouter returned empty content"
+            );
+
+          continue;
+        }
+
+        const parsed =
+          parseAIJson(content);
+
+        const cars =
+          validateCars(parsed);
+
+        return {
+          cars,
+
+          provider:
+            `OpenRouter (${model})`,
+
+          liveWeb:
+            false
+        };
+
+      } finally {
+        clearTimeout(timer);
       }
-
-      const content =
-        data?.choices?.[0]?.message?.content;
-
-      if (!content) {
-        lastError =
-          new Error(
-            "OpenRouter returned empty content"
-          );
-
-        continue;
-      }
-
-      const parsed =
-        extractJson(content);
-
-      const cars =
-        validateCars(parsed);
-
-      return {
-        cars,
-        provider:
-          `OpenRouter (${model})`,
-        liveWeb: false
-      };
 
     } catch (error) {
-      lastError = error;
+      lastError =
+        error;
     }
   }
 
@@ -950,6 +1208,7 @@ export default async function handler(
   req,
   res
 ) {
+
   // ----------------------------------------------------------
   // CORS
   // ----------------------------------------------------------
@@ -969,26 +1228,59 @@ export default async function handler(
     "Content-Type, Authorization"
   );
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
+
+  if (
+    req.method === "OPTIONS"
+  ) {
+    return res
+      .status(200)
+      .end();
   }
 
-  if (req.method !== "POST") {
-    return json(
+
+  if (
+    req.method !== "POST"
+  ) {
+    return sendJson(
       res,
       405,
       {
-        error: "Method not allowed"
+        error:
+          "Method not allowed"
       }
     );
   }
 
 
-  // ----------------------------------------------------------
-  // AUTHORIZATION
-  // ----------------------------------------------------------
-
   try {
+
+    // --------------------------------------------------------
+    // ENVIRONMENT CHECK
+    // --------------------------------------------------------
+
+    if (
+      !SUPABASE_URL ||
+      !SUPABASE_ANON_KEY
+    ) {
+      console.error(
+        "CARMATCH AI: Supabase environment variables missing"
+      );
+
+      return sendJson(
+        res,
+        500,
+        {
+          error:
+            "Configuration error"
+        }
+      );
+    }
+
+
+    // --------------------------------------------------------
+    // AUTHORIZATION HEADER
+    // --------------------------------------------------------
+
     const authorization =
       req.headers.authorization ||
       "";
@@ -998,101 +1290,124 @@ export default async function handler(
         "Bearer "
       )
     ) {
-      return json(
+      return sendJson(
         res,
         401,
         {
           error:
-            "Missing Supabase access token"
+            "Unauthorized"
         }
       );
     }
 
     const accessToken =
-      authorization.slice(
-        "Bearer ".length
-      ).trim();
+      authorization
+        .slice(7)
+        .trim();
 
-    const user =
-      await verifySupabaseUser(
-        accessToken
-      );
-
-    if (!user) {
-      return json(
+    if (!accessToken) {
+      return sendJson(
         res,
         401,
         {
           error:
-            "Invalid or expired Supabase session"
+            "Unauthorized"
         }
       );
     }
 
 
     // --------------------------------------------------------
-    // REQUEST
+    // VERIFY SUPABASE USER
+    // --------------------------------------------------------
+
+    const user =
+      await verifyUser(
+        accessToken
+      );
+
+    if (!user) {
+      return sendJson(
+        res,
+        401,
+        {
+          error:
+            "Supabase session is invalid or expired"
+        }
+      );
+    }
+
+
+    // --------------------------------------------------------
+    // NORMALIZE REQUEST
     // --------------------------------------------------------
 
     const request =
-      validateRequest(req.body || {});
+      normalizeRequest(
+        req.body || {}
+      );
 
 
     // --------------------------------------------------------
-    // SEARCH LIMIT
+    // CHECK DAILY SEARCH LIMIT
     // --------------------------------------------------------
 
     const usage =
-      await consumeSearch(
+      await useSearch(
         accessToken
       );
 
     if (!usage.allowed) {
-      return json(
+      return sendJson(
         res,
         429,
         {
           error:
             "Denný limit vyhľadávaní bol dosiahnutý.",
+
           message:
-            `Dnes už bolo použitých ${MAX_SEARCHES_PER_DAY} z ${MAX_SEARCHES_PER_DAY} vyhľadávaní.`,
-          remaining: 0
+            "Použil si všetkých 5 vyhľadávaní pre dnešok.",
+
+          remaining:
+            0
         }
       );
     }
 
 
     // --------------------------------------------------------
-    // AI
+    // GROQ FIRST
     // --------------------------------------------------------
 
-    let result = null;
-    let groqError = null;
-    let openRouterError = null;
+    let result =
+      null;
 
-
-    // ========================================================
-    // 1. GROQ COMPOUND
-    // ========================================================
+    let groqFailed =
+      false;
 
     try {
       result =
-        await callGroqCompound(
+        await callGroq(
           request
         );
     } catch (error) {
-      groqError = error;
+
+      groqFailed =
+        true;
 
       console.error(
-        "CARMATCH AI - Groq Compound failed:",
+        "CARMATCH AI - Groq failed:",
         error
       );
     }
 
 
-    // ========================================================
-    // 2. OPENROUTER FALLBACK
-    // ========================================================
+    // --------------------------------------------------------
+    // OPENROUTER SECOND
+    // --------------------------------------------------------
+
+    let openRouterFailed =
+      false;
 
     if (!result) {
       try {
@@ -1101,53 +1416,64 @@ export default async function handler(
             request
           );
       } catch (error) {
-        openRouterError =
-          error;
+
+        openRouterFailed =
+          true;
 
         console.error(
-          "CARMATCH AI - OpenRouter fallback failed:",
+          "CARMATCH AI - OpenRouter failed:",
           error
         );
       }
     }
 
 
-    // ========================================================
+    // --------------------------------------------------------
     // ALL PROVIDERS FAILED
-    // ========================================================
+    // --------------------------------------------------------
 
     if (!result) {
+
       const refund =
         await refundSearch(
           accessToken
         );
 
-      return json(
+      const remaining =
+        Number.isFinite(
+          Number(
+            refund?.remaining
+          )
+        )
+          ? Number(
+              refund.remaining
+            )
+          : usage.remaining;
+
+      return sendJson(
         res,
         503,
         {
           error:
-            "AI is temporarily unavailable",
+            "AI temporarily unavailable",
 
           message:
-            "CARMATCH AI momentálne nedostal použiteľnú odpoveď z AI služieb. Vyhľadávanie bolo vrátené.",
+            "CARMATCH AI momentálne nemá dostupnú AI službu. Toto vyhľadávanie sa nezapočítalo do denného limitu.",
 
-          retryable: true,
+          retryable:
+            true,
 
-          remaining:
-            typeof refund?.remaining === "number"
-              ? refund.remaining
-              : usage.remaining,
+          remaining,
 
-          providers: {
+          providerStatus: {
             groq:
-              groqError
-                ? "failed"
+              groqFailed
+                ? "unavailable"
                 : "unknown",
 
             openrouter:
-              openRouterError
-                ? "failed"
+              openRouterFailed
+                ? "unavailable"
                 : "unknown"
           }
         }
@@ -1156,14 +1482,15 @@ export default async function handler(
 
 
     // --------------------------------------------------------
-    // FINAL RESPONSE
+    // SUCCESS
     // --------------------------------------------------------
 
-    return json(
+    return sendJson(
       res,
       200,
       {
-        cars: result.cars,
+        cars:
+          result.cars,
 
         remaining:
           usage.remaining,
@@ -1173,7 +1500,9 @@ export default async function handler(
             result.provider,
 
           liveWeb:
-            result.liveWeb === true,
+            Boolean(
+              result.liveWeb
+            ),
 
           generatedAt:
             new Date().toISOString()
@@ -1181,24 +1510,26 @@ export default async function handler(
       }
     );
 
+
   } catch (error) {
 
     console.error(
-      "CARMATCH AI FAILURE:",
+      "CARMATCH AI INTERNAL ERROR:",
       error
     );
 
-    return json(
+    return sendJson(
       res,
       500,
       {
         error:
-          "Internal server error",
+          "Server configuration error",
 
         message:
-          "CARMATCH AI zaznamenal internú chybu.",
+          "CARMATCH AI sa nepodarilo dokončiť požiadavku. Skontroluj nastavenia Supabase a AI kľúčov vo Verceli.",
 
-        retryable: true
+        retryable:
+          true
       }
     );
   }
