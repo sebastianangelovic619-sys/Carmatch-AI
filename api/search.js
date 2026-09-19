@@ -1,13 +1,13 @@
 // ============================================================
-// CARMATCH AI - FINAL BACKEND v2
+// CARMATCH AI - FINAL BACKEND v3
 // Supabase anonymous auth + 5 searches/day
 // Groq Compound live web research
 // Groq Compound Mini fallback
 // Multiple OpenRouter FREE fallbacks
 // Automatic provider switching
 // Search refund when every provider fails
+// Automatic vehicle photo search via Wikimedia Commons
 // ============================================================
-
 
 const GROQ_URL =
   "https://api.groq.com/openai/v1/chat/completions";
@@ -15,13 +15,14 @@ const GROQ_URL =
 const OPENROUTER_URL =
   "https://openrouter.ai/api/v1/chat/completions";
 
+const WIKIMEDIA_API =
+  "https://commons.wikimedia.org/w/api.php";
 
 const SUPABASE_URL =
   process.env.SUPABASE_URL;
 
 const SUPABASE_ANON_KEY =
   process.env.SUPABASE_ANON_KEY;
-
 
 const GROQ_API_KEY =
   process.env.GROQ_API_KEY;
@@ -36,33 +37,16 @@ const OPENROUTER_API_KEY =
 
 const MAX_SEARCHES_PER_DAY = 5;
 
+const GROQ_TIMEOUT = 55000;
+const GROQ_MINI_TIMEOUT = 45000;
+const OPENROUTER_TIMEOUT = 35000;
 
-// Groq timeouts
-const GROQ_TIMEOUT =
-  55000;
-
-const GROQ_MINI_TIMEOUT =
-  45000;
-
-
-// OpenRouter timeout
-const OPENROUTER_TIMEOUT =
-  35000;
+// Wikimedia timeout for each photo request
+const WIKIMEDIA_TIMEOUT = 10000;
 
 
 // ============================================================
 // OPENROUTER FREE MODELS
-// ============================================================
-//
-// Order:
-// 1. Qwen 3.8 27B
-// 2. NVIDIA Nemotron 3 Ultra
-// 3. NVIDIA Nemotron 3.5 Lightning
-// 4. OpenRouter automatic free router
-//
-// The final router is useful because OpenRouter can automatically
-// select an available free model.
-//
 // ============================================================
 
 const OPENROUTER_FREE_MODELS = [
@@ -77,11 +61,7 @@ const OPENROUTER_FREE_MODELS = [
 // RESPONSE HELPER
 // ============================================================
 
-function sendJson(
-  res,
-  status,
-  data
-) {
+function sendJson(res, status, data) {
   return res
     .status(status)
     .json(data);
@@ -92,24 +72,14 @@ function sendJson(
 // SAFE TEXT
 // ============================================================
 
-function text(
-  value,
-  maxLength = 5000
-) {
-
-  if (
-    value === null ||
-    value === undefined
-  ) {
+function text(value, maxLength = 5000) {
+  if (value === null || value === undefined) {
     return "";
   }
 
   return String(value)
     .replace(/\u0000/g, "")
-    .slice(
-      0,
-      maxLength
-    );
+    .slice(0, maxLength);
 }
 
 
@@ -117,30 +87,15 @@ function text(
 // SAFE ARRAY
 // ============================================================
 
-function arrayText(
-  value,
-  maxItems = 10
-) {
-
-  if (
-    !Array.isArray(value)
-  ) {
+function arrayText(value, maxItems = 10) {
+  if (!Array.isArray(value)) {
     return [];
   }
 
   return value
-    .map(
-      item =>
-        text(
-          item,
-          500
-        )
-    )
+    .map(item => text(item, 500))
     .filter(Boolean)
-    .slice(
-      0,
-      maxItems
-    );
+    .slice(0, maxItems);
 }
 
 
@@ -149,79 +104,41 @@ function arrayText(
 // ============================================================
 
 function parseAIJson(raw) {
-
   if (!raw) {
-    throw new Error(
-      "AI returned an empty response"
-    );
+    throw new Error("AI returned an empty response");
   }
 
-  let value =
-    String(raw).trim();
+  let value = String(raw).trim();
 
-
-  // Remove markdown code fences
-
-  value =
-    value
-      .replace(
-        /^```json\s*/i,
-        ""
-      )
-      .replace(
-        /^```\s*/i,
-        ""
-      )
-      .replace(
-        /\s*```$/i,
-        ""
-      )
-      .trim();
-
-
-  // Direct JSON
+  value = value
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
 
   try {
-    return JSON.parse(
-      value
-    );
+    return JSON.parse(value);
   } catch (_) {}
 
-
-  // Search for JSON object
-
-  const firstBrace =
-    value.indexOf("{");
-
-  const lastBrace =
-    value.lastIndexOf("}");
-
+  const firstBrace = value.indexOf("{");
+  const lastBrace = value.lastIndexOf("}");
 
   if (
     firstBrace !== -1 &&
     lastBrace !== -1 &&
     lastBrace > firstBrace
   ) {
-
-    const extracted =
-      value.slice(
-        firstBrace,
-        lastBrace + 1
-      );
+    const extracted = value.slice(
+      firstBrace,
+      lastBrace + 1
+    );
 
     try {
-
-      return JSON.parse(
-        extracted
-      );
-
+      return JSON.parse(extracted);
     } catch (_) {}
   }
 
-
-  throw new Error(
-    "AI returned invalid JSON"
-  );
+  throw new Error("AI returned invalid JSON");
 }
 
 
@@ -229,85 +146,52 @@ function parseAIJson(raw) {
 // SUPABASE USER VERIFICATION
 // ============================================================
 
-async function verifyUser(
-  accessToken
-) {
-
-  if (
-    !SUPABASE_URL ||
-    !SUPABASE_ANON_KEY
-  ) {
-
+async function verifyUser(accessToken) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     throw new Error(
       "Supabase environment variables are missing"
     );
   }
 
-
   if (!accessToken) {
     return null;
   }
 
+  const controller = new AbortController();
 
-  const controller =
-    new AbortController();
-
-
-  const timer =
-    setTimeout(
-      () =>
-        controller.abort(),
-      10000
-    );
-
+  const timer = setTimeout(
+    () => controller.abort(),
+    10000
+  );
 
   try {
+    const response = await fetch(
+      `${SUPABASE_URL}/auth/v1/user`,
+      {
+        method: "GET",
 
-    const response =
-      await fetch(
-        `${SUPABASE_URL}/auth/v1/user`,
-        {
-          method:
-            "GET",
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${accessToken}`
+        },
 
-          headers: {
-            apikey:
-              SUPABASE_ANON_KEY,
-
-            Authorization:
-              `Bearer ${accessToken}`
-          },
-
-          signal:
-            controller.signal
-        }
-      );
-
+        signal: controller.signal
+      }
+    );
 
     if (!response.ok) {
       return null;
     }
 
+    const user = await response.json();
 
-    const user =
-      await response.json();
-
-
-    if (
-      !user ||
-      !user.id
-    ) {
+    if (!user || !user.id) {
       return null;
     }
 
-
     return user;
-
   } finally {
-
-    clearTimeout(
-      timer
-    );
+    clearTimeout(timer);
   }
 }
 
@@ -320,87 +204,57 @@ async function callSupabaseRPC(
   functionName,
   accessToken
 ) {
+  const controller = new AbortController();
 
-  const controller =
-    new AbortController();
-
-
-  const timer =
-    setTimeout(
-      () =>
-        controller.abort(),
-      10000
-    );
-
+  const timer = setTimeout(
+    () => controller.abort(),
+    10000
+  );
 
   try {
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/rpc/${functionName}`,
+      {
+        method: "POST",
 
-    const response =
-      await fetch(
-        `${SUPABASE_URL}/rest/v1/rpc/${functionName}`,
-        {
-          method:
-            "POST",
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
 
-          headers: {
+          Authorization:
+            `Bearer ${accessToken}`,
 
-            apikey:
-              SUPABASE_ANON_KEY,
+          "Content-Type": "application/json",
 
-            Authorization:
-              `Bearer ${accessToken}`,
+          Accept: "application/json"
+        },
 
-            "Content-Type":
-              "application/json",
+        body: "{}",
 
-            Accept:
-              "application/json"
-          },
+        signal: controller.signal
+      }
+    );
 
-          body:
-            "{}",
-
-          signal:
-            controller.signal
-        }
-      );
-
-
-    const raw =
-      await response.text();
-
+    const raw = await response.text();
 
     let data;
 
-
     try {
-
-      data =
-        JSON.parse(raw);
-
+      data = JSON.parse(raw);
     } catch (_) {
-
       throw new Error(
         "Supabase returned invalid JSON"
       );
     }
 
-
     if (!response.ok) {
-
       throw new Error(
         `Supabase RPC ${functionName} failed`
       );
     }
 
-
     return data;
-
   } finally {
-
-    clearTimeout(
-      timer
-    );
+    clearTimeout(timer);
   }
 }
 
@@ -409,47 +263,27 @@ async function callSupabaseRPC(
 // USE SEARCH
 // ============================================================
 
-async function useSearch(
-  accessToken
-) {
+async function useSearch(accessToken) {
+  const result = await callSupabaseRPC(
+    "use_search",
+    accessToken
+  );
 
-  const result =
-    await callSupabaseRPC(
-      "use_search",
-      accessToken
-    );
-
-
-  if (
-    !result ||
-    result.allowed !== true
-  ) {
-
+  if (!result || result.allowed !== true) {
     return {
-      allowed:
-        false,
-
-      remaining:
-        0
+      allowed: false,
+      remaining: 0
     };
   }
 
-
   return {
+    allowed: true,
 
-    allowed:
-      true,
-
-    remaining:
-      Number.isFinite(
-        Number(
-          result.remaining
-        )
-      )
-        ? Number(
-            result.remaining
-          )
-        : 0
+    remaining: Number.isFinite(
+      Number(result.remaining)
+    )
+      ? Number(result.remaining)
+      : 0
   };
 }
 
@@ -458,19 +292,13 @@ async function useSearch(
 // REFUND SEARCH
 // ============================================================
 
-async function refundSearch(
-  accessToken
-) {
-
+async function refundSearch(accessToken) {
   try {
-
     return await callSupabaseRPC(
       "refund_search",
       accessToken
     );
-
   } catch (error) {
-
     console.error(
       "CARMATCH AI refund failed:",
       error
@@ -485,10 +313,7 @@ async function refundSearch(
 // REQUEST NORMALIZATION
 // ============================================================
 
-function normalizeRequest(
-  body
-) {
-
+function normalizeRequest(body) {
   const filters =
     body &&
     typeof body.filters === "object" &&
@@ -496,83 +321,24 @@ function normalizeRequest(
       ? body.filters
       : {};
 
-
   return {
-
-    naturalLanguage:
-      text(
-        body?.naturalLanguage,
-        3000
-      ),
-
+    naturalLanguage: text(
+      body?.naturalLanguage,
+      3000
+    ),
 
     filters: {
-
-      budget:
-        text(
-          filters.budget,
-          100
-        ),
-
-      seats:
-        text(
-          filters.seats,
-          100
-        ),
-
-      power:
-        text(
-          filters.power,
-          100
-        ),
-
-      trunk:
-        text(
-          filters.trunk,
-          100
-        ),
-
-      drive:
-        text(
-          filters.drive,
-          100
-        ),
-
-      fuel:
-        text(
-          filters.fuel,
-          100
-        ),
-
-      body:
-        text(
-          filters.body,
-          100
-        ),
-
-      style:
-        text(
-          filters.style,
-          100
-        ),
-
-      length:
-        text(
-          filters.length,
-          100
-        ),
-
-      year:
-        text(
-          filters.year,
-          100
-        ),
-
-      avoid:
-        text(
-          filters.avoid,
-          500
-        )
+      budget: text(filters.budget, 100),
+      seats: text(filters.seats, 100),
+      power: text(filters.power, 100),
+      trunk: text(filters.trunk, 100),
+      drive: text(filters.drive, 100),
+      fuel: text(filters.fuel, 100),
+      body: text(filters.body, 100),
+      style: text(filters.style, 100),
+      length: text(filters.length, 100),
+      year: text(filters.year, 100),
+      avoid: text(filters.avoid, 500)
     }
   };
 }
@@ -582,20 +348,13 @@ function normalizeRequest(
 // LANGUAGE
 // ============================================================
 
-function detectLanguage(
-  request
-) {
-
+function detectLanguage(request) {
   const content =
     `${request.naturalLanguage} ${
-      JSON.stringify(
-        request.filters
-      )
+      JSON.stringify(request.filters)
     }`.toLowerCase();
 
-
   const slovak = [
-
     "chcem",
     "potrebujem",
     "auto",
@@ -624,19 +383,11 @@ function detectLanguage(
     "štvorkolka"
   ];
 
+  const count = slovak.filter(
+    word => content.includes(word)
+  ).length;
 
-  const count =
-    slovak.filter(
-      word =>
-        content.includes(
-          word
-        )
-    ).length;
-
-
-  return count > 0
-    ? "Slovak"
-    : "English";
+  return count > 0 ? "Slovak" : "English";
 }
 
 
@@ -644,38 +395,20 @@ function detectLanguage(
 // MARKET
 // ============================================================
 
-function detectMarket(
-  request
-) {
-
+function detectMarket(request) {
   const content =
     `${request.naturalLanguage} ${
-      JSON.stringify(
-        request.filters
-      )
+      JSON.stringify(request.filters)
     }`.toLowerCase();
 
-
   if (
-    content.includes(
-      "slovensko"
-    ) ||
-    content.includes(
-      "slovakia"
-    ) ||
-    content.includes(
-      "eur"
-    ) ||
-    content.includes(
-      "€"
-    )
+    content.includes("slovensko") ||
+    content.includes("slovakia") ||
+    content.includes("eur") ||
+    content.includes("€")
   ) {
-
-    return (
-      "Slovakia / European Union"
-    );
+    return "Slovakia / European Union";
   }
-
 
   return "Europe";
 }
@@ -686,13 +419,9 @@ function detectMarket(
 // ============================================================
 
 function currentDate() {
-
   return new Date()
     .toISOString()
-    .slice(
-      0,
-      10
-    );
+    .slice(0, 10);
 }
 
 
@@ -700,21 +429,9 @@ function currentDate() {
 // PROMPT
 // ============================================================
 
-function buildPrompt(
-  request
-) {
-
-  const language =
-    detectLanguage(
-      request
-    );
-
-
-  const market =
-    detectMarket(
-      request
-    );
-
+function buildPrompt(request) {
+  const language = detectLanguage(request);
+  const market = detectMarket(request);
 
   return `
 You are CARMATCH AI, a professional automotive research assistant.
@@ -732,11 +449,7 @@ USER REQUEST:
 ${request.naturalLanguage || "No text request."}
 
 FILTERS:
-${JSON.stringify(
-  request.filters,
-  null,
-  2
-)}
+${JSON.stringify(request.filters, null, 2)}
 
 ============================================================
 MAIN TASK
@@ -798,8 +511,6 @@ or
 If it cannot be verified:
 
 "Cena na vyžiadanie"
-
-Never invent a number.
 
 priceSource must contain the source URL when available.
 
@@ -1001,205 +712,113 @@ Never mix generations.
 // NORMALIZE ONE CAR
 // ============================================================
 
-function normalizeCar(
-  car
-) {
-
-  if (
-    !car ||
-    typeof car !== "object"
-  ) {
-
-    throw new Error(
-      "Invalid vehicle object"
-    );
+function normalizeCar(car) {
+  if (!car || typeof car !== "object") {
+    throw new Error("Invalid vehicle object");
   }
-
 
   const result = {
+    name: text(car.name, 200),
 
-    name:
-      text(
-        car.name,
-        200
-      ),
+    generation: text(
+      car.generation,
+      300
+    ),
 
-    generation:
-      text(
-        car.generation,
-        300
-      ),
+    year: Number(car.year),
 
-    year:
-      Number(
-        car.year
-      ),
+    score: Number(car.score),
 
-    score:
-      Number(
-        car.score
-      ),
+    price: text(car.price, 150),
 
-    price:
-      text(
-        car.price,
-        150
-      ),
+    power: text(car.power, 150),
 
-    power:
-      text(
-        car.power,
-        150
-      ),
+    seats: Number(car.seats),
 
-    seats:
-      Number(
-        car.seats
-      ),
+    trunk: text(car.trunk, 150),
 
-    trunk:
-      text(
-        car.trunk,
-        150
-      ),
+    drive: text(car.drive, 150),
 
-    drive:
-      text(
-        car.drive,
-        150
-      ),
+    fuel: text(car.fuel, 150),
 
-    fuel:
-      text(
-        car.fuel,
-        150
-      ),
+    reason: text(car.reason, 1500),
 
-    reason:
-      text(
-        car.reason,
-        1500
-      ),
+    pros: arrayText(car.pros),
 
-    pros:
-      arrayText(
-        car.pros
-      ),
+    cons: arrayText(car.cons),
 
-    cons:
-      arrayText(
-        car.cons
-      ),
+    maintenance: text(
+      car.maintenance,
+      1500
+    ),
 
-    maintenance:
-      text(
-        car.maintenance,
-        1500
-      ),
+    image: text(car.image, 2000),
 
-    image:
-      text(
-        car.image,
-        2000
-      ),
+    photoSource: text(
+      car.photoSource,
+      2000
+    ),
 
-    photoSource:
-      text(
-        car.photoSource,
-        2000
-      ),
+    configurator: text(
+      car.configurator,
+      2000
+    ),
 
-    configurator:
-      text(
-        car.configurator,
-        2000
-      ),
+    priceSource: text(
+      car.priceSource,
+      2000
+    ),
 
-    priceSource:
-      text(
-        car.priceSource,
-        2000
-      ),
-
-    dataSources:
-      arrayText(
-        car.dataSources,
-        10
-      )
+    dataSources: arrayText(
+      car.dataSources,
+      10
+    )
   };
 
-
   if (!result.name) {
-
-    throw new Error(
-      "Vehicle name missing"
-    );
+    throw new Error("Vehicle name missing");
   }
 
-
   if (!result.generation) {
-
     throw new Error(
       `Generation missing for ${result.name}`
     );
   }
 
-
   if (
-    !Number.isFinite(
-      result.year
-    ) ||
+    !Number.isFinite(result.year) ||
     result.year < 2000 ||
     result.year > 2100
   ) {
-
     throw new Error(
       `Invalid model year for ${result.name}`
     );
   }
 
-
-  if (
-    !Number.isFinite(
-      result.score
-    )
-  ) {
-
+  if (!Number.isFinite(result.score)) {
     result.score = 0;
   }
 
-
-  result.score =
-    Math.max(
-      0,
-      Math.min(
-        100,
-        Math.round(
-          result.score
-        )
-      )
-    );
-
+  result.score = Math.max(
+    0,
+    Math.min(
+      100,
+      Math.round(result.score)
+    )
+  );
 
   if (
-    !Number.isFinite(
-      result.seats
-    ) ||
+    !Number.isFinite(result.seats) ||
     result.seats < 1 ||
     result.seats > 20
   ) {
-
-    result.seats =
-      null;
+    result.seats = null;
   }
 
-
   if (!result.reason) {
-
     result.reason =
       "Spĺňa zadané požiadavky používateľa.";
   }
-
 
   return result;
 }
@@ -1209,78 +828,271 @@ function normalizeCar(
 // VALIDATE 3 CARS
 // ============================================================
 
-function validateCars(
-  data
-) {
-
-  if (
-    !data ||
-    !Array.isArray(
-      data.cars
-    )
-  ) {
-
+function validateCars(data) {
+  if (!data || !Array.isArray(data.cars)) {
     throw new Error(
       "AI response does not contain cars"
     );
   }
 
-
-  if (
-    data.cars.length !== 3
-  ) {
-
+  if (data.cars.length !== 3) {
     throw new Error(
       `AI returned ${data.cars.length} cars instead of 3`
     );
   }
 
-
-  return data.cars.map(
-    normalizeCar
-  );
+  return data.cars.map(normalizeCar);
 }
 
 
 // ============================================================
-// GENERIC FETCH WITH TIMEOUT
+// FETCH WITH TIMEOUT
 // ============================================================
 
 async function fetchWithTimeout(
   url,
-  options,
-  timeout
+  options = {},
+  timeout = 30000
 ) {
+  const controller = new AbortController();
 
-  const controller =
-    new AbortController();
-
-
-  const timer =
-    setTimeout(
-      () =>
-        controller.abort(),
-      timeout
-    );
-
+  const timer = setTimeout(
+    () => controller.abort(),
+    timeout
+  );
 
   try {
-
-    return await fetch(
-      url,
-      {
-        ...options,
-        signal:
-          controller.signal
-      }
-    );
-
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
   } finally {
+    clearTimeout(timer);
+  }
+}
 
-    clearTimeout(
-      timer
+
+// ============================================================
+// IMAGE SEARCH HELPERS
+// ============================================================
+
+// Reject likely irrelevant Wikimedia image results.
+
+const IMAGE_REJECT_WORDS = [
+  "logo",
+  "icon",
+  "flag",
+  "emblem",
+  "badge",
+  "wheel",
+  "interior",
+  "steering",
+  "engine",
+  "poster",
+  "advertisement",
+  "advert",
+  "brochure",
+  "drawing",
+  "diagram",
+  "blueprint",
+  "model kit",
+  "toy",
+  "miniature",
+  "hot wheels",
+  "matchbox"
+];
+
+
+function isRejectedImageTitle(title) {
+  const lower = String(title || "").toLowerCase();
+
+  return IMAGE_REJECT_WORDS.some(
+    word => lower.includes(word)
+  );
+}
+
+
+// Build a search phrase from the car's name,
+// generation and model year.
+
+function buildImageSearchQueries(car) {
+  const name = text(car.name, 200);
+  const generation = text(car.generation, 200);
+  const year = Number(car.year);
+
+  const queries = [];
+
+  if (name && generation && Number.isFinite(year)) {
+    queries.push(
+      `${name} ${generation} ${year}`
     );
   }
+
+  if (name && generation) {
+    queries.push(
+      `${name} ${generation}`
+    );
+  }
+
+  if (name && Number.isFinite(year)) {
+    queries.push(
+      `${name} ${year}`
+    );
+  }
+
+  if (name) {
+    queries.push(name);
+  }
+
+  return [...new Set(queries)];
+}
+
+
+// ============================================================
+// WIKIMEDIA COMMONS SEARCH
+// ============================================================
+
+async function searchWikimediaImage(query) {
+  const params = new URLSearchParams({
+    action: "query",
+    generator: "search",
+    gsrsearch: query,
+    gsrnamespace: "6",
+    gsrlimit: "12",
+    prop: "imageinfo",
+    iiprop: "url",
+    iiurlwidth: "1200",
+    format: "json",
+    origin: "*"
+  });
+
+  const url =
+    `${WIKIMEDIA_API}?${params.toString()}`;
+
+  const response = await fetchWithTimeout(
+    url,
+    {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "User-Agent":
+          "CARMATCHAI/1.0 (vehicle image lookup)"
+      }
+    },
+    WIKIMEDIA_TIMEOUT
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Wikimedia HTTP ${response.status}`
+    );
+  }
+
+  const data = await response.json();
+
+  const pages = Object.values(
+    data?.query?.pages || {}
+  );
+
+  for (const page of pages) {
+    const title = page?.title || "";
+
+    if (isRejectedImageTitle(title)) {
+      continue;
+    }
+
+    const imageInfo = page?.imageinfo?.[0];
+
+    if (!imageInfo) {
+      continue;
+    }
+
+    // Prefer the resized thumbnail URL when available.
+    // Fall back to the original Wikimedia file URL.
+
+    const imageUrl =
+      imageInfo.thumburl ||
+      imageInfo.url ||
+      "";
+
+    if (
+      !imageUrl ||
+      !/^https:\/\/upload\.wikimedia\.org\//i.test(
+        imageUrl
+      )
+    ) {
+      continue;
+    }
+
+    return {
+      image: imageUrl,
+      photoSource:
+        imageInfo.descriptionurl ||
+        `https://commons.wikimedia.org/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`
+    };
+  }
+
+  return null;
+}
+
+
+// ============================================================
+// FIND A PHOTO FOR ONE VEHICLE
+// ============================================================
+
+async function findCarImage(car) {
+  // If the AI already provided a plausible image URL,
+  // preserve it rather than replacing it.
+
+  if (
+    car.image &&
+    /^https?:\/\//i.test(car.image)
+  ) {
+    return car;
+  }
+
+  const queries = buildImageSearchQueries(car);
+
+  for (const query of queries) {
+    try {
+      const result =
+        await searchWikimediaImage(query);
+
+      if (result && result.image) {
+        return {
+          ...car,
+          image: result.image,
+          photoSource: result.photoSource
+        };
+      }
+    } catch (error) {
+      // Image search is optional. A photo lookup failure
+      // must not fail the entire vehicle recommendation.
+
+      console.warn(
+        `CARMATCH AI image search failed for "${query}":`,
+        error?.message || error
+      );
+    }
+  }
+
+  // No image found. Return the car without a photo.
+  return {
+    ...car,
+    image: "",
+    photoSource: ""
+  };
+}
+
+
+// ============================================================
+// ADD PHOTOS TO ALL THREE CARS
+// ============================================================
+
+async function addCarImages(cars) {
+  return Promise.all(
+    cars.map(car => findCarImage(car))
+  );
 }
 
 
@@ -1293,170 +1105,123 @@ async function callGroqModel(
   model,
   timeout
 ) {
-
   if (!GROQ_API_KEY) {
-
     throw new Error(
       "GROQ_API_KEY is not configured"
     );
   }
 
+  const response = await fetchWithTimeout(
+    GROQ_URL,
+    {
+      method: "POST",
 
-  const response =
-    await fetchWithTimeout(
+      headers: {
+        "Content-Type": "application/json",
 
-      GROQ_URL,
+        Authorization:
+          `Bearer ${GROQ_API_KEY}`,
 
-      {
-
-        method:
-          "POST",
-
-        headers: {
-
-          "Content-Type":
-            "application/json",
-
-          Authorization:
-            `Bearer ${GROQ_API_KEY}`,
-
-          "Groq-Model-Version":
-            "latest"
-        },
-
-        body:
-          JSON.stringify({
-
-            model,
-
-            messages: [
-
-              {
-                role:
-                  "system",
-
-                content:
-                  "You are CARMATCH AI. Perform current automotive web research when web tools are available. Return ONLY valid JSON matching the requested structure."
-              },
-
-              {
-                role:
-                  "user",
-
-                content:
-                  buildPrompt(
-                    request
-                  )
-              }
-
-            ],
-
-            temperature:
-              0.1,
-
-            max_completion_tokens:
-              12000,
-
-            response_format:
-              {
-                type:
-                  "json_object"
-              },
-
-            ...(model === "groq/compound"
-              ? {
-                  compound_custom: {
-                    tools: {
-                      enabled_tools: [
-                        "web_search",
-                        "visit_website"
-                      ]
-                    }
-                  }
-                }
-              : {
-                  compound_custom: {
-                    tools: {
-                      enabled_tools: [
-                        "web_search"
-                      ]
-                    }
-                  }
-                })
-          })
+        "Groq-Model-Version": "latest"
       },
 
-      timeout
-    );
+      body: JSON.stringify({
+        model,
 
+        messages: [
+          {
+            role: "system",
 
-  const raw =
-    await response.text();
+            content:
+              "You are CARMATCH AI. Perform current automotive web research when web tools are available. Return ONLY valid JSON matching the requested structure."
+          },
 
+          {
+            role: "user",
+
+            content: buildPrompt(request)
+          }
+        ],
+
+        temperature: 0.1,
+
+        max_completion_tokens: 12000,
+
+        response_format: {
+          type: "json_object"
+        },
+
+        ...(model === "groq/compound"
+          ? {
+              compound_custom: {
+                tools: {
+                  enabled_tools: [
+                    "web_search",
+                    "visit_website"
+                  ]
+                }
+              }
+            }
+          : {
+              compound_custom: {
+                tools: {
+                  enabled_tools: [
+                    "web_search"
+                  ]
+                }
+              }
+            })
+      })
+    },
+    timeout
+  );
+
+  const raw = await response.text();
 
   if (!response.ok) {
-
     throw new Error(
       `Groq ${model} HTTP ${response.status}: ${raw.slice(0, 500)}`
     );
   }
 
-
   let apiData;
 
-
   try {
-
-    apiData =
-      JSON.parse(
-        raw
-      );
-
+    apiData = JSON.parse(raw);
   } catch (_) {
-
     throw new Error(
       "Groq API returned invalid JSON"
     );
   }
 
-
   const message =
     apiData?.choices?.[0]?.message;
 
-
-  const content =
-    message?.content;
-
+  const content = message?.content;
 
   if (!content) {
-
     throw new Error(
       `Groq ${model} returned empty content`
     );
   }
 
+  const parsed = parseAIJson(content);
 
-  const parsed =
-    parseAIJson(
-      content
-    );
+  const validatedCars =
+    validateCars(parsed);
 
+  // Automatically find vehicle photos.
+  // If Wikimedia is unavailable, the cars are still returned.
 
   const cars =
-    validateCars(
-      parsed
-    );
-
+    await addCarImages(validatedCars);
 
   return {
-
     cars,
 
-    provider:
-      `Groq ${model}`,
+    provider: `Groq ${model}`,
 
-    liveWeb:
-      true
+    liveWeb: true
   };
 }
 
@@ -1465,52 +1230,30 @@ async function callGroqModel(
 // GROQ FAILOVER
 // ============================================================
 
-async function callGroq(
-  request
-) {
-
-  let lastError =
-    null;
-
+async function callGroq(request) {
+  let lastError = null;
 
   const models = [
-
     {
-      model:
-        "groq/compound",
-
-      timeout:
-        GROQ_TIMEOUT
+      model: "groq/compound",
+      timeout: GROQ_TIMEOUT
     },
 
     {
-      model:
-        "groq/compound-mini",
-
-      timeout:
-        GROQ_MINI_TIMEOUT
+      model: "groq/compound-mini",
+      timeout: GROQ_MINI_TIMEOUT
     }
-
   ];
 
-
-  for (
-    const item of models
-  ) {
-
+  for (const item of models) {
     try {
-
       return await callGroqModel(
         request,
         item.model,
         item.timeout
       );
-
     } catch (error) {
-
-      lastError =
-        error;
-
+      lastError = error;
 
       console.error(
         `CARMATCH AI - ${item.model} failed:`,
@@ -1519,12 +1262,9 @@ async function callGroq(
     }
   }
 
-
   throw (
     lastError ||
-    new Error(
-      "All Groq providers failed"
-    )
+    new Error("All Groq providers failed")
   );
 }
 
@@ -1537,53 +1277,37 @@ async function callOpenRouterModel(
   request,
   model
 ) {
-
   if (!OPENROUTER_API_KEY) {
-
     throw new Error(
       "OPENROUTER_API_KEY is not configured"
     );
   }
 
+  const response = await fetchWithTimeout(
+    OPENROUTER_URL,
+    {
+      method: "POST",
 
-  const response =
-    await fetchWithTimeout(
+      headers: {
+        "Content-Type": "application/json",
 
-      OPENROUTER_URL,
+        Authorization:
+          `Bearer ${OPENROUTER_API_KEY}`,
 
-      {
+        "HTTP-Referer":
+          "https://carmatchai.vercel.app",
 
-        method:
-          "POST",
+        "X-Title": "CARMATCH AI"
+      },
 
-        headers: {
+      body: JSON.stringify({
+        model,
 
-          "Content-Type":
-            "application/json",
+        messages: [
+          {
+            role: "system",
 
-          Authorization:
-            `Bearer ${OPENROUTER_API_KEY}`,
-
-          "HTTP-Referer":
-            "https://carmatchai.vercel.app",
-
-          "X-Title":
-            "CARMATCH AI"
-        },
-
-        body:
-          JSON.stringify({
-
-            model,
-
-            messages: [
-
-              {
-                role:
-                  "system",
-
-                content:
-                  `
+            content: `
 You are CARMATCH AI.
 
 Return ONLY valid JSON.
@@ -1604,101 +1328,70 @@ Always return exactly 3 real production vehicles.
 
 Follow every user filter.
 `
-              },
+          },
 
-              {
-                role:
-                  "user",
+          {
+            role: "user",
 
-                content:
-                  buildPrompt(
-                    request
-                  )
-              }
+            content: buildPrompt(request)
+          }
+        ],
 
-            ],
+        temperature: 0.1,
 
-            temperature:
-              0.1,
+        max_tokens: 10000,
 
-            max_tokens:
-              10000,
+        response_format: {
+          type: "json_object"
+        }
+      })
+    },
+    OPENROUTER_TIMEOUT
+  );
 
-            response_format:
-              {
-                type:
-                  "json_object"
-              }
-          })
-      },
-
-      OPENROUTER_TIMEOUT
-    );
-
-
-  const raw =
-    await response.text();
-
+  const raw = await response.text();
 
   if (!response.ok) {
-
     throw new Error(
       `OpenRouter ${model} HTTP ${response.status}: ${raw.slice(0, 500)}`
     );
   }
 
-
   let apiData;
 
-
   try {
-
-    apiData =
-      JSON.parse(
-        raw
-      );
-
+    apiData = JSON.parse(raw);
   } catch (_) {
-
     throw new Error(
       `OpenRouter ${model} returned invalid API JSON`
     );
   }
 
-
   const content =
     apiData?.choices?.[0]?.message?.content;
 
-
   if (!content) {
-
     throw new Error(
       `OpenRouter ${model} returned empty content`
     );
   }
 
+  const parsed = parseAIJson(content);
 
-  const parsed =
-    parseAIJson(
-      content
-    );
+  const validatedCars =
+    validateCars(parsed);
 
+  // Automatically find vehicle photos.
 
   const cars =
-    validateCars(
-      parsed
-    );
-
+    await addCarImages(validatedCars);
 
   return {
-
     cars,
 
-    provider:
-      `OpenRouter (${model})`,
+    provider: `OpenRouter (${model})`,
 
-    liveWeb:
-      false
+    liveWeb: false
   };
 }
 
@@ -1707,36 +1400,21 @@ Follow every user filter.
 // OPENROUTER MULTI-MODEL FALLBACK
 // ============================================================
 
-async function callOpenRouter(
-  request
-) {
+async function callOpenRouter(request) {
+  let lastError = null;
 
-  let lastError =
-    null;
-
-
-  for (
-    const model
-    of OPENROUTER_FREE_MODELS
-  ) {
-
+  for (const model of OPENROUTER_FREE_MODELS) {
     try {
-
       console.log(
         `CARMATCH AI - trying OpenRouter model: ${model}`
       );
-
 
       return await callOpenRouterModel(
         request,
         model
       );
-
     } catch (error) {
-
-      lastError =
-        error;
-
+      lastError = error;
 
       console.error(
         `CARMATCH AI - OpenRouter ${model} failed:`,
@@ -1745,12 +1423,9 @@ async function callOpenRouter(
     }
   }
 
-
   throw (
     lastError ||
-    new Error(
-      "All OpenRouter free models failed"
-    )
+    new Error("All OpenRouter free models failed")
   );
 }
 
@@ -1759,12 +1434,7 @@ async function callOpenRouter(
 // MAIN HANDLER
 // ============================================================
 
-export default async function handler(
-  req,
-  res
-) {
-
-
+export default async function handler(req, res) {
   // ==========================================================
   // CORS
   // ==========================================================
@@ -1784,37 +1454,23 @@ export default async function handler(
     "Content-Type, Authorization"
   );
 
-
-  if (
-    req.method ===
-    "OPTIONS"
-  ) {
-
+  if (req.method === "OPTIONS") {
     return res
       .status(200)
       .end();
   }
 
-
-  if (
-    req.method !==
-    "POST"
-  ) {
-
+  if (req.method !== "POST") {
     return sendJson(
       res,
       405,
       {
-        error:
-          "Method not allowed"
+        error: "Method not allowed"
       }
     );
   }
 
-
   try {
-
-
     // ========================================================
     // ENVIRONMENT
     // ========================================================
@@ -1823,39 +1479,32 @@ export default async function handler(
       !SUPABASE_URL ||
       !SUPABASE_ANON_KEY
     ) {
-
       console.error(
         "CARMATCH AI: Supabase environment variables missing"
       );
-
 
       return sendJson(
         res,
         500,
         {
-          error:
-            "Configuration error"
+          error: "Configuration error"
         }
       );
     }
-
 
     if (
       !GROQ_API_KEY &&
       !OPENROUTER_API_KEY
     ) {
-
       console.error(
         "CARMATCH AI: No AI API key configured"
       );
-
 
       return sendJson(
         res,
         500,
         {
-          error:
-            "Configuration error",
+          error: "Configuration error",
 
           message:
             "CARMATCH AI nemá nakonfigurovaný GROQ_API_KEY ani OPENROUTER_API_KEY."
@@ -1863,64 +1512,47 @@ export default async function handler(
       );
     }
 
-
     // ========================================================
     // AUTHORIZATION
     // ========================================================
 
     const authorization =
-      req.headers.authorization ||
-      "";
-
+      req.headers.authorization || "";
 
     if (
-      !authorization.startsWith(
-        "Bearer "
-      )
+      !authorization.startsWith("Bearer ")
     ) {
-
       return sendJson(
         res,
         401,
         {
-          error:
-            "Unauthorized"
+          error: "Unauthorized"
         }
       );
     }
-
 
     const accessToken =
       authorization
         .slice(7)
         .trim();
 
-
     if (!accessToken) {
-
       return sendJson(
         res,
         401,
         {
-          error:
-            "Unauthorized"
+          error: "Unauthorized"
         }
       );
     }
-
 
     // ========================================================
     // VERIFY USER
     // ========================================================
 
-    const user =
-      await verifyUser(
-        accessToken
-      );
-
+    const user = await verifyUser(accessToken);
 
     if (!user) {
-
       return sendJson(
         res,
         401,
@@ -1931,29 +1563,21 @@ export default async function handler(
       );
     }
 
-
     // ========================================================
     // REQUEST
     // ========================================================
 
-    const request =
-      normalizeRequest(
-        req.body || {}
-      );
-
+    const request = normalizeRequest(
+      req.body || {}
+    );
 
     // ========================================================
     // DAILY LIMIT
     // ========================================================
 
-    const usage =
-      await useSearch(
-        accessToken
-      );
-
+    const usage = await useSearch(accessToken);
 
     if (!usage.allowed) {
-
       return sendJson(
         res,
         429,
@@ -1964,47 +1588,30 @@ export default async function handler(
           message:
             "Použil si všetkých 5 vyhľadávaní pre dnešok.",
 
-          remaining:
-            0
+          remaining: 0
         }
       );
     }
-
 
     // ========================================================
     // PROVIDER STATUS
     // ========================================================
 
-    let result =
-      null;
+    let result = null;
 
+    let groqFailed = false;
 
-    let groqFailed =
-      false;
-
-
-    let openRouterFailed =
-      false;
-
+    let openRouterFailed = false;
 
     // ========================================================
     // 1. GROQ
     // ========================================================
 
     if (GROQ_API_KEY) {
-
       try {
-
-        result =
-          await callGroq(
-            request
-          );
-
+        result = await callGroq(request);
       } catch (error) {
-
-        groqFailed =
-          true;
-
+        groqFailed = true;
 
         console.error(
           "CARMATCH AI - all Groq providers failed:",
@@ -2013,25 +1620,18 @@ export default async function handler(
       }
     }
 
-
     // ========================================================
     // 2. OPENROUTER FREE
     // ========================================================
 
-    if (!result && OPENROUTER_API_KEY) {
-
+    if (
+      !result &&
+      OPENROUTER_API_KEY
+    ) {
       try {
-
-        result =
-          await callOpenRouter(
-            request
-          );
-
+        result = await callOpenRouter(request);
       } catch (error) {
-
-        openRouterFailed =
-          true;
-
+        openRouterFailed = true;
 
         console.error(
           "CARMATCH AI - all OpenRouter providers failed:",
@@ -2040,73 +1640,48 @@ export default async function handler(
       }
     }
 
-
     // ========================================================
     // ALL PROVIDERS FAILED
     // ========================================================
 
     if (!result) {
+      const refund = await refundSearch(accessToken);
 
-
-      const refund =
-        await refundSearch(
-          accessToken
-        );
-
-
-      const remaining =
-        Number.isFinite(
-          Number(
-            refund?.remaining
-          )
-        )
-          ? Number(
-              refund.remaining
-            )
-          : usage.remaining;
-
+      const remaining = Number.isFinite(
+        Number(refund?.remaining)
+      )
+        ? Number(refund.remaining)
+        : usage.remaining;
 
       return sendJson(
         res,
         503,
         {
-
-          error:
-            "AI temporarily unavailable",
-
+          error: "AI temporarily unavailable",
 
           message:
             "CARMATCH AI momentálne nemá dostupnú AI službu. Toto vyhľadávanie sa nezapočítalo do denného limitu.",
 
-
-          retryable:
-            true,
-
+          retryable: true,
 
           remaining,
 
-
           providerStatus: {
+            groq: !GROQ_API_KEY
+              ? "not_configured"
+              : groqFailed
+                ? "unavailable"
+                : "unknown",
 
-            groq:
-              !GROQ_API_KEY
-                ? "not_configured"
-                : groqFailed
-                  ? "unavailable"
-                  : "unknown",
-
-
-            openrouter:
-              !OPENROUTER_API_KEY
-                ? "not_configured"
-                : openRouterFailed
-                  ? "unavailable"
-                  : "unknown"
+            openrouter: !OPENROUTER_API_KEY
+              ? "not_configured"
+              : openRouterFailed
+                ? "unavailable"
+                : "unknown"
           }
         }
       );
     }
-
 
     // ========================================================
     // SUCCESS
@@ -2116,58 +1691,36 @@ export default async function handler(
       res,
       200,
       {
+        cars: result.cars,
 
-        cars:
-          result.cars,
-
-
-        remaining:
-          usage.remaining,
-
+        remaining: usage.remaining,
 
         ai: {
+          provider: result.provider,
 
-          provider:
-            result.provider,
+          liveWeb: Boolean(result.liveWeb),
 
-
-          liveWeb:
-            Boolean(
-              result.liveWeb
-            ),
-
-
-          generatedAt:
-            new Date().toISOString()
+          generatedAt: new Date().toISOString()
         }
       }
     );
 
-
   } catch (error) {
-
-
     console.error(
       "CARMATCH AI INTERNAL ERROR:",
       error
     );
 
-
     return sendJson(
       res,
       500,
       {
-
-        error:
-          "Server configuration error",
-
+        error: "Server configuration error",
 
         message:
           "CARMATCH AI sa nepodarilo dokončiť požiadavku. Skontroluj nastavenia Supabase, GROQ_API_KEY a OPENROUTER_API_KEY vo Verceli.",
 
-
-        retryable:
-          true
+        retryable: true
       }
     );
   }
