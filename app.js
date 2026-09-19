@@ -1,10 +1,8 @@
 // ============================================================
-// CARMATCH AI - FRONTEND
-// Improved image handling
-// Fixed HTML interpolation
-// Correct backend filter names
-// Slovak response instructions
-// Safe rendering
+// CARMATCH AI - IMAGE FIX
+// Automatické vyhľadávanie fotografií vozidiel
+// Wikimedia Commons + Wikipedia fallback
+// Zachované vyhľadávanie, filtre a upozornenia
 // ============================================================
 
 const API_ENDPOINT = "/api/search";
@@ -41,7 +39,7 @@ function escapeAttribute(value) {
 }
 
 
-function isValidImageURL(url) {
+function validImageURL(url) {
   if (!url || typeof url !== "string") {
     return false;
   }
@@ -54,10 +52,7 @@ function isValidImageURL(url) {
       (
         parsed.hostname === "upload.wikimedia.org" ||
         parsed.hostname.endsWith(".wikimedia.org") ||
-        parsed.hostname.endsWith(".wikipedia.org") ||
-        parsed.hostname.endsWith(".wikia.nocookie.net") ||
-        parsed.hostname.endsWith(".cloudinary.com") ||
-        parsed.hostname.endsWith(".vercel.app")
+        parsed.hostname.endsWith(".wikipedia.org")
       )
     );
   } catch {
@@ -66,37 +61,36 @@ function isValidImageURL(url) {
 }
 
 
+function validWebsiteURL(url) {
+  if (!url || typeof url !== "string") {
+    return false;
+  }
+
+  try {
+    return new URL(url).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+
 // ============================================================
-// REQUEST COLLECTION
+// REQUEST
 // ============================================================
 
 function collectRequest() {
-  const originalRequest = value("aiRequest");
-
-  // Explicit language instruction for the AI.
-  const languageInstruction =
-    "Odpovedaj spisovnou, gramaticky správnou a prirodzenou slovenčinou. " +
-    "Používaj správne slovenské skloňovanie, diakritiku a odborné automobilové výrazy. " +
-    "Výhody, nevýhody, dôvody výberu a informácie o údržbe formuluj jasne a zrozumiteľne.";
-
   return {
-    naturalLanguage: originalRequest
-      ? `${originalRequest}\n\n${languageInstruction}`
-      : languageInstruction,
+    naturalLanguage: value("aiRequest"),
 
     filters: {
       budget: value("budget"),
       seats: value("seats"),
-
-      // Names must match the backend's normalizeRequest().
       power: value("power"),
       trunk: value("trunk"),
-
       drive: value("drive"),
       fuel: value("fuel"),
       body: value("body"),
       style: value("style"),
-
       length: value("length"),
       year: value("year"),
       avoid: value("avoid")
@@ -108,18 +102,18 @@ function collectRequest() {
 
 
 // ============================================================
-// SEARCH
+// SEARCH VEHICLES
 // ============================================================
 
 async function searchCars() {
   const request = collectRequest();
 
-  const hasNaturalLanguage = value("aiRequest") !== "";
+  const hasText = Boolean(request.naturalLanguage);
 
   const hasFilters = Object.values(request.filters)
     .some(item => item !== "");
 
-  if (!hasNaturalLanguage && !hasFilters) {
+  if (!hasText && !hasFilters) {
     statusBox.textContent =
       "Zadaj požiadavku alebo vyplň aspoň jeden filter.";
 
@@ -132,7 +126,7 @@ async function searchCars() {
     '🤖 AI VYBERÁ NAJLEPŠIE AUTÁ... <span class="loading-dots">● ● ●</span>';
 
   statusBox.textContent =
-    "AI vyhodnocuje tvoje požiadavky a hľadá vhodné vozidlá…";
+    "AI vyhľadáva vhodné vozidlá…";
 
   resultsBox.innerHTML = "";
 
@@ -154,41 +148,30 @@ async function searchCars() {
     try {
       data = JSON.parse(responseText);
     } catch {
-      throw new Error(
-        "Backend vrátil neplatnú odpoveď."
-      );
+      throw new Error("Server vrátil neplatnú odpoveď.");
     }
 
     if (!response.ok) {
-      const message =
+      throw new Error(
         data.message ||
         data.error ||
-        `Chyba servera (${response.status}).`;
-
-      throw new Error(message);
-    }
-
-    if (!data.cars || !Array.isArray(data.cars)) {
-      throw new Error(
-        "AI nevrátila platné výsledky."
+        `Chyba servera (${response.status}).`
       );
     }
 
-    if (data.cars.length === 0) {
-      throw new Error(
-        "AI nenašla žiadne vozidlá."
-      );
+    if (!Array.isArray(data.cars)) {
+      throw new Error("AI nevrátila platné výsledky.");
     }
 
     renderResults(data.cars);
 
     statusBox.textContent =
-      `Hotovo — AI vybrala ${data.cars.length} vozidlá.`;
+      "Hotovo — vyhľadávajú sa fotografie vozidiel…";
 
     notifySearchFinished();
 
   } catch (error) {
-    console.error("CARMATCH AI search error:", error);
+    console.error("CARMATCH AI:", error);
 
     statusBox.textContent =
       "Vyhľadávanie sa nepodarilo dokončiť.";
@@ -198,17 +181,8 @@ async function searchCars() {
         <strong>
           CARMATCH AI momentálne nedokázala pripraviť výsledky.
         </strong>
-
         <br><br>
-
-        ${escapeHTML(
-          error.message ||
-          "Skús vyhľadávanie zopakovať."
-        )}
-
-        <br><br>
-
-        Skontroluj internetové pripojenie a skús to znova.
+        ${escapeHTML(error.message)}
       </div>
     `;
 
@@ -222,95 +196,69 @@ async function searchCars() {
 
 
 // ============================================================
-// VIBRATION + SOUND
+// NOTIFICATION
 // ============================================================
 
 function notifySearchFinished() {
-
-  // Vibration
-
   try {
-    if (
-      "vibrate" in navigator &&
-      typeof navigator.vibrate === "function"
-    ) {
+    if (typeof navigator.vibrate === "function") {
       navigator.vibrate([150, 80, 150]);
     }
-  } catch (error) {
-    console.log("Vibrácia nie je dostupná.");
-  }
-
-
-  // Sound
+  } catch (_) {}
 
   try {
     const AudioContextClass =
       window.AudioContext ||
       window.webkitAudioContext;
 
-    if (!AudioContextClass) {
-      return;
-    }
+    if (!AudioContextClass) return;
 
-    const audioContext = new AudioContextClass();
+    const audio = new AudioContextClass();
 
-    const playTone = () => {
-      const oscillator =
-        audioContext.createOscillator();
-
-      const gainNode =
-        audioContext.createGain();
+    const play = () => {
+      const oscillator = audio.createOscillator();
+      const gain = audio.createGain();
 
       oscillator.type = "sine";
 
       oscillator.frequency.setValueAtTime(
         880,
-        audioContext.currentTime
+        audio.currentTime
       );
 
-      gainNode.gain.setValueAtTime(
+      gain.gain.setValueAtTime(
         0.001,
-        audioContext.currentTime
+        audio.currentTime
       );
 
-      gainNode.gain.exponentialRampToValueAtTime(
-        0.18,
-        audioContext.currentTime + 0.02
+      gain.gain.exponentialRampToValueAtTime(
+        0.15,
+        audio.currentTime + 0.02
       );
 
-      gainNode.gain.exponentialRampToValueAtTime(
+      gain.gain.exponentialRampToValueAtTime(
         0.001,
-        audioContext.currentTime + 0.35
+        audio.currentTime + 0.3
       );
 
-      oscillator.connect(gainNode);
-
-      gainNode.connect(
-        audioContext.destination
-      );
+      oscillator.connect(gain);
+      gain.connect(audio.destination);
 
       oscillator.start();
-
-      oscillator.stop(
-        audioContext.currentTime + 0.35
-      );
+      oscillator.stop(audio.currentTime + 0.3);
     };
 
-    if (audioContext.state === "suspended") {
-      audioContext.resume()
-        .then(playTone)
-        .catch(() => {});
+    if (audio.state === "suspended") {
+      audio.resume().then(play).catch(() => {});
     } else {
-      playTone();
+      play();
     }
 
     setTimeout(() => {
-      audioContext.close().catch(() => {});
+      audio.close().catch(() => {});
     }, 500);
 
-  } catch (error) {
-    console.log("Zvuk nie je dostupný.");
-  }
+  } catch (_) {}
 }
 
 
@@ -325,14 +273,12 @@ function renderResults(cars) {
     </h2>
 
     <div class="results">
-      ${cars
-        .map((car, index) => createCard(car, index))
-        .join("")}
+      ${cars.map((car, index) => createCard(car, index)).join("")}
     </div>
   `;
 
-  // Start image loading after cards have been rendered.
-  loadMissingImages(cars);
+  // Vyhľadávanie fotografií sa spustí až po vykreslení kariet.
+  findImagesForCars(cars);
 }
 
 
@@ -341,48 +287,33 @@ function renderResults(cars) {
 // ============================================================
 
 function createCard(car, index) {
-
   const pros = Array.isArray(car.pros)
-    ? car.pros
-        .map(item => `<li>${escapeHTML(item)}</li>`)
-        .join("")
+    ? car.pros.map(item =>
+        `<li>${escapeHTML(item)}</li>`
+      ).join("")
     : "<li>Údaj nie je dostupný.</li>";
-
 
   const cons = Array.isArray(car.cons)
-    ? car.cons
-        .map(item => `<li>${escapeHTML(item)}</li>`)
-        .join("")
+    ? car.cons.map(item =>
+        `<li>${escapeHTML(item)}</li>`
+      ).join("")
     : "<li>Údaj nie je dostupný.</li>";
 
-
-  const suppliedImage =
-    isValidImageURL(car.image)
-      ? car.image
-      : "";
-
-
-  const initialImage =
-    suppliedImage ||
-    "https://placehold.co/1200x700/e9eaec/555?text=Loading+car+image";
-
-
-  const name =
-    car.name || "Neznáme auto";
-
+  const image = validImageURL(car.image)
+    ? car.image
+    : "https://placehold.co/1200x700/e9eaec/555?text=Searching+for+vehicle+photo";
 
   return `
     <article class="car">
 
       <img
         class="car-image"
-        src="${escapeAttribute(initialImage)}"
-        alt="${escapeAttribute(name)}"
+        src="${escapeAttribute(image)}"
+        alt="${escapeAttribute(car.name || "Automobil")}"
         loading="lazy"
-        data-car-name="${escapeAttribute(name)}"
-        data-car-generation="${escapeAttribute(car.generation || "")}"
-        data-image-found="${suppliedImage ? "true" : "false"}"
-        onerror="handleImageError(this)"
+        data-car-index="${index}"
+        data-image-found="${validImageURL(car.image) ? "true" : "false"}"
+        onerror="imageLoadError(this)"
       >
 
       <div class="car-body">
@@ -391,142 +322,59 @@ function createCard(car, index) {
           #${index + 1} — NAJLEPŠIA ZHODA
         </div>
 
-
         <div class="car-name">
-          ${escapeHTML(name)}
+          ${escapeHTML(car.name || "Neznáme auto")}
         </div>
-
 
         <div class="generation">
-
           ${escapeHTML(car.generation || "")}
-
-          ${
-            car.year
-              ? " · modelový rok " +
-                escapeHTML(String(car.year))
-              : ""
-          }
-
+          ${car.year ? " · modelový rok " + escapeHTML(car.year) : ""}
         </div>
-
 
         <div class="score">
-
-          ${escapeHTML(String(car.score ?? "—"))}%
-
+          ${escapeHTML(car.score ?? "—")}%
         </div>
-
 
         <div class="specs">
-
-          💰 Cena:
-          ${escapeHTML(car.price || "—")}
-          <br>
-
-          ⚡ Výkon:
-          ${escapeHTML(car.power || "—")}
-          <br>
-
-          🪑 Miesta:
-          ${escapeHTML(String(car.seats ?? "—"))}
-          <br>
-
-          🧳 Kufor:
-          ${escapeHTML(car.trunk || "—")}
-          <br>
-
-          🚗 Pohon:
-          ${escapeHTML(car.drive || "—")}
-          <br>
-
-          🔋 Palivo:
-          ${escapeHTML(car.fuel || "—")}
-
+          💰 Cena: ${escapeHTML(car.price || "—")}<br>
+          ⚡ Výkon: ${escapeHTML(car.power || "—")}<br>
+          🪑 Miesta: ${escapeHTML(car.seats ?? "—")}<br>
+          🧳 Kufor: ${escapeHTML(car.trunk || "—")}<br>
+          🚗 Pohon: ${escapeHTML(car.drive || "—")}<br>
+          🔋 Palivo: ${escapeHTML(car.fuel || "—")}
         </div>
-
 
         <div class="section">
-
-          <strong>
-            🤖 Prečo ho AI vybrala
-          </strong>
-
-          <p>
-            ${escapeHTML(
-              car.reason ||
-              "Vysvetlenie nie je dostupné."
-            )}
-          </p>
-
+          <strong>🤖 Prečo ho AI vybrala</strong>
+          <p>${escapeHTML(car.reason || "Vysvetlenie nie je dostupné.")}</p>
         </div>
-
 
         <div class="section pros">
-
-          <strong>
-            ✅ Výhody
-          </strong>
-
-          <ul>
-            ${pros}
-          </ul>
-
+          <strong>✅ Výhody</strong>
+          <ul>${pros}</ul>
         </div>
-
 
         <div class="section cons">
-
-          <strong>
-            ❌ Nevýhody
-          </strong>
-
-          <ul>
-            ${cons}
-          </ul>
-
+          <strong>❌ Nevýhody</strong>
+          <ul>${cons}</ul>
         </div>
 
-
         <div class="section">
-
-          <strong>
-            🔧 Údržba
-          </strong>
-
-          <p>
-            ${escapeHTML(
-              car.maintenance ||
-              "Údaj nie je dostupný."
-            )}
-          </p>
-
+          <strong>🔧 Údržba</strong>
+          <p>${escapeHTML(car.maintenance || "Údaj nie je dostupný.")}</p>
         </div>
 
-
         <div class="section">
-
-          <strong>
-            📸 Zdroj fotografie
-          </strong>
-
+          <strong>📸 Zdroj fotografie</strong>
           <p class="photo-source">
-            ${escapeHTML(
-              car.photoSource ||
-              (
-                suppliedImage
-                  ? "Fotografia poskytnutá AI."
-                  : "Vyhľadáva sa fotografia vozidla…"
-              )
-            )}
+            ${validImageURL(car.image)
+              ? "Fotografia poskytnutá AI."
+              : "Vyhľadáva sa fotografia vozidla…"}
           </p>
-
         </div>
-
 
         ${
-          car.configurator &&
-          isValidWebsiteURL(car.configurator)
+          validWebsiteURL(car.configurator)
             ? `
               <a
                 class="configure"
@@ -541,36 +389,16 @@ function createCard(car, index) {
         }
 
       </div>
-
     </article>
   `;
 }
 
 
 // ============================================================
-// URL VALIDATION
+// IMAGE ERROR
 // ============================================================
 
-function isValidWebsiteURL(url) {
-  if (!url || typeof url !== "string") {
-    return false;
-  }
-
-  try {
-    const parsed = new URL(url);
-
-    return parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-
-// ============================================================
-// IMAGE ERROR HANDLER
-// ============================================================
-
-function handleImageError(img) {
+function imageLoadError(img) {
   if (img.dataset.fallbackUsed === "true") {
     return;
   }
@@ -578,126 +406,97 @@ function handleImageError(img) {
   img.dataset.fallbackUsed = "true";
 
   img.src =
-    "https://placehold.co/1200x700/e9eaec/555?text=Image+not+available";
+    "https://placehold.co/1200x700/e9eaec/555?text=Vehicle+photo+unavailable";
 }
 
 
 // ============================================================
-// LOAD MISSING VEHICLE IMAGES
+// IMAGE SEARCH FOR ALL CARS
 // ============================================================
 
-async function loadMissingImages(cars) {
-  const images =
-    resultsBox.querySelectorAll(".car-image");
+async function findImagesForCars(cars) {
+  const images = resultsBox.querySelectorAll(".car-image");
 
-  for (let index = 0; index < images.length; index++) {
-    const img = images[index];
+  for (let i = 0; i < cars.length; i++) {
+    const car = cars[i];
+    const img = images[i];
+
+    if (!car || !img) continue;
 
     if (img.dataset.imageFound === "true") {
       continue;
     }
 
-    const car = cars[index];
-
-    if (!car) {
-      continue;
-    }
-
     try {
-      const imageURL =
-        await findVehicleImage(
-          car.name,
-          car.generation,
-          car.year
-        );
+      statusBox.textContent =
+        `Vyhľadávam fotografiu: ${car.name || "vozidlo"}…`;
+
+      let imageURL = await searchVehicleImage(car);
 
       if (imageURL) {
         img.dataset.imageFound = "true";
         img.dataset.fallbackUsed = "false";
-
         img.src = imageURL;
 
-        const card =
-          img.closest(".car");
-
-        const source =
-          card?.querySelector(".photo-source");
+        const card = img.closest(".car");
+        const source = card?.querySelector(".photo-source");
 
         if (source) {
           source.textContent =
-            "Wikimedia Commons — automaticky vyhľadaná fotografia. Over, či zodpovedá presnej generácii vozidla.";
+            "Wikimedia Commons alebo Wikipedia. Skontroluj zhodu generácie.";
         }
       } else {
+        const card = img.closest(".car");
+        const source = card?.querySelector(".photo-source");
+
         img.src =
-          "https://placehold.co/1200x700/e9eaec/555?text=Image+not+available";
-
-        const card =
-          img.closest(".car");
-
-        const source =
-          card?.querySelector(".photo-source");
+          "https://placehold.co/1200x700/e9eaec/555?text=No+vehicle+photo+found";
 
         if (source) {
           source.textContent =
-            "Vhodnú fotografiu sa nepodarilo automaticky nájsť.";
+            "Fotografiu sa nepodarilo nájsť.";
         }
       }
 
     } catch (error) {
-      console.error(
-        "Image search failed:",
-        error
-      );
-
-      img.src =
-        "https://placehold.co/1200x700/e9eaec/555?text=Image+not+available";
+      console.error("Chyba pri hľadaní fotografie:", error);
     }
   }
+
+  statusBox.textContent =
+    "Hotovo — vyhľadávanie vozidiel bolo dokončené.";
 }
 
 
 // ============================================================
-// WIKIMEDIA COMMONS IMAGE SEARCH
+// SEARCH IMAGE: COMMONS FIRST, WIKIPEDIA SECOND
 // ============================================================
 
-async function findVehicleImage(
-  name,
-  generation,
-  year
-) {
+async function searchVehicleImage(car) {
+  const name = String(car.name || "").trim();
+  const generation = String(car.generation || "").trim();
+  const year = String(car.year || "").trim();
 
-  if (!name) {
-    return "";
-  }
+  if (!name) return "";
 
-  const queries = [];
+  const queries = [
+    `${name} ${generation} ${year}`,
+    `${name} ${generation}`,
+    `${name} car`
+  ];
 
-  const exactQuery = [
-    name,
-    generation,
-    year
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  queries.push(exactQuery);
-
-  if (generation) {
-    queries.push(
-      `${name} ${generation}`
-    );
-  }
-
-  queries.push(name);
-
-
+  // 1. Wikimedia Commons
   for (const query of queries) {
-    const imageURL =
-      await searchCommons(query);
+    const image = await searchCommonsImage(query);
 
-    if (imageURL) {
-      return imageURL;
-    }
+    if (image) return image;
+  }
+
+  // 2. Wikipedia fallback
+  for (const query of queries) {
+    const image = await searchWikipediaImage(query);
+
+    if (image) return image;
   }
 
   return "";
@@ -705,124 +504,206 @@ async function findVehicleImage(
 
 
 // ============================================================
-// COMMONS API
+// WIKIMEDIA COMMONS SEARCH
 // ============================================================
 
-async function searchCommons(searchTerm) {
-
-  const params = new URLSearchParams({
-    action: "query",
-
-    generator: "search",
-
-    gsrsearch: searchTerm,
-
-    gsrnamespace: "6",
-
-    gsrlimit: "8",
-
-    prop: "imageinfo",
-
-    iiprop: "url",
-
-    iiurlwidth: "1200",
-
-    format: "json",
-
-    origin: "*"
-  });
-
-
-  const url =
-    "https://commons.wikimedia.org/w/api.php?" +
-    params.toString();
-
-
-  const controller =
-    new AbortController();
-
-
-  const timeout =
-    setTimeout(
-      () => controller.abort(),
-      12000
-    );
-
-
+async function searchCommonsImage(searchTerm) {
   try {
-    const response =
-      await fetch(
-        url,
-        {
-          method: "GET",
-          signal: controller.signal
-        }
+    const params = new URLSearchParams({
+      action: "query",
+      list: "search",
+      srsearch: searchTerm,
+      srnamespace: "6",
+      srlimit: "10",
+      format: "json",
+      origin: "*"
+    });
+
+    const searchURL =
+      "https://commons.wikimedia.org/w/api.php?" +
+      params.toString();
+
+    const searchResponse = await fetchWithTimeout(searchURL, 12000);
+
+    if (!searchResponse.ok) return "";
+
+    const searchData = await searchResponse.json();
+
+    const results = searchData?.query?.search;
+
+    if (!Array.isArray(results) || results.length === 0) {
+      return "";
+    }
+
+    // Exclude likely logos, icons, flags, and diagrams.
+    const candidates = results.filter(item => {
+      const title = String(item.title || "").toLowerCase();
+
+      return !(
+        title.includes("logo") ||
+        title.includes("icon") ||
+        title.includes("flag") ||
+        title.includes("coat of arms") ||
+        title.includes("emblem") ||
+        title.includes("diagram") ||
+        title.includes("map")
       );
+    });
 
+    if (candidates.length === 0) return "";
 
-    if (!response.ok) {
-      return "";
-    }
+    const titles = candidates
+      .slice(0, 8)
+      .map(item => item.title)
+      .join("|");
 
+    const infoParams = new URLSearchParams({
+      action: "query",
+      titles,
+      prop: "imageinfo",
+      iiprop: "url|mime",
+      iiurlwidth: "1400",
+      format: "json",
+      origin: "*"
+    });
 
-    const data =
-      await response.json();
+    const infoURL =
+      "https://commons.wikimedia.org/w/api.php?" +
+      infoParams.toString();
 
+    const infoResponse = await fetchWithTimeout(infoURL, 12000);
 
-    const pages =
-      data?.query?.pages;
+    if (!infoResponse.ok) return "";
 
+    const infoData = await infoResponse.json();
 
-    if (!pages) {
-      return "";
-    }
+    const pages = infoData?.query?.pages;
 
+    if (!pages) return "";
 
-    const results =
-      Object.values(pages);
+    for (const page of Object.values(pages)) {
+      const info = page?.imageinfo?.[0];
 
+      if (!info) continue;
 
-    // Prefer files with a usable thumbnail URL.
-    for (const item of results) {
-
-      const info =
-        item?.imageinfo?.[0];
-
-
-      if (!info) {
+      if (
+        info.mime &&
+        !info.mime.startsWith("image/")
+      ) {
         continue;
       }
 
+      const url = info.thumburl || info.url || "";
 
-      const imageURL =
-        info.thumburl ||
-        info.url ||
-        "";
-
-
-      if (
-        imageURL.startsWith(
-          "https://upload.wikimedia.org/"
-        )
-      ) {
-        return imageURL;
+      if (url.startsWith("https://upload.wikimedia.org/")) {
+        return url;
       }
     }
-
 
     return "";
 
   } catch (error) {
+    console.warn("Commons search failed:", error);
+    return "";
+  }
+}
 
-    console.error(
-      "Wikimedia Commons request failed:",
-      error
-    );
+
+// ============================================================
+// WIKIPEDIA IMAGE FALLBACK
+// ============================================================
+
+async function searchWikipediaImage(searchTerm) {
+  try {
+    const searchParams = new URLSearchParams({
+      action: "query",
+      list: "search",
+      srsearch: searchTerm,
+      srlimit: "5",
+      format: "json",
+      origin: "*"
+    });
+
+    const searchURL =
+      "https://en.wikipedia.org/w/api.php?" +
+      searchParams.toString();
+
+    const searchResponse = await fetchWithTimeout(searchURL, 12000);
+
+    if (!searchResponse.ok) return "";
+
+    const searchData = await searchResponse.json();
+
+    const results = searchData?.query?.search;
+
+    if (!Array.isArray(results) || results.length === 0) {
+      return "";
+    }
+
+    const titles = results
+      .slice(0, 5)
+      .map(item => item.title)
+      .join("|");
+
+    const imageParams = new URLSearchParams({
+      action: "query",
+      titles,
+      prop: "pageimages",
+      piprop: "thumbnail",
+      pithumbsize: "1400",
+      format: "json",
+      origin: "*"
+    });
+
+    const imageURL =
+      "https://en.wikipedia.org/w/api.php?" +
+      imageParams.toString();
+
+    const imageResponse = await fetchWithTimeout(imageURL, 12000);
+
+    if (!imageResponse.ok) return "";
+
+    const imageData = await imageResponse.json();
+
+    const pages = imageData?.query?.pages;
+
+    if (!pages) return "";
+
+    for (const page of Object.values(pages)) {
+      const thumbnail = page?.thumbnail?.source;
+
+      if (validImageURL(thumbnail)) {
+        return thumbnail;
+      }
+    }
 
     return "";
 
-  } finally {
+  } catch (error) {
+    console.warn("Wikipedia image search failed:", error);
+    return "";
+  }
+}
 
-    clearTimeout(timeout);
+
+// ============================================================
+// FETCH WITH TIMEOUT
+// ============================================================
+
+async function fetchWithTimeout(url, timeout = 12000) {
+  const controller = new AbortController();
+
+  const timer = setTimeout(
+    () => controller.abort(),
+    timeout
+  );
+
+  try {
+    return await fetch(url, {
+      method: "GET",
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
   }
 }
