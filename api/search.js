@@ -1,12 +1,13 @@
 // ============================================================
-// CARMATCH AI - FINAL BACKEND v3
+// CARMATCH AI - FINAL BACKEND v4
 // Supabase anonymous auth + 5 searches/day
 // Groq Compound live web research
 // Groq Compound Mini fallback
 // Multiple OpenRouter FREE fallbacks
 // Automatic provider switching
 // Search refund when every provider fails
-// Automatic vehicle photo search via Wikimedia Commons
+// Server-side vehicle photo search with multiple candidates
+// Wikimedia Commons + Wikipedia fallback
 // ============================================================
 
 const GROQ_URL =
@@ -17,6 +18,9 @@ const OPENROUTER_URL =
 
 const WIKIMEDIA_API =
   "https://commons.wikimedia.org/w/api.php";
+
+const WIKIPEDIA_API =
+  "https://en.wikipedia.org/w/api.php";
 
 const SUPABASE_URL =
   process.env.SUPABASE_URL;
@@ -41,8 +45,10 @@ const GROQ_TIMEOUT = 55000;
 const GROQ_MINI_TIMEOUT = 45000;
 const OPENROUTER_TIMEOUT = 35000;
 
-// Wikimedia timeout for each photo request
-const WIKIMEDIA_TIMEOUT = 10000;
+const WIKIMEDIA_TIMEOUT = 7000;
+const WIKIPEDIA_TIMEOUT = 7000;
+
+const MAX_IMAGE_CANDIDATES = 6;
 
 
 // ============================================================
@@ -62,9 +68,7 @@ const OPENROUTER_FREE_MODELS = [
 // ============================================================
 
 function sendJson(res, status, data) {
-  return res
-    .status(status)
-    .json(data);
+  return res.status(status).json(data);
 }
 
 
@@ -219,7 +223,6 @@ async function callSupabaseRPC(
 
         headers: {
           apikey: SUPABASE_ANON_KEY,
-
           Authorization:
             `Bearer ${accessToken}`,
 
@@ -772,7 +775,9 @@ function normalizeCar(car) {
     dataSources: arrayText(
       car.dataSources,
       10
-    )
+    ),
+
+    imageCandidates: []
   };
 
   if (!result.name) {
@@ -876,8 +881,6 @@ async function fetchWithTimeout(
 // IMAGE SEARCH HELPERS
 // ============================================================
 
-// Reject likely irrelevant Wikimedia image results.
-
 const IMAGE_REJECT_WORDS = [
   "logo",
   "icon",
@@ -886,6 +889,7 @@ const IMAGE_REJECT_WORDS = [
   "badge",
   "wheel",
   "interior",
+  "dashboard",
   "steering",
   "engine",
   "poster",
@@ -899,12 +903,16 @@ const IMAGE_REJECT_WORDS = [
   "toy",
   "miniature",
   "hot wheels",
-  "matchbox"
+  "matchbox",
+  "scale model",
+  "render",
+  "concept"
 ];
 
 
 function isRejectedImageTitle(title) {
-  const lower = String(title || "").toLowerCase();
+  const lower =
+    String(title || "").toLowerCase();
 
   return IMAGE_REJECT_WORDS.some(
     word => lower.includes(word)
@@ -912,39 +920,268 @@ function isRejectedImageTitle(title) {
 }
 
 
-// Build a search phrase from the car's name,
-// generation and model year.
+// ============================================================
+// IMAGE URL VALIDATION
+// ============================================================
+
+function isWikimediaPhotoURL(url) {
+  if (!url || typeof url !== "string") {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(url);
+
+    if (parsed.protocol !== "https:") {
+      return false;
+    }
+
+    return (
+      parsed.hostname === "upload.wikimedia.org" ||
+      parsed.hostname.endsWith(".wikimedia.org") ||
+      parsed.hostname.endsWith(".wikipedia.org")
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
+
+function isHttpsURL(url) {
+  if (!url || typeof url !== "string") {
+    return false;
+  }
+
+  try {
+    return new URL(url).protocol === "https:";
+  } catch (_) {
+    return false;
+  }
+}
+
+
+// ============================================================
+// CLEAN IMAGE SEARCH TEXT
+// ============================================================
+
+function cleanSearchText(value) {
+  return String(value || "")
+    .replace(/[,]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+
+// ============================================================
+// IMAGE SEARCH QUERIES
+// ============================================================
 
 function buildImageSearchQueries(car) {
-  const name = text(car.name, 200);
-  const generation = text(car.generation, 200);
-  const year = Number(car.year);
+  const name =
+    cleanSearchText(
+      text(car.name, 200)
+    );
+
+  const generation =
+    cleanSearchText(
+      text(car.generation, 200)
+    );
+
+  const year =
+    Number(car.year);
 
   const queries = [];
 
-  if (name && generation && Number.isFinite(year)) {
+  if (
+    name &&
+    generation &&
+    Number.isFinite(year)
+  ) {
     queries.push(
       `${name} ${generation} ${year}`
     );
   }
 
-  if (name && generation) {
+  if (
+    name &&
+    generation
+  ) {
     queries.push(
       `${name} ${generation}`
     );
   }
 
-  if (name && Number.isFinite(year)) {
+  if (
+    name &&
+    Number.isFinite(year)
+  ) {
     queries.push(
       `${name} ${year}`
     );
   }
 
   if (name) {
-    queries.push(name);
+    queries.push(
+      `${name} car`
+    );
+
+    queries.push(
+      name
+    );
   }
 
-  return [...new Set(queries)];
+  return [
+    ...new Set(queries)
+  ];
+}
+
+
+// ============================================================
+// IMAGE RELEVANCE
+// ============================================================
+
+function imageRelevanceScore(
+  candidate,
+  car
+) {
+  const title =
+    String(candidate.title || "")
+      .toLowerCase();
+
+  const query =
+    String(candidate.query || "")
+      .toLowerCase();
+
+  const name =
+    cleanSearchText(car.name)
+      .toLowerCase();
+
+  const generation =
+    cleanSearchText(car.generation)
+      .toLowerCase();
+
+  const year =
+    String(car.year || "");
+
+  let score = 0;
+
+  const nameWords =
+    name
+      .split(
+        /[^a-z0-9áäčďéíľĺňóôŕšťúýž-]+/i
+      )
+      .filter(
+        word => word.length >= 3
+      );
+
+  const generationWords =
+    generation
+      .split(
+        /[^a-z0-9áäčďéíľĺňóôŕšťúýž-]+/i
+      )
+      .filter(
+        word => word.length >= 2
+      );
+
+  for (const word of nameWords) {
+    if (
+      title.includes(word) ||
+      query.includes(word)
+    ) {
+      score += 5;
+    }
+  }
+
+  for (const word of generationWords) {
+    if (
+      title.includes(word) ||
+      query.includes(word)
+    ) {
+      score += 8;
+    }
+  }
+
+  if (
+    year &&
+    title.includes(year)
+  ) {
+    score += 10;
+  }
+
+  if (
+    title.includes("car") ||
+    title.includes("automobile")
+  ) {
+    score += 2;
+  }
+
+  if (candidate.queryIndex === 0) {
+    score += 8;
+  } else if (candidate.queryIndex === 1) {
+    score += 5;
+  }
+
+  return score;
+}
+
+
+// ============================================================
+// DEDUPLICATE IMAGE CANDIDATES
+// ============================================================
+
+function dedupeImageCandidates(
+  candidates,
+  car
+) {
+  const map = new Map();
+
+  for (const candidate of candidates) {
+    if (
+      !candidate ||
+      !candidate.image
+    ) {
+      continue;
+    }
+
+    if (
+      !isWikimediaPhotoURL(
+        candidate.image
+      )
+    ) {
+      continue;
+    }
+
+    const key =
+      candidate.image;
+
+    if (!map.has(key)) {
+      map.set(
+        key,
+        {
+          ...candidate,
+
+          relevance:
+            imageRelevanceScore(
+              candidate,
+              car
+            )
+        }
+      );
+    }
+  }
+
+  return [
+    ...map.values()
+  ]
+    .sort(
+      (a, b) =>
+        b.relevance -
+        a.relevance
+    )
+    .slice(
+      0,
+      MAX_IMAGE_CANDIDATES
+    );
 }
 
 
@@ -952,35 +1189,54 @@ function buildImageSearchQueries(car) {
 // WIKIMEDIA COMMONS SEARCH
 // ============================================================
 
-async function searchWikimediaImage(query) {
-  const params = new URLSearchParams({
-    action: "query",
-    generator: "search",
-    gsrsearch: query,
-    gsrnamespace: "6",
-    gsrlimit: "12",
-    prop: "imageinfo",
-    iiprop: "url",
-    iiurlwidth: "1200",
-    format: "json",
-    origin: "*"
-  });
+async function searchWikimediaImages(
+  query,
+  queryIndex = 0
+) {
+  const params =
+    new URLSearchParams({
+      action: "query",
+
+      generator: "search",
+
+      gsrsearch: query,
+
+      gsrnamespace: "6",
+
+      gsrlimit: "10",
+
+      prop: "imageinfo",
+
+      iiprop:
+        "url|mime|dimensions|descriptionurl",
+
+      iiurlwidth: "1400",
+
+      format: "json",
+
+      origin: "*"
+    });
 
   const url =
     `${WIKIMEDIA_API}?${params.toString()}`;
 
-  const response = await fetchWithTimeout(
-    url,
-    {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        "User-Agent":
-          "CARMATCHAI/1.0 (vehicle image lookup)"
-      }
-    },
-    WIKIMEDIA_TIMEOUT
-  );
+  const response =
+    await fetchWithTimeout(
+      url,
+      {
+        method: "GET",
+
+        headers: {
+          Accept:
+            "application/json",
+
+          "User-Agent":
+            "CARMATCHAI/2.0 (vehicle image lookup)"
+        }
+      },
+
+      WIKIMEDIA_TIMEOUT
+    );
 
   if (!response.ok) {
     throw new Error(
@@ -988,27 +1244,67 @@ async function searchWikimediaImage(query) {
     );
   }
 
-  const data = await response.json();
+  const data =
+    await response.json();
 
-  const pages = Object.values(
-    data?.query?.pages || {}
-  );
+  const pages =
+    Object.values(
+      data?.query?.pages || {}
+    );
+
+  const candidates = [];
 
   for (const page of pages) {
-    const title = page?.title || "";
+    const title =
+      text(
+        page?.title,
+        500
+      );
 
-    if (isRejectedImageTitle(title)) {
+    if (
+      isRejectedImageTitle(
+        title
+      )
+    ) {
       continue;
     }
 
-    const imageInfo = page?.imageinfo?.[0];
+    const imageInfo =
+      page?.imageinfo?.[0];
 
     if (!imageInfo) {
       continue;
     }
 
-    // Prefer the resized thumbnail URL when available.
-    // Fall back to the original Wikimedia file URL.
+    if (
+      imageInfo.mime &&
+      !String(
+        imageInfo.mime
+      ).startsWith("image/")
+    ) {
+      continue;
+    }
+
+    const width =
+      Number(
+        imageInfo.width
+      );
+
+    const height =
+      Number(
+        imageInfo.height
+      );
+
+    if (
+      Number.isFinite(width) &&
+      Number.isFinite(height) &&
+      (
+        width < 400 ||
+        height < 250
+      )
+    ) {
+      continue;
+    }
 
     const imageUrl =
       imageInfo.thumburl ||
@@ -1016,71 +1312,399 @@ async function searchWikimediaImage(query) {
       "";
 
     if (
-      !imageUrl ||
-      !/^https:\/\/upload\.wikimedia\.org\//i.test(
+      !isWikimediaPhotoURL(
         imageUrl
       )
     ) {
       continue;
     }
 
-    return {
+    candidates.push({
       image: imageUrl,
+
       photoSource:
         imageInfo.descriptionurl ||
-        `https://commons.wikimedia.org/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`
-    };
+        `https://commons.wikimedia.org/wiki/${encodeURIComponent(
+          title.replace(
+            / /g,
+            "_"
+          )
+        )}`,
+
+      title,
+
+      query,
+
+      queryIndex
+    });
   }
 
-  return null;
+  return candidates;
 }
 
 
 // ============================================================
-// FIND A PHOTO FOR ONE VEHICLE
+// WIKIPEDIA SEARCH
 // ============================================================
 
-async function findCarImage(car) {
-  // If the AI already provided a plausible image URL,
-  // preserve it rather than replacing it.
+async function searchWikipediaImages(
+  query,
+  queryIndex = 0
+) {
+  const searchParams =
+    new URLSearchParams({
+      action: "query",
 
-  if (
-    car.image &&
-    /^https?:\/\//i.test(car.image)
-  ) {
-    return car;
+      list: "search",
+
+      srsearch: query,
+
+      srnamespace: "0",
+
+      srlimit: "8",
+
+      format: "json",
+
+      origin: "*"
+    });
+
+  const searchUrl =
+    `${WIKIPEDIA_API}?${searchParams.toString()}`;
+
+  const searchResponse =
+    await fetchWithTimeout(
+      searchUrl,
+      {
+        method: "GET",
+
+        headers: {
+          Accept:
+            "application/json",
+
+          "User-Agent":
+            "CARMATCHAI/2.0 (vehicle image lookup)"
+        }
+      },
+
+      WIKIPEDIA_TIMEOUT
+    );
+
+  if (!searchResponse.ok) {
+    throw new Error(
+      `Wikipedia search HTTP ${searchResponse.status}`
+    );
   }
 
-  const queries = buildImageSearchQueries(car);
+  const searchData =
+    await searchResponse.json();
 
-  for (const query of queries) {
-    try {
-      const result =
-        await searchWikimediaImage(query);
+  const results =
+    searchData?.query?.search;
 
-      if (result && result.image) {
-        return {
-          ...car,
-          image: result.image,
-          photoSource: result.photoSource
-        };
-      }
-    } catch (error) {
-      // Image search is optional. A photo lookup failure
-      // must not fail the entire vehicle recommendation.
+  if (
+    !Array.isArray(results) ||
+    results.length === 0
+  ) {
+    return [];
+  }
 
+  const titles =
+    results
+      .slice(0, 8)
+      .map(
+        item => item?.title
+      )
+      .filter(Boolean)
+      .join("|");
+
+  if (!titles) {
+    return [];
+  }
+
+  const imageParams =
+    new URLSearchParams({
+      action: "query",
+
+      titles,
+
+      prop: "pageimages|info",
+
+      inprop: "url",
+
+      piprop: "thumbnail",
+
+      pithumbsize: "1400",
+
+      format: "json",
+
+      origin: "*"
+    });
+
+  const imageUrl =
+    `${WIKIPEDIA_API}?${imageParams.toString()}`;
+
+  const imageResponse =
+    await fetchWithTimeout(
+      imageUrl,
+      {
+        method: "GET",
+
+        headers: {
+          Accept:
+            "application/json",
+
+          "User-Agent":
+            "CARMATCHAI/2.0 (vehicle image lookup)"
+        }
+      },
+
+      WIKIPEDIA_TIMEOUT
+    );
+
+  if (!imageResponse.ok) {
+    throw new Error(
+      `Wikipedia image HTTP ${imageResponse.status}`
+    );
+  }
+
+  const imageData =
+    await imageResponse.json();
+
+  const pages =
+    Object.values(
+      imageData?.query?.pages || {}
+    );
+
+  const candidates = [];
+
+  for (const page of pages) {
+    const title =
+      text(
+        page?.title,
+        500
+      );
+
+    if (
+      isRejectedImageTitle(
+        title
+      )
+    ) {
+      continue;
+    }
+
+    const thumbnail =
+      page?.thumbnail?.source ||
+      "";
+
+    if (
+      !isWikimediaPhotoURL(
+        thumbnail
+      )
+    ) {
+      continue;
+    }
+
+    candidates.push({
+      image: thumbnail,
+
+      photoSource:
+        page?.fullurl ||
+        `https://en.wikipedia.org/wiki/${encodeURIComponent(
+          title.replace(
+            / /g,
+            "_"
+          )
+        )}`,
+
+      title,
+
+      query,
+
+      queryIndex
+    });
+  }
+
+  return candidates;
+}
+
+
+// ============================================================
+// FIND MULTIPLE PHOTOS FOR ONE VEHICLE
+// ============================================================
+
+async function findCarImages(car) {
+  const candidates = [];
+
+  // Preserve an already supplied HTTPS image from the AI.
+  if (
+    isHttpsURL(
+      car.image
+    )
+  ) {
+    candidates.push({
+      image: car.image,
+
+      photoSource:
+        car.photoSource ||
+        "AI-provided image URL",
+
+      title:
+        car.name,
+
+      query: "AI",
+
+      queryIndex: -1,
+
+      relevance: 1000
+    });
+  }
+
+  const queries =
+    buildImageSearchQueries(
+      car
+    );
+
+  // Search Commons queries in parallel.
+  const commonsResults =
+    await Promise.allSettled(
+      queries.map(
+        (query, index) =>
+          searchWikimediaImages(
+            query,
+            index
+          )
+      )
+    );
+
+  for (
+    const result
+    of commonsResults
+  ) {
+    if (
+      result.status ===
+      "fulfilled"
+    ) {
+      candidates.push(
+        ...result.value
+      );
+    } else {
       console.warn(
-        `CARMATCH AI image search failed for "${query}":`,
-        error?.message || error
+        `CARMATCH AI Wikimedia image search failed for ${car.name}:`,
+        result.reason?.message ||
+          result.reason
       );
     }
   }
 
-  // No image found. Return the car without a photo.
+  let deduped =
+    dedupeImageCandidates(
+      candidates,
+      car
+    );
+
+  // Keep a valid AI supplied image as the first candidate.
+  const aiCandidate =
+    candidates.find(
+      candidate =>
+        candidate?.query === "AI" &&
+        isHttpsURL(
+          candidate?.image
+        )
+    );
+
+  if (aiCandidate) {
+    const withoutAI =
+      deduped.filter(
+        candidate =>
+          candidate.image !==
+          aiCandidate.image
+      );
+
+    deduped = [
+      {
+        ...aiCandidate,
+        relevance: 1000
+      },
+
+      ...withoutAI
+    ].slice(
+      0,
+      MAX_IMAGE_CANDIDATES
+    );
+  }
+
+  // Wikipedia is used when Commons gave us nothing.
+  if (
+    deduped.length === 0
+  ) {
+    const wikipediaResults =
+      await Promise.allSettled(
+        queries.map(
+          (query, index) =>
+            searchWikipediaImages(
+              query,
+              index
+            )
+        )
+      );
+
+    for (
+      const result
+      of wikipediaResults
+    ) {
+      if (
+        result.status ===
+        "fulfilled"
+      ) {
+        candidates.push(
+          ...result.value
+        );
+      } else {
+        console.warn(
+          `CARMATCH AI Wikipedia image search failed for ${car.name}:`,
+          result.reason?.message ||
+            result.reason
+        );
+      }
+    }
+
+    deduped =
+      dedupeImageCandidates(
+        candidates,
+        car
+      );
+  }
+
+  const imageCandidates =
+    deduped
+      .slice(
+        0,
+        MAX_IMAGE_CANDIDATES
+      )
+      .map(
+        candidate => ({
+          url:
+            candidate.image,
+
+          source:
+            candidate.photoSource ||
+            ""
+        })
+      );
+
+  const first =
+    imageCandidates[0];
+
   return {
     ...car,
-    image: "",
-    photoSource: ""
+
+    image:
+      first?.url || "",
+
+    photoSource:
+      first?.source || "",
+
+    imageCandidates
   };
 }
 
@@ -1091,7 +1715,10 @@ async function findCarImage(car) {
 
 async function addCarImages(cars) {
   return Promise.all(
-    cars.map(car => findCarImage(car))
+    cars.map(
+      car =>
+        findCarImages(car)
+    )
   );
 }
 
@@ -1111,72 +1738,80 @@ async function callGroqModel(
     );
   }
 
-  const response = await fetchWithTimeout(
-    GROQ_URL,
-    {
-      method: "POST",
+  const response =
+    await fetchWithTimeout(
+      GROQ_URL,
+      {
+        method: "POST",
 
-      headers: {
-        "Content-Type": "application/json",
+        headers: {
+          "Content-Type":
+            "application/json",
 
-        Authorization:
-          `Bearer ${GROQ_API_KEY}`,
+          Authorization:
+            `Bearer ${GROQ_API_KEY}`,
 
-        "Groq-Model-Version": "latest"
-      },
-
-      body: JSON.stringify({
-        model,
-
-        messages: [
-          {
-            role: "system",
-
-            content:
-              "You are CARMATCH AI. Perform current automotive web research when web tools are available. Return ONLY valid JSON matching the requested structure."
-          },
-
-          {
-            role: "user",
-
-            content: buildPrompt(request)
-          }
-        ],
-
-        temperature: 0.1,
-
-        max_completion_tokens: 12000,
-
-        response_format: {
-          type: "json_object"
+          "Groq-Model-Version":
+            "latest"
         },
 
-        ...(model === "groq/compound"
-          ? {
-              compound_custom: {
-                tools: {
-                  enabled_tools: [
-                    "web_search",
-                    "visit_website"
-                  ]
-                }
-              }
-            }
-          : {
-              compound_custom: {
-                tools: {
-                  enabled_tools: [
-                    "web_search"
-                  ]
-                }
-              }
-            })
-      })
-    },
-    timeout
-  );
+        body: JSON.stringify({
+          model,
 
-  const raw = await response.text();
+          messages: [
+            {
+              role: "system",
+
+              content:
+                "You are CARMATCH AI. Perform current automotive web research when web tools are available. Return ONLY valid JSON matching the requested structure."
+            },
+
+            {
+              role: "user",
+
+              content:
+                buildPrompt(request)
+            }
+          ],
+
+          temperature: 0.1,
+
+          max_completion_tokens:
+            12000,
+
+          response_format: {
+            type: "json_object"
+          },
+
+          ...(model ===
+          "groq/compound"
+            ? {
+                compound_custom: {
+                  tools: {
+                    enabled_tools: [
+                      "web_search",
+                      "visit_website"
+                    ]
+                  }
+                }
+              }
+            : {
+                compound_custom: {
+                  tools: {
+                    enabled_tools: [
+                      "web_search"
+                    ]
+                  }
+                }
+              })
+        })
+      },
+
+      timeout
+    );
+
+  const raw =
+    await response.text();
 
   if (!response.ok) {
     throw new Error(
@@ -1187,7 +1822,8 @@ async function callGroqModel(
   let apiData;
 
   try {
-    apiData = JSON.parse(raw);
+    apiData =
+      JSON.parse(raw);
   } catch (_) {
     throw new Error(
       "Groq API returned invalid JSON"
@@ -1197,7 +1833,8 @@ async function callGroqModel(
   const message =
     apiData?.choices?.[0]?.message;
 
-  const content = message?.content;
+  const content =
+    message?.content;
 
   if (!content) {
     throw new Error(
@@ -1205,21 +1842,22 @@ async function callGroqModel(
     );
   }
 
-  const parsed = parseAIJson(content);
+  const parsed =
+    parseAIJson(content);
 
   const validatedCars =
     validateCars(parsed);
 
-  // Automatically find vehicle photos.
-  // If Wikimedia is unavailable, the cars are still returned.
-
   const cars =
-    await addCarImages(validatedCars);
+    await addCarImages(
+      validatedCars
+    );
 
   return {
     cars,
 
-    provider: `Groq ${model}`,
+    provider:
+      `Groq ${model}`,
 
     liveWeb: true
   };
@@ -1230,30 +1868,44 @@ async function callGroqModel(
 // GROQ FAILOVER
 // ============================================================
 
-async function callGroq(request) {
-  let lastError = null;
+async function callGroq(
+  request
+) {
+  let lastError =
+    null;
 
   const models = [
     {
-      model: "groq/compound",
-      timeout: GROQ_TIMEOUT
+      model:
+        "groq/compound",
+
+      timeout:
+        GROQ_TIMEOUT
     },
 
     {
-      model: "groq/compound-mini",
-      timeout: GROQ_MINI_TIMEOUT
+      model:
+        "groq/compound-mini",
+
+      timeout:
+        GROQ_MINI_TIMEOUT
     }
   ];
 
-  for (const item of models) {
+  for (
+    const item
+    of models
+  ) {
     try {
       return await callGroqModel(
         request,
         item.model,
         item.timeout
       );
+
     } catch (error) {
-      lastError = error;
+      lastError =
+        error;
 
       console.error(
         `CARMATCH AI - ${item.model} failed:`,
@@ -1264,7 +1916,9 @@ async function callGroq(request) {
 
   throw (
     lastError ||
-    new Error("All Groq providers failed")
+    new Error(
+      "All Groq providers failed"
+    )
   );
 }
 
@@ -1283,31 +1937,34 @@ async function callOpenRouterModel(
     );
   }
 
-  const response = await fetchWithTimeout(
-    OPENROUTER_URL,
-    {
-      method: "POST",
+  const response =
+    await fetchWithTimeout(
+      OPENROUTER_URL,
+      {
+        method: "POST",
 
-      headers: {
-        "Content-Type": "application/json",
+        headers: {
+          "Content-Type":
+            "application/json",
 
-        Authorization:
-          `Bearer ${OPENROUTER_API_KEY}`,
+          Authorization:
+            `Bearer ${OPENROUTER_API_KEY}`,
 
-        "HTTP-Referer":
-          "https://carmatchai.vercel.app",
+          "HTTP-Referer":
+            "https://carmatchai.vercel.app",
 
-        "X-Title": "CARMATCH AI"
-      },
+          "X-Title":
+            "CARMATCH AI"
+        },
 
-      body: JSON.stringify({
-        model,
+        body: JSON.stringify({
+          model,
 
-        messages: [
-          {
-            role: "system",
+          messages: [
+            {
+              role: "system",
 
-            content: `
+              content: `
 You are CARMATCH AI.
 
 Return ONLY valid JSON.
@@ -1328,28 +1985,31 @@ Always return exactly 3 real production vehicles.
 
 Follow every user filter.
 `
-          },
+            },
 
-          {
-            role: "user",
+            {
+              role: "user",
 
-            content: buildPrompt(request)
+              content:
+                buildPrompt(request)
+            }
+          ],
+
+          temperature: 0.1,
+
+          max_tokens: 10000,
+
+          response_format: {
+            type: "json_object"
           }
-        ],
+        })
+      },
 
-        temperature: 0.1,
+      OPENROUTER_TIMEOUT
+    );
 
-        max_tokens: 10000,
-
-        response_format: {
-          type: "json_object"
-        }
-      })
-    },
-    OPENROUTER_TIMEOUT
-  );
-
-  const raw = await response.text();
+  const raw =
+    await response.text();
 
   if (!response.ok) {
     throw new Error(
@@ -1360,7 +2020,8 @@ Follow every user filter.
   let apiData;
 
   try {
-    apiData = JSON.parse(raw);
+    apiData =
+      JSON.parse(raw);
   } catch (_) {
     throw new Error(
       `OpenRouter ${model} returned invalid API JSON`
@@ -1376,20 +2037,22 @@ Follow every user filter.
     );
   }
 
-  const parsed = parseAIJson(content);
+  const parsed =
+    parseAIJson(content);
 
   const validatedCars =
     validateCars(parsed);
 
-  // Automatically find vehicle photos.
-
   const cars =
-    await addCarImages(validatedCars);
+    await addCarImages(
+      validatedCars
+    );
 
   return {
     cars,
 
-    provider: `OpenRouter (${model})`,
+    provider:
+      `OpenRouter (${model})`,
 
     liveWeb: false
   };
@@ -1400,10 +2063,16 @@ Follow every user filter.
 // OPENROUTER MULTI-MODEL FALLBACK
 // ============================================================
 
-async function callOpenRouter(request) {
-  let lastError = null;
+async function callOpenRouter(
+  request
+) {
+  let lastError =
+    null;
 
-  for (const model of OPENROUTER_FREE_MODELS) {
+  for (
+    const model
+    of OPENROUTER_FREE_MODELS
+  ) {
     try {
       console.log(
         `CARMATCH AI - trying OpenRouter model: ${model}`
@@ -1413,8 +2082,10 @@ async function callOpenRouter(request) {
         request,
         model
       );
+
     } catch (error) {
-      lastError = error;
+      lastError =
+        error;
 
       console.error(
         `CARMATCH AI - OpenRouter ${model} failed:`,
@@ -1425,7 +2096,9 @@ async function callOpenRouter(request) {
 
   throw (
     lastError ||
-    new Error("All OpenRouter free models failed")
+    new Error(
+      "All OpenRouter free models failed"
+    )
   );
 }
 
@@ -1434,7 +2107,10 @@ async function callOpenRouter(request) {
 // MAIN HANDLER
 // ============================================================
 
-export default async function handler(req, res) {
+export default async function handler(
+  req,
+  res
+) {
   // ==========================================================
   // CORS
   // ==========================================================
@@ -1454,18 +2130,25 @@ export default async function handler(req, res) {
     "Content-Type, Authorization"
   );
 
-  if (req.method === "OPTIONS") {
+  if (
+    req.method ===
+    "OPTIONS"
+  ) {
     return res
       .status(200)
       .end();
   }
 
-  if (req.method !== "POST") {
+  if (
+    req.method !==
+    "POST"
+  ) {
     return sendJson(
       res,
       405,
       {
-        error: "Method not allowed"
+        error:
+          "Method not allowed"
       }
     );
   }
@@ -1487,7 +2170,8 @@ export default async function handler(req, res) {
         res,
         500,
         {
-          error: "Configuration error"
+          error:
+            "Configuration error"
         }
       );
     }
@@ -1504,7 +2188,8 @@ export default async function handler(req, res) {
         res,
         500,
         {
-          error: "Configuration error",
+          error:
+            "Configuration error",
 
           message:
             "CARMATCH AI nemá nakonfigurovaný GROQ_API_KEY ani OPENROUTER_API_KEY."
@@ -1517,16 +2202,20 @@ export default async function handler(req, res) {
     // ========================================================
 
     const authorization =
-      req.headers.authorization || "";
+      req.headers.authorization ||
+      "";
 
     if (
-      !authorization.startsWith("Bearer ")
+      !authorization.startsWith(
+        "Bearer "
+      )
     ) {
       return sendJson(
         res,
         401,
         {
-          error: "Unauthorized"
+          error:
+            "Unauthorized"
         }
       );
     }
@@ -1541,7 +2230,8 @@ export default async function handler(req, res) {
         res,
         401,
         {
-          error: "Unauthorized"
+          error:
+            "Unauthorized"
         }
       );
     }
@@ -1550,7 +2240,10 @@ export default async function handler(req, res) {
     // VERIFY USER
     // ========================================================
 
-    const user = await verifyUser(accessToken);
+    const user =
+      await verifyUser(
+        accessToken
+      );
 
     if (!user) {
       return sendJson(
@@ -1567,15 +2260,19 @@ export default async function handler(req, res) {
     // REQUEST
     // ========================================================
 
-    const request = normalizeRequest(
-      req.body || {}
-    );
+    const request =
+      normalizeRequest(
+        req.body || {}
+      );
 
     // ========================================================
     // DAILY LIMIT
     // ========================================================
 
-    const usage = await useSearch(accessToken);
+    const usage =
+      await useSearch(
+        accessToken
+      );
 
     if (!usage.allowed) {
       return sendJson(
@@ -1609,7 +2306,11 @@ export default async function handler(req, res) {
 
     if (GROQ_API_KEY) {
       try {
-        result = await callGroq(request);
+        result =
+          await callGroq(
+            request
+          );
+
       } catch (error) {
         groqFailed = true;
 
@@ -1629,7 +2330,11 @@ export default async function handler(req, res) {
       OPENROUTER_API_KEY
     ) {
       try {
-        result = await callOpenRouter(request);
+        result =
+          await callOpenRouter(
+            request
+          );
+
       } catch (error) {
         openRouterFailed = true;
 
@@ -1645,39 +2350,51 @@ export default async function handler(req, res) {
     // ========================================================
 
     if (!result) {
-      const refund = await refundSearch(accessToken);
+      const refund =
+        await refundSearch(
+          accessToken
+        );
 
-      const remaining = Number.isFinite(
-        Number(refund?.remaining)
-      )
-        ? Number(refund.remaining)
-        : usage.remaining;
+      const remaining =
+        Number.isFinite(
+          Number(
+            refund?.remaining
+          )
+        )
+          ? Number(
+              refund.remaining
+            )
+          : usage.remaining;
 
       return sendJson(
         res,
         503,
         {
-          error: "AI temporarily unavailable",
+          error:
+            "AI temporarily unavailable",
 
           message:
             "CARMATCH AI momentálne nemá dostupnú AI službu. Toto vyhľadávanie sa nezapočítalo do denného limitu.",
 
-          retryable: true,
+          retryable:
+            true,
 
           remaining,
 
           providerStatus: {
-            groq: !GROQ_API_KEY
-              ? "not_configured"
-              : groqFailed
-                ? "unavailable"
-                : "unknown",
+            groq:
+              !GROQ_API_KEY
+                ? "not_configured"
+                : groqFailed
+                  ? "unavailable"
+                  : "unknown",
 
-            openrouter: !OPENROUTER_API_KEY
-              ? "not_configured"
-              : openRouterFailed
-                ? "unavailable"
-                : "unknown"
+            openrouter:
+              !OPENROUTER_API_KEY
+                ? "not_configured"
+                : openRouterFailed
+                  ? "unavailable"
+                  : "unknown"
           }
         }
       );
@@ -1691,16 +2408,23 @@ export default async function handler(req, res) {
       res,
       200,
       {
-        cars: result.cars,
+        cars:
+          result.cars,
 
-        remaining: usage.remaining,
+        remaining:
+          usage.remaining,
 
         ai: {
-          provider: result.provider,
+          provider:
+            result.provider,
 
-          liveWeb: Boolean(result.liveWeb),
+          liveWeb:
+            Boolean(
+              result.liveWeb
+            ),
 
-          generatedAt: new Date().toISOString()
+          generatedAt:
+            new Date().toISOString()
         }
       }
     );
@@ -1715,12 +2439,14 @@ export default async function handler(req, res) {
       res,
       500,
       {
-        error: "Server configuration error",
+        error:
+          "Server configuration error",
 
         message:
           "CARMATCH AI sa nepodarilo dokončiť požiadavku. Skontroluj nastavenia Supabase, GROQ_API_KEY a OPENROUTER_API_KEY vo Verceli.",
 
-        retryable: true
+        retryable:
+          true
       }
     );
   }
