@@ -1,8 +1,8 @@
 // ============================================================
-// CARMATCH AI - FINAL FRONTEND v4
-// Backend handles vehicle image search.
-// Frontend displays backend image candidates and automatically
-// switches to the next candidate if an image fails to load.
+// CARMATCH AI - FINAL FRONTEND v5
+// Backend independently searches exact vehicle photographs.
+// Frontend tries every returned image candidate.
+// Failed images are automatically skipped.
 // ============================================================
 
 const API_ENDPOINT =
@@ -29,10 +29,12 @@ const imageStates =
   new WeakMap();
 
 
-button.addEventListener(
-  "click",
-  searchCars
-);
+if (button) {
+  button.addEventListener(
+    "click",
+    searchCars
+  );
+}
 
 
 // ============================================================
@@ -41,7 +43,9 @@ button.addEventListener(
 
 function value(id) {
   const element =
-    document.getElementById(id);
+    document.getElementById(
+      id
+    );
 
   return element
     ? element.value.trim()
@@ -50,7 +54,9 @@ function value(id) {
 
 
 function escapeHTML(value) {
-  return String(value ?? "")
+  return String(
+    value ?? ""
+  )
     .replaceAll(
       "&",
       "&amp;"
@@ -74,19 +80,58 @@ function escapeHTML(value) {
 }
 
 
-function escapeAttribute(value) {
-  return escapeHTML(value);
+function escapeAttribute(
+  value
+) {
+  return escapeHTML(
+    value
+  );
 }
 
 
 // ============================================================
-// IMAGE URL VALIDATION
+// URL VALIDATION
 // ============================================================
 
-function validImageURL(url) {
+function validImageURL(
+  url
+) {
   if (
     !url ||
-    typeof url !== "string"
+    typeof url !==
+      "string"
+  ) {
+    return false;
+  }
+
+  try {
+    const parsed =
+      new URL(url);
+
+    return (
+      parsed.protocol ===
+      "https:" &&
+      (
+        parsed.hostname ===
+          "upload.wikimedia.org" ||
+        parsed.hostname.endsWith(
+          ".wikimedia.org"
+        )
+      )
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
+
+function validWebsiteURL(
+  url
+) {
+  if (
+    !url ||
+    typeof url !==
+      "string"
   ) {
     return false;
   }
@@ -97,38 +142,14 @@ function validImageURL(url) {
         .protocol ===
       "https:"
     );
-  } catch {
+  } catch (_) {
     return false;
   }
 }
 
 
 // ============================================================
-// WEBSITE URL VALIDATION
-// ============================================================
-
-function validWebsiteURL(url) {
-  if (
-    !url ||
-    typeof url !== "string"
-  ) {
-    return false;
-  }
-
-  try {
-    return (
-      new URL(url)
-        .protocol ===
-      "https:"
-    );
-  } catch {
-    return false;
-  }
-}
-
-
-// ============================================================
-// LOCAL PLACEHOLDER
+// PLACEHOLDER
 // ============================================================
 
 function placeholderDataURL(
@@ -143,10 +164,12 @@ function placeholderDataURL(
       );
 
   const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg"
-         width="1200"
-         height="700"
-         viewBox="0 0 1200 700">
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="1200"
+      height="700"
+      viewBox="0 0 1200 700"
+    >
 
       <rect
         width="1200"
@@ -160,10 +183,9 @@ function placeholderDataURL(
         text-anchor="middle"
         font-family="Arial, Helvetica, sans-serif"
         font-size="38"
-        fill="#666">
-
+        fill="#666"
+      >
         ${safeMessage}
-
       </text>
 
       <text
@@ -172,10 +194,9 @@ function placeholderDataURL(
         text-anchor="middle"
         font-family="Arial, Helvetica, sans-serif"
         font-size="22"
-        fill="#888">
-
+        fill="#888"
+      >
         CARMATCH AI
-
       </text>
 
     </svg>
@@ -238,6 +259,75 @@ function collectRequest() {
 
 
 // ============================================================
+// SUPABASE SESSION
+// ============================================================
+
+async function getSupabaseAccessToken() {
+  // Supports the common Supabase browser client if it exists
+  // globally on the page.
+
+  if (
+    window.supabaseClient &&
+    typeof window.supabaseClient
+      .auth?.getSession ===
+      "function"
+  ) {
+    const result =
+      await window.supabaseClient.auth
+        .getSession();
+
+    return (
+      result?.data?.session
+        ?.access_token ||
+      null
+    );
+  }
+
+  // Also supports a global variable named supabase.
+  if (
+    window.supabase &&
+    typeof window.supabase
+      .auth?.getSession ===
+      "function"
+  ) {
+    const result =
+      await window.supabase.auth
+        .getSession();
+
+    return (
+      result?.data?.session
+        ?.access_token ||
+      null
+    );
+  }
+
+  // If another part of the project stores the token,
+  // accept these common localStorage names.
+  const storageKeys = [
+    "carmatch_access_token",
+    "supabase_access_token",
+    "access_token"
+  ];
+
+  for (
+    const key
+    of storageKeys
+  ) {
+    const stored =
+      localStorage.getItem(
+        key
+      );
+
+    if (stored) {
+      return stored;
+    }
+  }
+
+  return null;
+}
+
+
+// ============================================================
 // SEARCH VEHICLES
 // ============================================================
 
@@ -254,7 +344,8 @@ async function searchCars() {
     Object.values(
       request.filters
     ).some(
-      item => item !== ""
+      item =>
+        item !== ""
     );
 
   if (
@@ -280,6 +371,23 @@ async function searchCars() {
     "";
 
   try {
+    // --------------------------------------------------------
+    // SUPABASE SESSION
+    // --------------------------------------------------------
+
+    const accessToken =
+      await getSupabaseAccessToken();
+
+    if (!accessToken) {
+      throw new Error(
+        "Supabase session is missing. Obnov stránku alebo sa znova prihlás."
+      );
+    }
+
+    // --------------------------------------------------------
+    // REQUEST
+    // --------------------------------------------------------
+
     const response =
       await fetch(
         API_ENDPOINT,
@@ -289,7 +397,10 @@ async function searchCars() {
 
           headers: {
             "Content-Type":
-              "application/json"
+              "application/json",
+
+            Authorization:
+              `Bearer ${accessToken}`
           },
 
           body:
@@ -309,7 +420,7 @@ async function searchCars() {
         JSON.parse(
           responseText
         );
-    } catch {
+    } catch (_) {
       throw new Error(
         "Server vrátil neplatnú odpoveď."
       );
@@ -328,19 +439,28 @@ async function searchCars() {
     if (
       !Array.isArray(
         data.cars
-      )
+      ) ||
+      data.cars.length !== 3
     ) {
       throw new Error(
-        "AI nevrátila platné výsledky."
+        "AI nevrátila presne 3 platné vozidlá."
       );
     }
+
+    // --------------------------------------------------------
+    // RENDER
+    // --------------------------------------------------------
 
     renderResults(
       data.cars
     );
 
     statusBox.textContent =
-      "Hotovo — fotografie vozidiel sa načítavajú.";
+      "Výsledky pripravené — kontrolujem fotografie vozidiel…";
+
+    // --------------------------------------------------------
+    // IMAGES
+    // --------------------------------------------------------
 
     await initializeCarImages(
       data.cars
@@ -370,7 +490,8 @@ async function searchCars() {
         <br><br>
 
         ${escapeHTML(
-          error.message
+          error?.message ||
+            "Neznáma chyba."
         )}
 
       </div>
@@ -402,9 +523,7 @@ function notifySearchFinished() {
         150
       ]);
     }
-
   } catch (_) {}
-
 
   try {
     const AudioContextClass =
@@ -468,7 +587,6 @@ function notifySearchFinished() {
       );
     };
 
-
     if (
       audio.state ===
       "suspended"
@@ -477,11 +595,9 @@ function notifySearchFinished() {
         .resume()
         .then(play)
         .catch(() => {});
-
     } else {
       play();
     }
-
 
     setTimeout(() => {
       audio
@@ -509,7 +625,10 @@ function renderResults(
 
       ${cars
         .map(
-          (car, index) =>
+          (
+            car,
+            index
+          ) =>
             createCard(
               car,
               index
@@ -534,13 +653,12 @@ function getImageCandidates(
   const seen =
     new Set();
 
-
   const addCandidate =
     (
       url,
-      source = ""
+      source = "",
+      title = ""
     ) => {
-
       if (
         !validImageURL(
           url
@@ -559,31 +677,32 @@ function getImageCandidates(
 
       candidates.push({
         url,
+
         source:
-          source || ""
+          source || "",
+
+        title:
+          title || ""
       });
     };
 
-
-  // First use the primary backend image.
+  // Primary backend image.
   addCandidate(
     car?.image,
-    car?.photoSource
+    car?.photoSource,
+    car?.name
   );
 
-
-  // Then use backup candidates.
+  // Backup backend candidates.
   if (
     Array.isArray(
       car?.imageCandidates
     )
   ) {
-
     for (
       const candidate
       of car.imageCandidates
     ) {
-
       if (
         !candidate ||
         typeof candidate !==
@@ -599,11 +718,13 @@ function getImageCandidates(
 
         candidate.source ||
           candidate.photoSource ||
+          "",
+
+        candidate.title ||
           ""
       );
     }
   }
-
 
   return candidates;
 }
@@ -623,13 +744,11 @@ async function initializeCarImages(
 
   const tasks = [];
 
-
   for (
     let i = 0;
     i < cars.length;
     i++
   ) {
-
     const img =
       images[i];
 
@@ -643,12 +762,10 @@ async function initializeCarImages(
       continue;
     }
 
-
     const candidates =
       getImageCandidates(
         car
       );
-
 
     const state = {
       candidates,
@@ -660,12 +777,10 @@ async function initializeCarImages(
         false
     };
 
-
     imageStates.set(
       img,
       state
     );
-
 
     tasks.push(
       loadNextImage(
@@ -673,7 +788,6 @@ async function initializeCarImages(
       )
     );
   }
-
 
   await Promise.all(
     tasks
@@ -690,27 +804,22 @@ function loadNextImage(
 ) {
   return new Promise(
     resolve => {
-
       const state =
         imageStates.get(
           img
         );
-
 
       if (!state) {
         resolve(false);
         return;
       }
 
-
       if (
         state.nextIndex >=
         state.candidates.length
       ) {
-
         state.finished =
           true;
-
 
         const card =
           img.closest(
@@ -722,23 +831,19 @@ function loadNextImage(
             ".photo-source"
           );
 
-
         img.src =
           placeholderDataURL(
             "Fotografia vozidla sa nenašla"
           );
 
-
         if (source) {
           source.textContent =
-            "Fotografiu sa nepodarilo nájsť.";
+            "Fotografiu vozidla sa nepodarilo nájsť.";
         }
-
 
         resolve(false);
         return;
       }
-
 
       const candidate =
         state.candidates[
@@ -747,15 +852,12 @@ function loadNextImage(
 
       state.nextIndex++;
 
-
       const handleLoad =
         () => {
-
           cleanup();
 
           state.finished =
             true;
-
 
           const card =
             img.closest(
@@ -767,21 +869,17 @@ function loadNextImage(
               ".photo-source"
             );
 
-
           if (source) {
             source.textContent =
               candidate.source ||
               "Wikimedia Commons / Wikipedia";
           }
 
-
           resolve(true);
         };
 
-
       const handleError =
         () => {
-
           cleanup();
 
           loadNextImage(
@@ -791,10 +889,8 @@ function loadNextImage(
           );
         };
 
-
       const cleanup =
         () => {
-
           img.removeEventListener(
             "load",
             handleLoad
@@ -806,7 +902,6 @@ function loadNextImage(
           );
         };
 
-
       img.addEventListener(
         "load",
         handleLoad,
@@ -815,7 +910,6 @@ function loadNextImage(
         }
       );
 
-
       img.addEventListener(
         "error",
         handleError,
@@ -823,7 +917,6 @@ function loadNextImage(
           once: true
         }
       );
-
 
       img.src =
         candidate.url;
@@ -843,7 +936,8 @@ function createCard(
   const pros =
     Array.isArray(
       car.pros
-    )
+    ) &&
+    car.pros.length > 0
       ? car.pros
           .map(
             item =>
@@ -854,11 +948,11 @@ function createCard(
           .join("")
       : "<li>Údaj nie je dostupný.</li>";
 
-
   const cons =
     Array.isArray(
       car.cons
-    )
+    ) &&
+    car.cons.length > 0
       ? car.cons
           .map(
             item =>
@@ -869,33 +963,22 @@ function createCard(
           .join("")
       : "<li>Údaj nie je dostupný.</li>";
 
+  const candidates =
+    getImageCandidates(
+      car
+    );
 
   const initialImage =
-    validImageURL(
-      car.image
-    )
-      ? car.image
+    candidates.length > 0
+      ? candidates[0].url
       : placeholderDataURL(
           "Načítavam fotografiu vozidla…"
         );
 
-
-  const hasCandidates =
-    Array.isArray(
-      car.imageCandidates
-    ) &&
-    car.imageCandidates.length >
-      0;
-
-
   const initialSource =
-    car.photoSource ||
-    (
-      hasCandidates
-        ? "Načítavam fotografiu vozidla…"
-        : "Fotografia sa nenašla."
-    );
-
+    candidates.length > 0
+      ? "Kontrolujem fotografiu vozidla…"
+      : "Fotografia sa hľadá…";
 
   return `
     <article class="car">
@@ -948,7 +1031,8 @@ function createCard(
 
         <div class="score">
           ${escapeHTML(
-            car.score ?? "—"
+            car.score ??
+              "—"
           )}%
         </div>
 
