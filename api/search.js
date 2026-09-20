@@ -472,55 +472,17 @@ function normalizeRequest(
 
 // ============================================================
 // LANGUAGE
+// CARMATCH AI ALWAYS RESPONDS IN SLOVAK
 // ============================================================
 
 function detectLanguage(
   request
 ) {
-  const content =
-    `${request.naturalLanguage} ${
-      JSON.stringify(
-        request.filters
-      )
-    }`.toLowerCase();
+  // CARMATCH AI používa slovenské používateľské rozhranie.
+  // Odpovede preto vždy generujeme po slovensky,
+  // aj keď používateľ použije iba filtre bez textu.
 
-  const slovak = [
-    "chcem",
-    "potrebujem",
-    "auto",
-    "autá",
-    "vozidlo",
-    "rozpočet",
-    "sedadlá",
-    "kufor",
-    "výkon",
-    "pohon",
-    "benzín",
-    "nafta",
-    "elektrické",
-    "elektromobil",
-    "hybrid",
-    "rok",
-    "nové",
-    "najnovšie",
-    "lacné",
-    "športové",
-    "luxusné",
-    "diesel",
-    "benzínové",
-    "plug-in",
-    "štvorkolka"
-  ];
-
-  const count =
-    slovak.filter(
-      word =>
-        content.includes(word)
-    ).length;
-
-  return count > 0
-    ? "Slovak"
-    : "English";
+  return "Slovak";
 }
 
 
@@ -596,6 +558,27 @@ ${market}
 
 RESPONSE LANGUAGE:
 ${language}
+
+MANDATORY LANGUAGE RULE:
+Always respond in Slovak.
+
+All user-facing text must be written in Slovak, including:
+- vehicle descriptions
+- reasons for recommendations
+- advantages
+- disadvantages
+- maintenance information
+- price explanations
+- all other explanatory text
+
+This rule applies whether the user enters a natural-language
+request, uses filters only, or combines both.
+
+Never switch to English because the user used filters only.
+
+Keep official vehicle names, brand names, model names,
+technical abbreviations, and drivetrain names unchanged
+when appropriate.
 
 USER REQUEST:
 ${request.naturalLanguage || "No text request."}
@@ -865,6 +848,8 @@ Never invent prices.
 Never invent URLs.
 
 Never mix generations.
+
+All user-facing explanatory text MUST be in Slovak.
 `;
 }
 
@@ -2122,8 +2107,29 @@ async function callGroqModel(
             {
               role: "system",
 
-              content:
-                "You are CARMATCH AI. Perform current automotive web research when web tools are available. Return ONLY valid JSON."
+              content: `
+You are CARMATCH AI, a professional automotive research assistant.
+
+IMPORTANT LANGUAGE RULE:
+Always respond in Slovak.
+
+All vehicle descriptions, reasons, advantages, disadvantages,
+maintenance information, and other user-facing text must be
+written in Slovak.
+
+This rule applies whether the user enters a natural-language
+request, uses filters only, or combines both.
+
+Never switch to English because the user used filters only.
+
+Keep official vehicle names, brand names, model names,
+technical abbreviations, and drivetrain names unchanged
+when appropriate.
+
+Perform current automotive web research when web tools are available.
+
+Return ONLY valid JSON.
+`
             },
 
             {
@@ -2336,6 +2342,28 @@ async function callOpenRouterModel(
 You are CARMATCH AI.
 
 Return ONLY valid JSON.
+
+MANDATORY LANGUAGE:
+Always generate all user-facing text in Slovak.
+
+This includes:
+- reason
+- pros
+- cons
+- maintenance
+- price explanations
+- vehicle descriptions
+- all other explanatory text
+
+Always use Slovak even when the user submits only filters
+and does not enter any natural-language text.
+
+Never switch to English because the request contains
+only numerical or technical filter values.
+
+Keep official vehicle names, brand names, model names,
+technical abbreviations, and drivetrain names unchanged
+when appropriate.
 
 You are a fallback provider.
 
