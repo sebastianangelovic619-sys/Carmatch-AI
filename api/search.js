@@ -1,30 +1,24 @@
 // ============================================================
-// CARMATCH AI - PRODUCTION BACKEND v8
+// CARMATCH AI - PRODUCTION BACKEND v9
 // ============================================================
 //
-// FIXED v8
-// - Groq browser_search compatible request
-// - NO Groq JSON mode + browser tool conflict
-// - Defensive Groq response extraction
-// - Defensive OpenRouter response extraction
-// - Global AI deadline protection
-// - Faster provider fallback chain
-// - Empty-response recovery
-// - Search refund protection
+// Core features
 // - Supabase anonymous auth
-// - 5 searches/day
-// - Exact 3-car output
-// - Official price/source validation
-// - kW + mechanical HP
-// - Wikimedia + Wikipedia image engine preserved
-// - SSRF-safe URLs
-// - Defensive normalization
+// - 5 searches / day via Supabase RPC
+// - Groq GPT-OSS with live browser search
+// - Official-manufacturer price priority
+// - Server-side validation of official price URLs
+// - kW + mechanical HP output (never PS / ks / bhp)
+// - Current generation / model-year guardrails
+// - 3-car exact output contract
+// - OpenRouter FREE multi-fallback
+// - Search refund when every provider fails
+// - Wikimedia Commons + Wikipedia image fallback
+// - Image rejection / relevance ranking
+// - Strong SSRF-safe URL validation
+// - Defensive parsing and normalization
 // ============================================================
 
-
-// ============================================================
-// API URLS
-// ============================================================
 
 const GROQ_URL =
   "https://api.groq.com/openai/v1/chat/completions";
@@ -38,10 +32,6 @@ const WIKIMEDIA_API =
 const WIKIPEDIA_API =
   "https://en.wikipedia.org/w/api.php";
 
-
-// ============================================================
-// ENVIRONMENT
-// ============================================================
 
 const SUPABASE_URL =
   process.env.SUPABASE_URL;
@@ -62,22 +52,15 @@ const OPENROUTER_API_KEY =
 
 const MAX_SEARCHES_PER_DAY = 5;
 
-// Global protection.
-// Vercel can terminate long-running requests around 300 s.
-// We deliberately keep the complete AI chain much shorter.
-const TOTAL_AI_TIMEOUT = 135000;
+const REQUEST_TIMEOUT = 55000;
+const GROQ_PRIMARY_TIMEOUT = 52000;
+const GROQ_REPAIR_TIMEOUT = 24000;
+const OPENROUTER_TIMEOUT = 30000;
 
-const GROQ_PRIMARY_TIMEOUT = 43000;
-const GROQ_REPAIR_TIMEOUT = 22000;
-
-const OPENROUTER_TIMEOUT = 16000;
-
-const SUPABASE_TIMEOUT = 8000;
-
-const OFFICIAL_PAGE_TIMEOUT = 4000;
-
-const WIKIMEDIA_TIMEOUT = 5000;
-const WIKIPEDIA_TIMEOUT = 5000;
+const SUPABASE_TIMEOUT = 10000;
+const OFFICIAL_PAGE_TIMEOUT = 6500;
+const WIKIMEDIA_TIMEOUT = 7000;
+const WIKIPEDIA_TIMEOUT = 7000;
 
 const MAX_IMAGE_CANDIDATES = 8;
 const MAX_DATA_SOURCES = 12;
@@ -338,6 +321,7 @@ const OFFICIAL_DOMAIN_HINTS = {
     "lotuscars.com"
   ],
   rimac: [
+    "rimac-automobili.com",
     "rimac-automobili.com"
   ],
   smart: [
@@ -371,18 +355,92 @@ function sendJson(res, status, data) {
 }
 
 
-function text(value, maxLength = 5000) {
-  if (
-    value === null ||
-    value === undefined
-  ) {
-    return "";
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+
+function cleanPrimitive(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value.replace(/\u0000/g, "").trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+
+
+function scalarText(value, maxLength = 5000, depth = 0) {
+  if (depth > 4 || value === null || value === undefined) return "";
+
+  const primitive = cleanPrimitive(value);
+  if (primitive) return primitive.slice(0, maxLength);
+
+  if (Array.isArray(value)) {
+    return value
+      .map(item =>
+        scalarText(
+          item,
+          Math.max(
+            80,
+            Math.floor(maxLength / Math.max(1, value.length))
+          ),
+          depth + 1
+        )
+      )
+      .filter(Boolean)
+      .join(", ")
+      .slice(0, maxLength);
   }
 
-  return String(value)
-    .replace(/\u0000/g, "")
-    .trim()
-    .slice(0, maxLength);
+  if (isPlainObject(value)) {
+    const preferredKeys = [
+      "text",
+      "value",
+      "display",
+      "label",
+      "name",
+      "title",
+      "model",
+      "brand",
+      "make",
+      "description",
+      "content",
+      "formatted",
+      "string",
+      "raw"
+    ];
+
+    for (const key of preferredKeys) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        const extracted = scalarText(
+          value[key],
+          maxLength,
+          depth + 1
+        );
+
+        if (
+          extracted &&
+          extracted !== "[object Object]"
+        ) {
+          return extracted;
+        }
+      }
+    }
+
+    const primitiveValues = Object.values(value)
+      .map(item => cleanPrimitive(item))
+      .filter(Boolean);
+
+    if (primitiveValues.length === 1) {
+      return primitiveValues[0].slice(0, maxLength);
+    }
+  }
+
+  return "";
+}
+
+
+function text(value, maxLength = 5000) {
+  return scalarText(value, maxLength);
 }
 
 
@@ -391,38 +449,29 @@ function arrayText(
   maxItems = 10,
   itemLength = 500
 ) {
-  if (!Array.isArray(value)) {
-    return [];
-  }
+  if (!Array.isArray(value)) return [];
 
   return value
-    .map(item =>
-      text(item, itemLength)
-    )
+    .map(item => scalarText(item, itemLength))
+    .map(item => item.replace(/\s+/g, " ").trim())
     .filter(Boolean)
+    .filter(item => item !== "[object Object]")
     .slice(0, maxItems);
 }
 
 
 function sleep(ms) {
-  return new Promise(resolve =>
-    setTimeout(resolve, ms)
-  );
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 
 function currentDate() {
-  return new Date()
-    .toISOString()
-    .slice(0, 10);
+  return new Date().toISOString().slice(0, 10);
 }
 
 
 function getHeader(req, name) {
-  const value =
-    req?.headers?.[
-      name.toLowerCase()
-    ];
+  const value = req?.headers?.[name.toLowerCase()];
 
   if (Array.isArray(value)) {
     return value[0] || "";
@@ -433,85 +482,28 @@ function getHeader(req, name) {
 
 
 // ============================================================
-// DEADLINE HELPERS
-// ============================================================
-
-function createDeadline(timeout) {
-  return Date.now() + timeout;
-}
-
-
-function remainingTime(deadline) {
-  return Math.max(
-    0,
-    deadline - Date.now()
-  );
-}
-
-
-function timeoutFor(
-  desiredTimeout,
-  deadline
-) {
-  const remaining =
-    remainingTime(deadline);
-
-  if (remaining <= 0) {
-    throw new Error(
-      "CARMATCH AI global timeout reached"
-    );
-  }
-
-  return Math.min(
-    desiredTimeout,
-    remaining
-  );
-}
-
-
-// ============================================================
 // JSON PARSING
 // ============================================================
 
 function parseAIJson(raw) {
-  if (
-    raw === null ||
-    raw === undefined ||
-    raw === ""
-  ) {
-    throw new Error(
-      "AI returned an empty response"
-    );
+  if (!raw) {
+    throw new Error("AI returned an empty response");
   }
 
-  let value =
-    String(raw).trim();
+  let value = String(raw).trim();
 
-  value =
-    value
-      .replace(
-        /^```json\s*/i,
-        ""
-      )
-      .replace(
-        /^```\s*/i,
-        ""
-      )
-      .replace(
-        /\s*```$/i,
-        ""
-      )
-      .trim();
+  value = value
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
 
   try {
     return JSON.parse(value);
   } catch (_) {}
 
-  const firstBrace =
-    value.indexOf("{");
-
-  const lastBrace =
-    value.lastIndexOf("}");
+  const firstBrace = value.indexOf("{");
+  const lastBrace = value.lastIndexOf("}");
 
   if (
     firstBrace !== -1 &&
@@ -520,17 +512,12 @@ function parseAIJson(raw) {
   ) {
     try {
       return JSON.parse(
-        value.slice(
-          firstBrace,
-          lastBrace + 1
-        )
+        value.slice(firstBrace, lastBrace + 1)
       );
     } catch (_) {}
   }
 
-  throw new Error(
-    "AI returned invalid JSON"
-  );
+  throw new Error("AI returned invalid JSON");
 }
 
 
@@ -543,25 +530,18 @@ async function fetchWithTimeout(
   options = {},
   timeout = 30000
 ) {
-  const controller =
-    new AbortController();
+  const controller = new AbortController();
 
-  const timer =
-    setTimeout(
-      () =>
-        controller.abort(),
-      timeout
-    );
+  const timer = setTimeout(
+    () => controller.abort(),
+    timeout
+  );
 
   try {
-    return await fetch(
-      url,
-      {
-        ...options,
-        signal:
-          controller.signal
-      }
-    );
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
   } finally {
     clearTimeout(timer);
   }
@@ -573,21 +553,18 @@ async function fetchJson(
   options = {},
   timeout = 30000
 ) {
-  const response =
-    await fetchWithTimeout(
-      url,
-      options,
-      timeout
-    );
+  const response = await fetchWithTimeout(
+    url,
+    options,
+    timeout
+  );
 
-  const raw =
-    await response.text();
+  const raw = await response.text();
 
   let data = null;
 
   try {
-    data =
-      JSON.parse(raw);
+    data = JSON.parse(raw);
   } catch (_) {
     throw new Error(
       `Invalid JSON response from ${url}`
@@ -608,13 +585,8 @@ async function fetchJson(
 // SUPABASE AUTH / RPC
 // ============================================================
 
-async function verifyUser(
-  accessToken
-) {
-  if (
-    !SUPABASE_URL ||
-    !SUPABASE_ANON_KEY
-  ) {
+async function verifyUser(accessToken) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     throw new Error(
       "Supabase environment variables are missing"
     );
@@ -624,29 +596,25 @@ async function verifyUser(
     return null;
   }
 
-  const response =
-    await fetchWithTimeout(
-      `${SUPABASE_URL}/auth/v1/user`,
-      {
-        method: "GET",
-        headers: {
-          apikey:
-            SUPABASE_ANON_KEY,
-          Authorization:
-            `Bearer ${accessToken}`
-        }
-      },
-      SUPABASE_TIMEOUT
-    );
+  const response = await fetchWithTimeout(
+    `${SUPABASE_URL}/auth/v1/user`,
+    {
+      method: "GET",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${accessToken}`
+      }
+    },
+    SUPABASE_TIMEOUT
+  );
 
   if (!response.ok) {
     return null;
   }
 
-  const user =
-    await response.json();
+  const user = await response.json();
 
-  if (!user?.id) {
+  if (!user || !user.id) {
     return null;
   }
 
@@ -654,219 +622,167 @@ async function verifyUser(
 }
 
 
-async function callSupabaseRpc(
+async function callSupabaseRPC(
   functionName,
   accessToken,
-  body
+  body = {}
 ) {
-  const response =
-    await fetchWithTimeout(
-      `${SUPABASE_URL}/rest/v1/rpc/${functionName}`,
-      {
-        method: "POST",
-        headers: {
-          apikey:
-            SUPABASE_ANON_KEY,
-          Authorization:
-            `Bearer ${accessToken}`,
-          "Content-Type":
-            "application/json"
-        },
-        body:
-          JSON.stringify(
-            body || {}
-          )
+  return fetchJson(
+    `${SUPABASE_URL}/rest/v1/rpc/${functionName}`,
+    {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Accept: "application/json"
       },
-      SUPABASE_TIMEOUT
-    );
-
-  const raw =
-    await response.text();
-
-  let data = null;
-
-  try {
-    data =
-      JSON.parse(raw);
-  } catch (_) {
-    data = raw;
-  }
-
-  if (!response.ok) {
-    throw new Error(
-      `Supabase RPC ${functionName} failed: HTTP ${response.status} ${raw.slice(0, 500)}`
-    );
-  }
-
-  return data;
-}
-
-
-function normalizeUsageResult(
-  value
-) {
-  if (Array.isArray(value)) {
-    value = value[0];
-  }
-
-  if (
-    typeof value === "number" ||
-    typeof value === "string"
-  ) {
-    const remaining =
-      Number(value);
-
-    return {
-      allowed:
-        remaining > 0,
-      remaining:
-        Number.isFinite(
-          remaining
-        )
-          ? Math.max(
-              0,
-              remaining
-            )
-          : null
-    };
-  }
-
-  if (
-    !value ||
-    typeof value !== "object"
-  ) {
-    return {
-      allowed: false,
-      remaining: null
-    };
-  }
-
-  const allowed =
-    value.allowed ??
-    value.can_search ??
-    value.canSearch ??
-    value.success ??
-    false;
-
-  const remaining =
-    Number(
-      value.remaining ??
-      value.searches_remaining ??
-      value.remaining_searches ??
-      value.left ??
-      0
-    );
-
-  return {
-    allowed:
-      Boolean(allowed),
-
-    remaining:
-      Number.isFinite(
-        remaining
-      )
-        ? Math.max(
-            0,
-            remaining
-          )
-        : null
-  };
-}
-
-
-async function useSearch(
-  accessToken
-) {
-  const rpcNames = [
-    "use_search",
-    "consume_search",
-    "increment_search"
-  ];
-
-  let lastError = null;
-
-  for (
-    const rpcName
-    of rpcNames
-  ) {
-    try {
-      const result =
-        await callSupabaseRpc(
-          rpcName,
-          accessToken,
-          {
-            max_searches:
-              MAX_SEARCHES_PER_DAY,
-
-            daily_limit:
-              MAX_SEARCHES_PER_DAY
-          }
-        );
-
-      const normalized =
-        normalizeUsageResult(
-          result
-        );
-
-      if (
-        normalized.remaining !==
-          null ||
-        normalized.allowed
-      ) {
-        return normalized;
-      }
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  if (lastError) {
-    throw lastError;
-  }
-
-  throw new Error(
-    "Supabase search usage RPC unavailable"
+      body: JSON.stringify(body)
+    },
+    SUPABASE_TIMEOUT
   );
 }
 
 
-async function refundSearch(
-  accessToken
-) {
-  const rpcNames = [
-    "refund_search",
-    "refund_search_usage",
-    "decrement_search"
+function extractUsageResult(result) {
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+
+  const allowedRaw =
+    result.allowed ??
+    result.can_search ??
+    result.canSearch ??
+    result.success;
+
+  if (typeof allowedRaw !== "boolean") {
+    return null;
+  }
+
+  const remainingNumber = Number(
+    result.remaining ??
+    result.searches_remaining ??
+    result.remaining_searches
+  );
+
+  return {
+    allowed: allowedRaw,
+    remaining: Number.isFinite(remainingNumber)
+      ? Math.max(
+          0,
+          Math.min(
+            MAX_SEARCHES_PER_DAY,
+            Math.round(remainingNumber)
+          )
+        )
+      : 0
+  };
+}
+
+
+async function useSearch(accessToken) {
+  const candidates = [
+    {
+      name: "use_search",
+      bodies: [
+        {},
+        {
+          max_searches: MAX_SEARCHES_PER_DAY,
+          daily_limit: MAX_SEARCHES_PER_DAY
+        }
+      ]
+    },
+    {
+      name: "consume_search",
+      bodies: [
+        {},
+        {
+          max_searches: MAX_SEARCHES_PER_DAY,
+          daily_limit: MAX_SEARCHES_PER_DAY
+        }
+      ]
+    },
+    {
+      name: "increment_search",
+      bodies: [
+        {
+          max_searches: MAX_SEARCHES_PER_DAY,
+          daily_limit: MAX_SEARCHES_PER_DAY
+        },
+        {}
+      ]
+    }
   ];
 
   let lastError = null;
 
-  for (
-    const rpcName
-    of rpcNames
-  ) {
-    try {
-      const result =
-        await callSupabaseRpc(
-          rpcName,
+  for (const candidate of candidates) {
+    for (const body of candidate.bodies) {
+      try {
+        const result = await callSupabaseRPC(
+          candidate.name,
           accessToken,
-          {
-            amount: 1
-          }
+          body
         );
 
-      const normalized =
-        normalizeUsageResult(
+        const usage = extractUsageResult(result);
+
+        if (usage) {
+          return usage;
+        }
+
+        lastError = new Error(
+          `Supabase ${candidate.name} returned an unsupported usage shape`
+        );
+      } catch (error) {
+        lastError = error;
+      }
+    }
+  }
+
+  throw (
+    lastError ||
+    new Error("No usable Supabase search RPC found")
+  );
+}
+
+
+async function refundSearch(accessToken) {
+  const attempts = [
+    {
+      name: "refund_search",
+      bodies: [
+        { amount: 1 },
+        {}
+      ]
+    },
+    {
+      name: "refund_search_usage",
+      bodies: [
+        { amount: 1 },
+        {}
+      ]
+    }
+  ];
+
+  let lastError = null;
+
+  for (const attempt of attempts) {
+    for (const body of attempt.bodies) {
+      try {
+        const result = await callSupabaseRPC(
+          attempt.name,
+          accessToken,
+          body
+        );
+
+        return (
+          extractUsageResult(result) ||
           result
         );
-
-      return {
-        success: true,
-        remaining:
-          normalized.remaining
-      };
-    } catch (error) {
-      lastError = error;
+      } catch (error) {
+        lastError = error;
+      }
     }
   }
 
@@ -875,10 +791,7 @@ async function refundSearch(
     lastError
   );
 
-  return {
-    success: false,
-    remaining: null
-  };
+  return null;
 }
 
 
@@ -887,936 +800,1465 @@ async function refundSearch(
 // ============================================================
 
 function normalizeRequest(body) {
-  const source =
-    body &&
-    typeof body === "object"
+  const safeBody =
+    body && typeof body === "object"
       ? body
       : {};
 
-  const naturalLanguage =
-    text(
-      source.naturalLanguage ??
-      source.query ??
-      source.prompt ??
-      source.search ??
-      "",
-      3000
-    );
-
   const filters =
-    source.filters &&
-    typeof source.filters ===
-      "object"
-      ? source.filters
+    safeBody.filters &&
+    typeof safeBody.filters === "object" &&
+    !Array.isArray(safeBody.filters)
+      ? safeBody.filters
       : {};
 
   return {
-    naturalLanguage,
+    naturalLanguage: text(
+      safeBody.naturalLanguage,
+      3000
+    ),
 
     filters: {
-      budget:
-        text(
-          filters.budget,
-          300
-        ),
-
-      seats:
-        text(
-          filters.seats,
-          100
-        ),
-
-      minPower:
-        text(
-          filters.minPower ??
-          filters.minPowerKw ??
-          filters.power,
-          100
-        ),
-
-      trunk:
-        text(
-          filters.trunk ??
-          filters.minTrunk,
-          100
-        ),
-
-      drive:
-        text(
-          filters.drive ??
-          filters.drivetrain,
-          100
-        ),
-
-      fuel:
-        text(
-          filters.fuel,
-          100
-        ),
-
-      body:
-        text(
-          filters.body ??
-          filters.bodyType,
-          100
-        ),
-
-      style:
-        text(
-          filters.style,
-          150
-        ),
-
-      length:
-        text(
-          filters.length,
-          100
-        ),
-
-      year:
-        text(
-          filters.year,
-          100
-        ),
-
-      avoidBrands:
-        arrayText(
-          filters.avoidBrands ??
-          filters.avoid ??
-          [],
-          30,
-          100
-        )
+      budget: text(filters.budget, 100),
+      seats: text(filters.seats, 100),
+      power: text(filters.power, 100),
+      trunk: text(filters.trunk, 100),
+      drive: text(filters.drive, 100),
+      fuel: text(filters.fuel, 100),
+      body: text(filters.body, 100),
+      style: text(filters.style, 100),
+      length: text(filters.length, 100),
+      year: text(filters.year, 100),
+      avoid: text(filters.avoid, 500)
     }
   };
 }
 
 
+function detectMarket(request) {
+  const content =
+    `${request.naturalLanguage} ${JSON.stringify(request.filters)}`
+      .toLowerCase();
+
+  if (
+    content.includes("slovensko") ||
+    content.includes("slovakia") ||
+    content.includes("slovak") ||
+    content.includes("eur") ||
+    content.includes("€")
+  ) {
+    return "Slovakia / European Union";
+  }
+
+  return "Europe / European Union";
+}
+
+
 // ============================================================
-// AUTOMOTIVE PROMPT
+// POWER NORMALIZATION
+// ============================================================
+//
+// Final output is ALWAYS:
+//
+//     500 kW / 671 HP
+//
+// HP = mechanical horsepower.
+// 1 kW = 1.34102209 HP
+//
+// PS, ks, CV and metric horsepower are interpreted as metric
+// horsepower first, then converted through kW.
 // ============================================================
 
-function buildResearchPrompt(
-  request
+function parseNumeric(value) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return null;
+  }
+
+  const match = String(value)
+    .replace(/,/g, ".")
+    .match(
+      /-?\d+(?:\.\d+)?/
+    );
+
+  if (!match) {
+    return null;
+  }
+
+  const number = Number(match[0]);
+
+  return Number.isFinite(number)
+    ? number
+    : null;
+}
+
+
+function normalizePower(value) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return "";
+  }
+
+  if (isPlainObject(value)) {
+    const nestedCandidates = [
+      value.power,
+      value.output,
+      value.maximum,
+      value.max,
+      value.value
+    ];
+
+    const directKw = parseNumeric(
+      value.kw ??
+      value.kW ??
+      value.kilowatts
+    );
+
+    const directHp = parseNumeric(
+      value.hp ??
+      value.HP ??
+      value.bhp ??
+      value.horsepower
+    );
+
+    const unit = String(
+      value.unit ??
+      value.unitOfMeasure ??
+      value.units ??
+      ""
+    ).toLowerCase();
+
+    if (
+      directKw &&
+      directKw > 0
+    ) {
+      const hp = Math.round(
+        directKw * POWER_KW_TO_HP
+      );
+
+      return `${Math.round(directKw)} kW / ${hp} HP`;
+    }
+
+    if (
+      directHp &&
+      directHp > 0
+    ) {
+      const kw = Math.round(
+        directHp * POWER_HP_TO_KW
+      );
+
+      return `${kw} kW / ${Math.round(directHp)} HP`;
+    }
+
+    const objectValue = parseNumeric(
+      value.value
+    );
+
+    if (
+      objectValue &&
+      objectValue > 0 &&
+      /kw|kilowatt/.test(unit)
+    ) {
+      const hp = Math.round(
+        objectValue * POWER_KW_TO_HP
+      );
+
+      return `${Math.round(objectValue)} kW / ${hp} HP`;
+    }
+
+    if (
+      objectValue &&
+      objectValue > 0 &&
+      /hp|horsepower|bhp|ps|cv|ks|koni|koní/.test(unit)
+    ) {
+      const kw =
+        /ps|cv|ks|koni|koní/.test(unit)
+          ? Math.round(
+              objectValue * 0.73549875
+            )
+          : Math.round(
+              objectValue * POWER_HP_TO_KW
+            );
+
+      const hp = Math.round(
+        kw * POWER_KW_TO_HP
+      );
+
+      return `${kw} kW / ${hp} HP`;
+    }
+
+    for (const nested of nestedCandidates) {
+      const normalized =
+        normalizePower(nested);
+
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    const combined =
+      scalarText(value, 300);
+
+    if (combined) {
+      return normalizePower(combined);
+    }
+
+    return "";
+  }
+
+  const raw =
+    scalarText(value, 500);
+
+  if (!raw) {
+    return "";
+  }
+
+  const kwMatch =
+    raw.match(
+      /(\d+(?:[.,]\d+)?)\s*kW\b/i
+    );
+
+  if (kwMatch) {
+    const kw =
+      parseNumeric(kwMatch[1]);
+
+    if (
+      kw &&
+      kw > 0 &&
+      kw < 3000
+    ) {
+      const hp = Math.round(
+        kw * POWER_KW_TO_HP
+      );
+
+      return `${Math.round(kw)} kW / ${hp} HP`;
+    }
+  }
+
+  const hpMatch =
+    raw.match(
+      /(\d+(?:[.,]\d+)?)\s*(?:hp|horsepower|bhp)\b/i
+    );
+
+  if (hpMatch) {
+    const hp =
+      parseNumeric(hpMatch[1]);
+
+    if (
+      hp &&
+      hp > 0 &&
+      hp < 5000
+    ) {
+      const kw = Math.round(
+        hp * POWER_HP_TO_KW
+      );
+
+      return `${kw} kW / ${Math.round(hp)} HP`;
+    }
+  }
+
+  const metricMatch =
+    raw.match(
+      /(\d+(?:[.,]\d+)?)\s*(?:PS|Pferdestärke(?:n)?|CV|ks|koni|koní|kon[eí]?)\b/i
+    );
+
+  if (metricMatch) {
+    const metricHp =
+      parseNumeric(metricMatch[1]);
+
+    if (
+      metricHp &&
+      metricHp > 0 &&
+      metricHp < 5000
+    ) {
+      const kw = Math.round(
+        metricHp * 0.73549875
+      );
+
+      const hp = Math.round(
+        kw * POWER_KW_TO_HP
+      );
+
+      return `${kw} kW / ${hp} HP`;
+    }
+  }
+
+  const bare =
+    parseNumeric(raw);
+
+  if (
+    bare &&
+    bare > 0 &&
+    bare < 3000 &&
+    /^\s*\d+(?:[.,]\d+)?\s*$/.test(raw)
+  ) {
+    const kw =
+      Math.round(bare);
+
+    const hp =
+      Math.round(
+        kw * POWER_KW_TO_HP
+      );
+
+    return `${kw} kW / ${hp} HP`;
+  }
+
+  return "";
+}
+
+
+// ============================================================
+// PRICE NORMALIZATION
+// ============================================================
+
+function normalizePrice(value) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return "";
+  }
+
+  if (isPlainObject(value)) {
+    const amount =
+      parseNumeric(
+        value.amount ??
+        value.price ??
+        value.value ??
+        value.min ??
+        value.startingPrice
+      );
+
+    const currency =
+      String(
+        value.currency ??
+        value.currencyCode ??
+        "EUR"
+      ).toUpperCase();
+
+    const from =
+      Boolean(
+        value.from ??
+        value.starting ??
+        value.startingAt
+      );
+
+    if (
+      amount &&
+      amount >= 1000 &&
+      amount <= 10000000 &&
+      currency === "EUR"
+    ) {
+      return formatDetectedEuroPrice(
+        amount,
+        from
+      );
+    }
+
+    for (
+      const nested of [
+        value.price,
+        value.amount,
+        value.value,
+        value.formatted,
+        value.display
+      ]
+    ) {
+      const normalized =
+        normalizePrice(nested);
+
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    return "";
+  }
+
+  let price =
+    scalarText(value, 300)
+      .replace(/\u00a0/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!price) {
+    return "";
+  }
+
+  const lower =
+    price.toLowerCase();
+
+  const unavailable = [
+    "cena nie je dostupná",
+    "cena nie je k dispozícii",
+    "cena nie je k dispozicii",
+    "price unavailable",
+    "price not available",
+    "not available",
+    "n/a",
+    "unknown",
+    "unknown price",
+    "neznáma cena",
+    "neznamá cena",
+    "neuvedené",
+    "neuvedena",
+    "tbc",
+    "tba"
+  ];
+
+  if (
+    unavailable.some(
+      item => lower.includes(item)
+    )
+  ) {
+    return "";
+  }
+
+  const euro =
+    price.match(
+      /(?:od\s*|from\s*|starting(?:\s+at)?\s*)?(?:€\s*)?(\d{1,3}(?:[ .]\d{3})+(?:[,.]\d{2})?|\d{4,8}(?:[,.]\d{2})?)\s*(?:€|EUR)\b/i
+    );
+
+  if (euro) {
+    const rawNumber =
+      euro[1]
+        .replace(/\s/g, "")
+        .replace(
+          /\.(?=\d{3}(?:\D|$))/g,
+          ""
+        )
+        .replace(
+          /,(\d{2})$/,
+          ".$1"
+        );
+
+    const amount =
+      Number(rawNumber);
+
+    if (
+      Number.isFinite(amount) &&
+      amount >= 1000 &&
+      amount <= 10000000
+    ) {
+      return formatDetectedEuroPrice(
+        amount,
+        /^(?:od|from|starting|cena\s+od)\b/i.test(price)
+      );
+    }
+  }
+
+  return price.slice(0, 160);
+}
+
+
+function priceHasNumber(value) {
+  return /\d/.test(
+    normalizePrice(value)
+  );
+}
+
+
+// ============================================================
+// URL / DOMAIN VALIDATION
+// ============================================================
+
+function hostnameOf(url) {
+  try {
+    return new URL(url)
+      .hostname
+      .toLowerCase()
+      .replace(/^www\./, "");
+  } catch (_) {
+    return "";
+  }
+}
+
+
+function isBlockedHost(host) {
+  if (!host) {
+    return true;
+  }
+
+  return OBVIOUS_THIRD_PARTY_HOSTS.some(
+    domain =>
+      host === domain ||
+      host.endsWith(`.${domain}`)
+  );
+}
+
+
+function brandKeyFromName(name) {
+  const lower =
+    String(name || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+
+  const keys =
+    Object.keys(
+      OFFICIAL_DOMAIN_HINTS
+    ).sort(
+      (a, b) =>
+        b.length - a.length
+    );
+
+  for (const key of keys) {
+    if (lower.includes(key)) {
+      return key;
+    }
+  }
+
+  if (lower.includes("mercedes")) {
+    return "mercedes";
+  }
+
+  if (lower.includes("alfa romeo")) {
+    return "alfaromeo";
+  }
+
+  if (lower.includes("land rover")) {
+    return "landrover";
+  }
+
+  return "";
+}
+
+
+function isOfficialManufacturerURL(
+  url,
+  carName = ""
 ) {
+  if (
+    !url ||
+    typeof url !== "string"
+  ) {
+    return false;
+  }
+
+  try {
+    const parsed =
+      new URL(url);
+
+    if (
+      parsed.protocol !== "https:"
+    ) {
+      return false;
+    }
+
+    const host =
+      parsed.hostname
+        .toLowerCase()
+        .replace(/^www\./, "");    const hostname = parsed.hostname.toLowerCase();
+
+    const hostMatches = OFFICIAL_MANUFACTURER_DOMAINS.some(
+      domain =>
+        hostname === domain ||
+        hostname.endsWith(`.${domain}`)
+    );
+
+    if (!hostMatches) {
+      return false;
+    }
+
+    const expectedBrands = [
+      ...manufacturerNamesFromCar(carName),
+      ...OFFICIAL_DOMAIN_BRAND_HINTS
+        .filter(item => item.domain === hostname)
+        .map(item => item.brand)
+    ];
+
+    if (expectedBrands.length === 0) {
+      return true;
+    }
+
+    const normalizedHost = normalizedSearchString(
+      hostname.replace(/\.(com|sk|de|fr|it|es|co\.uk|nl|be|at|ch|pl|cz|se|no|dk|fi|eu)$/i, "")
+    );
+
+    const normalizedCar = normalizedSearchString(carName);
+
+    const brandMatch = expectedBrands.some(brand => {
+      const normalizedBrand =
+        normalizedSearchString(brand);
+
+      return (
+        normalizedCar.includes(normalizedBrand) ||
+        normalizedHost.includes(normalizedBrand)
+      );
+    });
+
+    return brandMatch;
+  } catch (_) {
+    return false;
+  }
+}
+
+
+function extractMessageContent(apiData) {
+  const choices = apiData?.choices;
+
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return "";
+  }
+
+  const message = choices[0]?.message;
+
+  if (!message) {
+    return "";
+  }
+
+  const direct = scalarText(
+    message.content,
+    300000
+  );
+
+  if (direct) {
+    return direct;
+  }
+
+  if (Array.isArray(message.content)) {
+    const pieces = [];
+
+    for (const item of message.content) {
+      const value = scalarText(
+        item,
+        100000
+      );
+
+      if (value) {
+        pieces.push(value);
+      }
+    }
+
+    if (pieces.length > 0) {
+      return pieces.join("\n");
+    }
+  }
+
+  const outputText = scalarText(
+    apiData.output_text,
+    300000
+  );
+
+  if (outputText) {
+    return outputText;
+  }
+
+  return "";
+}
+
+
+function parseAIJson(content) {
+  let textContent = scalarText(
+    content,
+    500000
+  ).trim();
+
+  if (!textContent) {
+    throw new Error("AI returned empty response");
+  }
+
+  textContent = textContent
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  try {
+    return JSON.parse(textContent);
+  } catch (_) {
+    const firstBrace = textContent.indexOf("{");
+    const lastBrace = textContent.lastIndexOf("}");
+
+    if (
+      firstBrace >= 0 &&
+      lastBrace > firstBrace
+    ) {
+      const possibleJson =
+        textContent.slice(
+          firstBrace,
+          lastBrace + 1
+        );
+
+      try {
+        return JSON.parse(possibleJson);
+      } catch (_) {
+        // Continue to array recovery below.
+      }
+    }
+
+    const firstBracket = textContent.indexOf("[");
+    const lastBracket = textContent.lastIndexOf("]");
+
+    if (
+      firstBracket >= 0 &&
+      lastBracket > firstBracket
+    ) {
+      const possibleArray =
+        textContent.slice(
+          firstBracket,
+          lastBracket + 1
+        );
+
+      try {
+        return {
+          cars: JSON.parse(possibleArray)
+        };
+      } catch (_) {
+        // Final error below.
+      }
+    }
+
+    throw new Error(
+      "AI returned invalid JSON"
+    );
+  }
+}
+
+
+function normalizePower(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return "";
+  }
+
+  if (
+    typeof value === "object" &&
+    !Array.isArray(value)
+  ) {
+    if (
+      value.kw !== undefined ||
+      value.kW !== undefined
+    ) {
+      const kw = Number(
+        value.kw ?? value.kW
+      );
+
+      if (Number.isFinite(kw) && kw > 0) {
+        const hp = Math.round(
+          kw * POWER_KW_TO_HP
+        );
+
+        return `${Math.round(kw)} kW / ${hp} HP`;
+      }
+    }
+
+    if (
+      value.hp !== undefined ||
+      value.HP !== undefined
+    ) {
+      const hp = Number(
+        value.hp ?? value.HP
+      );
+
+      if (Number.isFinite(hp) && hp > 0) {
+        const kw = Math.round(
+          hp * POWER_HP_TO_KW
+        );
+
+        return `${kw} kW / ${Math.round(hp)} HP`;
+      }
+    }
+
+    const unit = scalarText(
+      value.unit ||
+      value.unitOfMeasure ||
+      value.units,
+      30
+    ).toLowerCase();
+
+    const nestedValue =
+      value.value ??
+      value.amount ??
+      value.number;
+
+    if (
+      nestedValue !== undefined &&
+      unit
+    ) {
+      const numeric =
+        Number(nestedValue);
+
+      if (
+        Number.isFinite(numeric) &&
+        numeric > 0
+      ) {
+        if (
+          unit === "kw" ||
+          unit === "kilowatt" ||
+          unit === "kilowatts"
+        ) {
+          return `${Math.round(numeric)} kW / ${Math.round(
+            numeric * POWER_KW_TO_HP
+          )} HP`;
+        }
+
+        if (
+          unit === "hp" ||
+          unit === "horsepower" ||
+          unit === "bhp"
+        ) {
+          return `${Math.round(
+            numeric * POWER_HP_TO_KW
+          )} kW / ${Math.round(numeric)} HP`;
+        }
+
+        if (
+          unit === "ps" ||
+          unit === "ks" ||
+          unit === "cv"
+        ) {
+          const hp =
+            numeric / 1.01387;
+
+          return `${Math.round(
+            hp * POWER_HP_TO_KW
+          )} kW / ${Math.round(hp)} HP`;
+        }
+      }
+    }
+
+    const nestedCandidates = [
+      value.power,
+      value.output,
+      value.maximum,
+      value.max
+    ];
+
+    for (const nested of nestedCandidates) {
+      const normalized =
+        normalizePower(nested);
+
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    const fallback =
+      scalarText(value, 200);
+
+    if (fallback) {
+      return normalizePower(fallback);
+    }
+
+    return "";
+  }
+
+  const source =
+    String(value)
+      .replace(/,/g, ".")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!source) {
+    return "";
+  }
+
+  const kwMatch =
+    source.match(
+      /(\d+(?:\.\d+)?)\s*kW\b/i
+    );
+
+  if (kwMatch) {
+    const kw = Number(
+      kwMatch[1]
+    );
+
+    if (
+      Number.isFinite(kw) &&
+      kw > 0
+    ) {
+      return `${Math.round(kw)} kW / ${Math.round(
+        kw * POWER_KW_TO_HP
+      )} HP`;
+    }
+  }
+
+  const hpMatch =
+    source.match(
+      /(\d+(?:\.\d+)?)\s*(?:HP|bhp|horsepower)\b/i
+    );
+
+  if (hpMatch) {
+    const hp = Number(
+      hpMatch[1]
+    );
+
+    if (
+      Number.isFinite(hp) &&
+      hp > 0
+    ) {
+      return `${Math.round(
+        hp * POWER_HP_TO_KW
+      )} kW / ${Math.round(hp)} HP`;
+    }
+  }
+
+  const psMatch =
+    source.match(
+      /(\d+(?:\.\d+)?)\s*(?:PS|ks|CV)\b/i
+    );
+
+  if (psMatch) {
+    const ps = Number(
+      psMatch[1]
+    );
+
+    if (
+      Number.isFinite(ps) &&
+      ps > 0
+    ) {
+      const hp =
+        ps / 1.01387;
+
+      return `${Math.round(
+        hp * POWER_HP_TO_KW
+      )} kW / ${Math.round(hp)} HP`;
+    }
+  }
+
+  const number =
+    Number(
+      source.replace(
+        /[^\d.]/g,
+        ""
+      )
+    );
+
+  if (
+    Number.isFinite(number) &&
+    number > 0
+  ) {
+    if (
+      number >= 20 &&
+      number <= 1500
+    ) {
+      const kw =
+        number > 250
+          ? number * POWER_HP_TO_KW
+          : number;
+
+      const hp =
+        kw * POWER_KW_TO_HP;
+
+      return `${Math.round(kw)} kW / ${Math.round(hp)} HP`;
+    }
+  }
+
+  return "";
+}
+
+
+function normalizePrice(value) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return "";
+  }
+
+  if (
+    typeof value === "object" &&
+    !Array.isArray(value)
+  ) {
+    const preferred = [
+      value.price,
+      value.amount,
+      value.value,
+      value.display,
+      value.formatted,
+      value.text
+    ];
+
+    for (const item of preferred) {
+      const normalized =
+        normalizePrice(item);
+
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    return "";
+  }
+
+  const textValue =
+    String(value)
+      .replace(/\u00a0/g, " ")
+      .trim();
+
+  if (!textValue) {
+    return "";
+  }
+
+  const lower =
+    textValue.toLowerCase();
+
+  const unavailable = [
+    "n/a",
+    "na",
+    "unknown",
+    "unknown price",
+    "not available",
+    "price unavailable",
+    "unavailable",
+    "contact dealer",
+    "contact us",
+    "on request",
+    "price on request",
+    "cena na vyziadanie",
+    "cena na vyžiadanie",
+    "cena nie je dostupná",
+    "nezname",
+    "neznáme"
+  ];
+
+  if (
+    unavailable.some(
+      item => lower === item
+    )
+  ) {
+    return "";
+  }
+
+  const match =
+    textValue.match(
+      /(?:€|EUR)\s*([\d\s.,]+)|([\d\s.,]+)\s*(?:€|EUR)/i
+    );
+
+  if (!match) {
+    return "";
+  }
+
+  const numberText =
+    (match[1] || match[2] || "")
+      .replace(/\s/g, "")
+      .replace(
+        /(\d)\.(?=\d{3}(?:\D|$))/g,
+        "$1"
+      )
+      .replace(
+        /,(\d{2})$/,
+        ".$1"
+      );
+
+  const amount =
+    Number(numberText);
+
+  if (
+    !Number.isFinite(amount) ||
+    amount < 1000 ||
+    amount > 10000000
+  ) {
+    return "";
+  }
+
+  const formatted =
+    Math.round(amount)
+      .toLocaleString(
+        "sk-SK",
+        {
+          maximumFractionDigits: 0,
+          useGrouping: true
+        }
+      )
+      .replace(
+        /\u00a0/g,
+        " "
+      );
+
+  return `€${formatted}`;
+}
+
+
+function priceHasNumber(value) {
+  return Boolean(
+    normalizePrice(value)
+  );
+}
+
+
+function buildVehicleName(car) {
+  const brand =
+    scalarText(
+      car.brand ||
+      car.make,
+      100
+    );
+
+  const model =
+    scalarText(
+      car.model ||
+      car.name,
+      200
+    );
+
+  if (
+    model &&
+    brand &&
+    !normalizedSearchString(model).startsWith(
+      normalizedSearchString(brand)
+    )
+  ) {
+    return `${brand} ${model}`.trim();
+  }
+
+  return model || brand || "";
+}
+
+
+function validateCars(parsed) {
+  const source =
+    Array.isArray(parsed)
+      ? parsed
+      : parsed?.cars;
+
+  if (
+    !Array.isArray(source)
+  ) {
+    throw new Error(
+      "AI response does not contain cars array"
+    );
+  }
+
+  if (source.length !== 3) {
+    throw new Error(
+      `AI returned ${source.length} cars instead of exactly 3`
+    );
+  }
+
+  return source.map(
+    (rawCar, index) => {
+      if (
+        !rawCar ||
+        typeof rawCar !== "object"
+      ) {
+        throw new Error(
+          `Invalid car object at position ${index + 1}`
+        );
+      }
+
+      const name =
+        buildVehicleName(
+          rawCar
+        );
+
+      if (!name) {
+        throw new Error(
+          `Vehicle name missing at position ${index + 1}`
+        );
+      }
+
+      const generation =
+        scalarText(
+          rawCar.generation,
+          300
+        );
+
+      if (!generation) {
+        throw new Error(
+          `Generation missing for ${name}`
+        );
+      }
+
+      const year =
+        Number(rawCar.year);
+
+      if (
+        !Number.isFinite(year) ||
+        year < 2000 ||
+        year > 2100
+      ) {
+        throw new Error(
+          `Invalid model year for ${name}`
+        );
+      }
+
+      return {
+        ...rawCar,
+        name,
+        generation,
+        year,
+        power:
+          normalizePower(
+            rawCar.power
+          ),
+        price:
+          normalizePrice(
+            rawCar.price
+          ),
+        seats:
+          Number.isFinite(
+            Number(rawCar.seats)
+          )
+            ? Math.round(
+                Number(rawCar.seats)
+              )
+            : null,
+        trunk:
+          scalarText(
+            rawCar.trunk,
+            150
+          ),
+        drive:
+          scalarText(
+            rawCar.drive,
+            150
+          ),
+        fuel:
+          scalarText(
+            rawCar.fuel,
+            150
+          ),
+        transmission:
+          scalarText(
+            rawCar.transmission,
+            150
+          ),
+        body:
+          scalarText(
+            rawCar.body,
+            150
+          ),
+        reason:
+          scalarText(
+            rawCar.reason,
+            1500
+          ),
+        pros:
+          arrayText(
+            rawCar.pros,
+            8,
+            500
+          ),
+        cons:
+          arrayText(
+            rawCar.cons,
+            8,
+            500
+          ),
+        maintenance:
+          scalarText(
+            rawCar.maintenance,
+            1500
+          ),
+        image:
+          scalarText(
+            rawCar.image,
+            3000
+          ),
+        photoSource:
+          scalarText(
+            rawCar.photoSource,
+            3000
+          ),
+        configurator:
+          scalarText(
+            rawCar.configurator,
+            3000
+          ),
+        priceSource:
+          scalarText(
+            rawCar.priceSource,
+            3000
+          ),
+        priceVerified:
+          rawCar.priceVerified === true,
+        priceVerification:
+          scalarText(
+            rawCar.priceVerification,
+            100
+          ),
+        dataSources:
+          arrayText(
+            rawCar.dataSources,
+            MAX_DATA_SOURCES,
+            1200
+          ),
+        imageCandidates:
+          Array.isArray(
+            rawCar.imageCandidates
+          )
+            ? rawCar.imageCandidates
+            : []
+      };
+    }
+  );
+}
+
+
+// ============================================================
+// REQUEST NORMALIZATION
+// ============================================================
+
+function normalizeRequest(body) {
+  const naturalLanguage =
+    scalarText(
+      body?.naturalLanguage ||
+      body?.query ||
+      body?.prompt ||
+      body?.description,
+      3000
+    );
+
+  const filters =
+    body?.filters &&
+    typeof body.filters === "object"
+      ? body.filters
+      : {};
+
+  return {
+    naturalLanguage,
+    filters
+  };
+}
+
+
+// ============================================================
+// PROMPT
+// ============================================================
+
+function buildPrompt(request, mode = "research") {
+  const filtersJson =
+    JSON.stringify(
+      request.filters || {},
+      null,
+      2
+    );
+
   return `
 You are CARMATCH AI, an automotive research assistant.
 
-CURRENT DATE:
-${currentDate()}
+The user wants EXACTLY 3 real, currently available new cars.
 
 USER REQUEST:
-${request.naturalLanguage || "(No natural-language request)"}
+${request.naturalLanguage || "No natural-language request."}
 
 FILTERS:
-${JSON.stringify(
-  request.filters,
-  null,
-  2
-)}
+${filtersJson}
 
-YOUR TASK:
-Find exactly 3 real passenger cars that best satisfy the user's
-explicit requirements.
+============================================================
+CORE RULES
+============================================================
 
-IMPORTANT:
-- Research CURRENT vehicles available in the requested market.
-- Prefer the newest currently sold generation.
-- Do not recommend discontinued generations unless the user
-  explicitly asks for older/used vehicles.
-- Do not invent models, prices, specifications, URLs, generations,
-  equipment or availability.
-- If a price cannot be verified, use "Cena na vyžiadanie".
-- If an official price/configurator URL cannot be verified,
-  return an empty URL instead of inventing one.
-- Power MUST use kW and mechanical horsepower.
-- Never use PS, CV, ks or bhp as the primary output.
-- Use exact current-generation/model-year information whenever
-  available.
-- Respect seats, body style, drivetrain, fuel, power, trunk,
-  dimensions, budget and other explicit requirements.
-- Do not silently relax an explicit user requirement.
-- If an exact requirement cannot be met, choose the closest
-  documented alternative and explain why.
-- Avoid brands listed by the user.
-- Do not return motorcycles, trucks, buses or commercial vehicles.
-- Return exactly 3 cars.
+1. Return EXACTLY 3 vehicles.
+2. Recommend real production vehicles.
+3. Prioritize current 2026 model-year vehicles and current generations.
+4. Do not invent models, generations, prices, specifications, URLs or photos.
+5. If a price cannot be verified, return an unavailable price instead of guessing.
+6. Prefer official manufacturer sources.
+7. Do not use concept cars unless the user explicitly asks for concepts.
+8. Do not use discontinued generations when a current generation exists.
+9. Respect the user's filters.
+10. Explain briefly why each vehicle fits.
+11. Output must be valid JSON only.
+12. Output must be in Slovak.
+13. Power must be returned as "XXX kW / YYY HP".
+14. HP means mechanical horsepower.
+15. Conversion:
+    1 kW = 1.34102209 HP.
+16. Never use PS, ks, CV, bhp or koní as the final power unit.
+17. Do not return markdown.
+18. Do not return commentary outside JSON.
 
-PRICE RULE:
-Prefer official manufacturer pricing from the manufacturer's
-official website for the relevant country/market.
-If an official price is unavailable, use a trustworthy source
-and clearly identify it.
-Never fabricate a price.
+============================================================
+PRICE RULES
+============================================================
 
-IMAGE RULE:
-Do NOT invent image URLs.
-Return image/photoSource as empty strings.
-The backend will search Wikimedia Commons/Wikipedia separately.
+- Prefer official manufacturer prices.
+- Prefer Slovak or EU manufacturer pages.
+- If the exact current price cannot be verified:
+  "Cena na vyžiadanie"
+- Never invent a price.
+- Never use a monthly finance payment as vehicle price.
+- Never use a deposit as vehicle price.
+- Never use a used-car price as a new-car price.
+- Never use a marketplace price as an official manufacturer price.
 
-JSON RULE:
-Return ONLY a JSON object.
-Do not use markdown.
-Do not write an explanation before or after the JSON.
-Do not wrap the JSON in \`\`\` fences.
+============================================================
+URL RULES
+============================================================
 
-Required structure:
+configurator:
+- Must be a real official manufacturer configurator URL.
+- Empty string if unavailable.
+
+priceSource:
+- Must be an official manufacturer URL supporting the price.
+- Empty string if unavailable.
+
+dataSources:
+- Use real URLs.
+- Prefer official manufacturer sources.
+- Do not invent URLs.
+
+============================================================
+IMAGE RULES
+============================================================
+
+Do not generate image URLs.
+The backend will independently find photos through Wikimedia Commons
+and Wikipedia.
+
+Return:
+"image": "",
+"photoSource": "",
+"imageCandidates": []
+
+============================================================
+OUTPUT SCHEMA
+============================================================
 
 {
   "cars": [
     {
-      "rank": 1,
-      "brand": "",
-      "model": "",
+      "name": "",
       "generation": "",
-      "modelYear": "",
+      "year": 2026,
+      "score": 0,
       "price": "",
-      "priceCurrency": "EUR",
-      "priceSource": "",
-      "configuratorUrl": "",
-      "power": {
-        "kw": "",
-        "hp": ""
-      },
-      "fuel": "",
+      "power": "",
+      "seats": 0,
+      "trunk": "",
       "drive": "",
+      "fuel": "",
       "transmission": "",
       "body": "",
-      "seats": "",
-      "trunkLiters": "",
-      "lengthMm": "",
-      "description": "",
+      "reason": "",
       "pros": [],
       "cons": [],
       "maintenance": "",
-      "officialUrl": "",
-      "dataSources": [],
       "image": "",
-      "photoSource": ""
+      "photoSource": "",
+      "imageCandidates": [],
+      "configurator": "",
+      "priceSource": "",
+      "priceVerified": false,
+      "priceVerification": "unverified",
+      "dataSources": []
     }
-  ],
-  "liveWeb": true
+  ]
 }
 
-The response must contain exactly 3 cars.
+Exactly 3 cars.
 `;
 }
 
 
 // ============================================================
-// ROBUST AI CONTENT EXTRACTION
-// ============================================================
-
-function contentPartToText(
-  part
-) {
-  if (
-    part === null ||
-    part === undefined
-  ) {
-    return "";
-  }
-
-  if (
-    typeof part === "string"
-  ) {
-    return part;
-  }
-
-  if (
-    typeof part === "number" ||
-    typeof part === "boolean"
-  ) {
-    return String(part);
-  }
-
-  if (
-    typeof part === "object"
-  ) {
-    if (
-      typeof part.text ===
-        "string"
-    ) {
-      return part.text;
-    }
-
-    if (
-      typeof part.content ===
-        "string"
-    ) {
-      return part.content;
-    }
-
-    if (
-      typeof part.output_text ===
-        "string"
-    ) {
-      return part.output_text;
-    }
-
-    if (
-      typeof part.value ===
-        "string"
-    ) {
-      return part.value;
-    }
-
-    return "";
-  }
-
-  return "";
-}
-
-
-function extractMessageContent(
-  data
-) {
-  const choice =
-    data?.choices?.[0];
-
-  if (!choice) {
-    return "";
-  }
-
-  const message =
-    choice.message || {};
-
-  const content =
-    message.content ??
-    choice.content ??
-    choice.text ??
-    "";
-
-  if (
-    Array.isArray(content)
-  ) {
-    return content
-      .map(
-        contentPartToText
-      )
-      .filter(Boolean)
-      .join("\n");
-  }
-
-  const direct =
-    contentPartToText(
-      content
-    );
-
-  if (direct.trim()) {
-    return direct;
-  }
-
-  // Some OpenAI-compatible providers
-  // put generated text into output_text.
-  if (
-    typeof data.output_text ===
-      "string" &&
-    data.output_text.trim()
-  ) {
-    return data.output_text;
-  }
-
-  // Some providers return output blocks.
-  if (
-    Array.isArray(data.output)
-  ) {
-    const outputText =
-      data.output
-        .map(item => {
-          if (
-            typeof item ===
-              "string"
-          ) {
-            return item;
-          }
-
-          if (
-            typeof item?.text ===
-              "string"
-          ) {
-            return item.text;
-          }
-
-          if (
-            Array.isArray(
-              item?.content
-            )
-          ) {
-            return item.content
-              .map(
-                contentPartToText
-              )
-              .join("\n");
-          }
-
-          return "";
-        })
-        .filter(Boolean)
-        .join("\n");
-
-    if (
-      outputText.trim()
-    ) {
-      return outputText;
-    }
-  }
-
-  return "";
-}
-
-
-function summarizeProviderResponse(
-  data
-) {
-  try {
-    const choice =
-      data?.choices?.[0];
-
-    return {
-      hasChoices:
-        Array.isArray(
-          data?.choices
-        ),
-
-      choices:
-        Array.isArray(
-          data?.choices
-        )
-          ? data.choices.length
-          : 0,
-
-      finishReason:
-        choice?.finish_reason ||
-        "",
-
-      hasMessage:
-        Boolean(
-          choice?.message
-        ),
-
-      contentType:
-        Array.isArray(
-          choice?.message?.content
-        )
-          ? "array"
-          : typeof
-              choice?.message?.content,
-
-      hasToolCalls:
-        Array.isArray(
-          choice?.message?.tool_calls
-        ) &&
-        choice.message
-          .tool_calls.length >
-          0,
-
-      hasOutput:
-        Array.isArray(
-          data?.output
-        ) &&
-        data.output.length >
-          0
-    };
-  } catch (_) {
-    return {
-      parseError: true
-    };
-  }
-}
-
-
-// ============================================================
-// CAR NORMALIZATION
-// ============================================================
-
-function normalizeBrand(
-  value
-) {
-  return text(
-    value,
-    100
-  );
-}
-
-
-function normalizeModel(
-  value
-) {
-  return text(
-    value,
-    150
-  );
-}
-
-
-function normalizePower(
-  value
-) {
-  if (!value) {
-    return {
-      kw: "",
-      hp: ""
-    };
-  }
-
-  if (
-    typeof value ===
-      "object"
-  ) {
-    let kw =
-      Number(
-        String(
-          value.kw ??
-          ""
-        )
-          .replace(
-            ",",
-            "."
-          )
-          .replace(
-            /[^\d.]/g,
-            ""
-          )
-      );
-
-    let hp =
-      Number(
-        String(
-          value.hp ??
-          ""
-        )
-          .replace(
-            ",",
-            "."
-          )
-          .replace(
-            /[^\d.]/g,
-            ""
-          )
-      );
-
-    if (
-      !Number.isFinite(kw) &&
-      Number.isFinite(hp)
-    ) {
-      kw =
-        hp *
-        POWER_HP_TO_KW;
-    }
-
-    if (
-      !Number.isFinite(hp) &&
-      Number.isFinite(kw)
-    ) {
-      hp =
-        kw *
-        POWER_KW_TO_HP;
-    }
-
-    return {
-      kw:
-        Number.isFinite(kw)
-          ? `${Math.round(kw)} kW`
-          : "",
-
-      hp:
-        Number.isFinite(hp)
-          ? `${Math.round(hp)} hp`
-          : ""
-    };
-  }
-
-  const raw =
-    String(value)
-      .toLowerCase()
-      .replace(
-        ",",
-        "."
-      )
-      .trim();
-
-  const kwMatch =
-    raw.match(
-      /(\d+(?:\.\d+)?)\s*kw/
-    );
-
-  const hpMatch =
-    raw.match(
-      /(\d+(?:\.\d+)?)\s*(?:hp|bhp|ps|cv|ks)/
-    );
-
-  let kw =
-    kwMatch
-      ? Number(
-          kwMatch[1]
-        )
-      : NaN;
-
-  let hp =
-    hpMatch
-      ? Number(
-          hpMatch[1]
-        )
-      : NaN;
-
-  if (
-    !Number.isFinite(kw) &&
-    Number.isFinite(hp)
-  ) {
-    kw =
-      hp *
-      POWER_HP_TO_KW;
-  }
-
-  if (
-    !Number.isFinite(hp) &&
-    Number.isFinite(kw)
-  ) {
-    hp =
-      kw *
-      POWER_KW_TO_HP;
-  }
-
-  return {
-    kw:
-      Number.isFinite(kw)
-        ? `${Math.round(kw)} kW`
-        : "",
-
-    hp:
-      Number.isFinite(hp)
-        ? `${Math.round(hp)} hp`
-        : ""
-  };
-}
-
-
-function normalizePrice(
-  value
-) {
-  if (!value) {
-    return "Cena na vyžiadanie";
-  }
-
-  if (
-    typeof value ===
-      "object"
-  ) {
-    const amount =
-      Number(
-        String(
-          value.amount ??
-          value.price ??
-          ""
-        )
-          .replace(
-            ",",
-            "."
-          )
-          .replace(
-            /[^\d.]/g,
-            ""
-          )
-      );
-
-    const currency =
-      text(
-        value.currency ||
-        "EUR",
-        10
-      ).toUpperCase();
-
-    if (
-      Number.isFinite(
-        amount
-      )
-    ) {
-      return `${Math.round(amount).toLocaleString("sk-SK")} ${currency}`;
-    }
-
-    return "Cena na vyžiadanie";
-  }
-
-  const raw =
-    String(value)
-      .replace(
-        /\s+/g,
-        " "
-      )
-      .trim();
-
-  if (
-    !raw ||
-    /unknown|n\/a|not available|unavailable|neznáme|nezistené/i.test(
-      raw
-    )
-  ) {
-    return "Cena na vyžiadanie";
-  }
-
-  return raw.slice(
-    0,
-    150
-  );
-}
-
-
-function normalizeCar(
-  raw,
-  index
-) {
-  const car =
-    raw &&
-    typeof raw ===
-      "object"
-      ? raw
-      : {};
-
-  return {
-    rank:
-      Number.isFinite(
-        Number(car.rank)
-      )
-        ? Number(
-            car.rank
-          )
-        : index + 1,
-
-    brand:
-      normalizeBrand(
-        car.brand ||
-        car.make
-      ),
-
-    model:
-      normalizeModel(
-        car.model ||
-        car.name
-      ),
-
-    generation:
-      text(
-        car.generation ||
-        car.generationName,
-        200
-      ),
-
-    modelYear:
-      text(
-        car.modelYear ||
-        car.year,
-        50
-      ),
-
-    price:
-      normalizePrice(
-        car.price
-      ),
-
-    priceCurrency:
-      text(
-        car.priceCurrency ||
-        "EUR",
-        10
-      ).toUpperCase(),
-
-    priceSource:
-      text(
-        car.priceSource,
-        500
-      ),
-
-    configuratorUrl:
-      text(
-        car.configuratorUrl ||
-        car.configurator,
-        1000
-      ),
-
-    power:
-      normalizePower(
-        car.power
-      ),
-
-    fuel:
-      text(
-        car.fuel ||
-        car.engineFuel,
-        100
-      ),
-
-    drive:
-      text(
-        car.drive ||
-        car.drivetrain,
-        100
-      ),
-
-    transmission:
-      text(
-        car.transmission ||
-        car.gearbox,
-        100
-      ),
-
-    body:
-      text(
-        car.body ||
-        car.bodyType,
-        100
-      ),
-
-    seats:
-      text(
-        car.seats,
-        50
-      ),
-
-    trunkLiters:
-      text(
-        car.trunkLiters ||
-        car.trunk ||
-        car.boot,
-        100
-      ),
-
-    lengthMm:
-      text(
-        car.lengthMm ||
-        car.length,
-        100
-      ),
-
-    description:
-      text(
-        car.description,
-        1200
-      ),
-
-    pros:
-      arrayText(
-        car.pros,
-        8,
-        300
-      ),
-
-    cons:
-      arrayText(
-        car.cons,
-        8,
-        300
-      ),
-
-    maintenance:
-      text(
-        car.maintenance,
-        1000
-      ),
-
-    officialUrl:
-      text(
-        car.officialUrl ||
-        car.url,
-        1000
-      ),
-
-    dataSources:
-      arrayText(
-        car.dataSources ||
-        car.sources,
-        MAX_DATA_SOURCES,
-        1000
-      ),
-
-    image:
-      "",
-
-    photoSource:
-      "",
-
-    imageCandidates:
-      []
-  };
-}
-
-
-function normalizeCars(
-  rawCars
-) {
-  if (
-    !Array.isArray(
-      rawCars
-    )
-  ) {
-    return [];
-  }
-
-  return rawCars
-    .slice(0, 10)
-    .map(
-      (car, index) =>
-        normalizeCar(
-          car,
-          index
-        )
-    )
-    .filter(
-      car =>
-        car.brand &&
-        car.model
-    );
-}
-
-
-// ============================================================
-// AI RESULT NORMALIZATION
-// ============================================================
-
-function normalizeAIResult(
-  data,
-  provider
-) {
-  const cars =
-    normalizeCars(
-      data?.cars ||
-      data?.vehicles ||
-      data?.results ||
-      []
-    );
-
-  if (
-    cars.length !== 3
-  ) {
-    throw new Error(
-      `AI returned ${cars.length} cars instead of exactly 3`
-    );
-  }
-
-  return {
-    cars,
-
-    liveWeb:
-      Boolean(
-        data?.liveWeb ??
-        data?.webSearch ??
-        true
-      ),
-
-    provider
-  };
-}
-
-
-// ============================================================
-// GROQ CALL
+// GROQ
 // ============================================================
 
 async function callGroqModel(
   request,
-  modelConfig,
-  repair = false,
-  deadline
+  modelConfig
 ) {
   if (!GROQ_API_KEY) {
     throw new Error(
@@ -1825,14 +2267,9 @@ async function callGroqModel(
   }
 
   const prompt =
-    buildResearchPrompt(
-      request
-    );
-
-  const timeout =
-    timeoutFor(
-      modelConfig.timeout,
-      deadline
+    buildPrompt(
+      request,
+      modelConfig.purpose
     );
 
   const response =
@@ -1840,56 +2277,60 @@ async function callGroqModel(
       GROQ_URL,
       {
         method: "POST",
-
         headers: {
-          Authorization:
-            `Bearer ${GROQ_API_KEY}`,
-
           "Content-Type":
-            "application/json"
+            "application/json",
+          Authorization:
+            `Bearer ${GROQ_API_KEY}`
         },
+        body: JSON.stringify({
+          model:
+            modelConfig.model,
+          messages: [
+            {
+              role: "system",
+              content: `
+You are an expert automotive researcher.
 
-        body:
-          JSON.stringify({
-            model:
-              modelConfig.model,
+Use live browser search whenever available.
 
-            messages: [
-              {
-                role: "system",
+Return ONLY valid JSON.
 
-                content:
-                  "You are a precise automotive research engine. Use browser search when available. Follow the requested JSON contract exactly. Return ONLY the JSON object."
-              },
+All factual automotive information must be current and
+must refer to the requested/current vehicle generation.
 
-              {
-                role: "user",
-                content: prompt
-              }
-            ],
+Power format:
+XXX kW / YYY HP
 
-            temperature:
-              0.1,
+1 kW = 1.34102209 HP.
 
-            max_tokens:
-              repair
-                ? 8000
-                : 12000,
+Never use PS, ks, CV, bhp or koní as the final power unit.
 
-            // IMPORTANT:
-            // DO NOT add response_format here.
-            // Groq rejects JSON mode together
-            // with browser_search.
-
-            tools: [
-              {
-                type:
-                  "browser_search"
-              }
-            ]
-          })
+Do not invent prices or URLs.
+`
+            },
+            {
+              role: "user",
+              content: prompt
+            }
+          ],
+          temperature: 0.1,
+          max_completion_tokens: 9000,
+          tools: [
+            {
+              type:
+                "browser_search"
+            }
+          ],
+          tool_choice:
+            "required",
+          reasoning_effort:
+            "medium",
+          include_reasoning:
+            false
+        })
       },
-      timeout
+      modelConfig.timeout
     );
 
   const raw =
@@ -1897,102 +2338,69 @@ async function callGroqModel(
 
   if (!response.ok) {
     throw new Error(
-      `Groq ${modelConfig.model} HTTP ${response.status}: ${raw.slice(0, 800)}`
+      `Groq ${modelConfig.model} HTTP ${response.status}: ${raw.slice(0, 700)}`
     );
   }
 
-  let data;
+  let apiData;
 
   try {
-    data =
+    apiData =
       JSON.parse(raw);
   } catch (_) {
     throw new Error(
-      "Groq returned invalid JSON envelope"
+      `Groq ${modelConfig.model} returned invalid API JSON`
     );
   }
 
   const content =
     extractMessageContent(
-      data
+      apiData
     );
 
-  if (
-    !content.trim()
-  ) {
-    console.error(
-      "CARMATCH AI Groq empty content:",
-      JSON.stringify(
-        summarizeProviderResponse(
-          data
-        )
-      )
-    );
-
+  if (!content) {
     throw new Error(
-      `Groq ${modelConfig.model} returned an empty message content`
+      `Groq ${modelConfig.model} returned empty content`
     );
   }
 
-  let parsed;
+  const parsed =
+    parseAIJson(content);
 
-  try {
-    parsed =
-      parseAIJson(
-        content
-      );
-  } catch (error) {
-    console.error(
-      `CARMATCH AI Groq invalid JSON from ${modelConfig.model}:`,
-      content.slice(
-        0,
-        1500
-      )
-    );
+  const cars =
+    validateCars(parsed);
 
-    throw error;
-  }
-
-  return normalizeAIResult(
-    parsed,
-    `groq:${modelConfig.model}`
-  );
+  return {
+    cars,
+    provider:
+      `Groq (${modelConfig.model})`,
+    liveWeb: true,
+    rawApi: apiData
+  };
 }
 
 
-async function callGroqResearch(
-  request,
-  deadline
-) {
-  let lastError =
-    null;
+async function callGroqResearch(request) {
+  let lastError = null;
 
   for (
-    const modelConfig
-    of GROQ_MODELS
+    const modelConfig of GROQ_MODELS
   ) {
-    if (
-      remainingTime(
-        deadline
-      ) <= 1000
-    ) {
-      break;
-    }
-
     try {
+      console.log(
+        `CARMATCH AI - trying Groq model: ${modelConfig.model}`
+      );
+
       return await callGroqModel(
         request,
-        modelConfig,
-        modelConfig.purpose ===
-          "repair",
-        deadline
+        modelConfig
       );
     } catch (error) {
       lastError =
         error;
 
       console.error(
-        `CARMATCH AI Groq model failed (${modelConfig.model}):`,
+        `CARMATCH AI - Groq ${modelConfig.model} failed:`,
         error
       );
     }
@@ -2008,13 +2416,12 @@ async function callGroqResearch(
 
 
 // ============================================================
-// OPENROUTER CALL
+// OPENROUTER
 // ============================================================
 
 async function callOpenRouterModel(
   request,
-  model,
-  deadline
+  model
 ) {
   if (!OPENROUTER_API_KEY) {
     throw new Error(
@@ -2022,66 +2429,59 @@ async function callOpenRouterModel(
     );
   }
 
-  const timeout =
-    timeoutFor(
-      OPENROUTER_TIMEOUT,
-      deadline
-    );
-
   const response =
     await fetchWithTimeout(
       OPENROUTER_URL,
       {
         method: "POST",
-
         headers: {
-          Authorization:
-            `Bearer ${OPENROUTER_API_KEY}`,
-
           "Content-Type":
             "application/json",
-
+          Authorization:
+            `Bearer ${OPENROUTER_API_KEY}`,
           "HTTP-Referer":
             "https://carmatchai.vercel.app",
-
           "X-Title":
             "CARMATCH AI"
         },
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: "system",
+              content: `
+You are CARMATCH AI.
 
-        body:
-          JSON.stringify({
-            model,
+Return ONLY valid JSON.
 
-            messages: [
-              {
-                role: "system",
+Return exactly 3 current real production vehicles.
 
-                content:
-                  "You are CARMATCH AI. Return exactly one valid JSON object with exactly 3 real current passenger cars. No markdown and no commentary."
-              },
+Use current model generations.
 
-              {
-                role: "user",
+Never invent prices, power, specifications or URLs.
 
-                content:
-                  buildResearchPrompt(
-                    request
-                  )
-              }
-            ],
+Power:
+XXX kW / YYY HP
 
-            temperature:
-              0.1,
+1 kW = 1.34102209 HP.
 
-            max_tokens:
-              10000
-
-            // Deliberately no response_format.
-            // This makes the fallback compatible
-            // with more FREE OpenRouter models.
-          })
+Output must be in Slovak.
+`
+            },
+            {
+              role: "user",
+              content:
+                buildPrompt(
+                  request,
+                  "fallback"
+                )
+            }
+          ],
+          temperature: 0.1,
+          max_tokens: 9000
+        })
       },
-      timeout
+      OPENROUTER_TIMEOUT
     );
 
   const raw =
@@ -2089,662 +2489,191 @@ async function callOpenRouterModel(
 
   if (!response.ok) {
     throw new Error(
-      `OpenRouter ${model} HTTP ${response.status}: ${raw.slice(0, 800)}`
+      `OpenRouter ${model} HTTP ${response.status}: ${raw.slice(0, 700)}`
     );
   }
 
-  let data;
+  let apiData;
 
   try {
-    data =
+    apiData =
       JSON.parse(raw);
   } catch (_) {
     throw new Error(
-      "OpenRouter returned invalid JSON envelope"
+      `OpenRouter ${model} returned invalid API JSON`
     );
   }
 
   const content =
     extractMessageContent(
-      data
+      apiData
     );
 
-  if (
-    !content.trim()
-  ) {
-    console.error(
-      "CARMATCH AI OpenRouter empty content:",
-      JSON.stringify(
-        summarizeProviderResponse(
-          data
-        )
-      )
-    );
-
+  if (!content) {
     throw new Error(
-      `OpenRouter ${model} returned an empty response`
+      `OpenRouter ${model} returned empty content`
     );
   }
 
-  let parsed;
+  const parsed =
+    parseAIJson(content);
 
-  try {
-    parsed =
-      parseAIJson(
-        content
-      );
-  } catch (error) {
-    console.error(
-      `CARMATCH AI OpenRouter invalid JSON from ${model}:`,
-      content.slice(
-        0,
-        1500
-      )
-    );
+  const cars =
+    validateCars(parsed);
 
-    throw error;
-  }
-
-  return normalizeAIResult(
-    parsed,
-    `openrouter:${model}`
-  );
+  return {
+    cars,
+    provider:
+      `OpenRouter (${model})`,
+    liveWeb: false,
+    rawApi: apiData
+  };
 }
 
 
-async function callOpenRouter(
-  request,
-  deadline
-) {
-  let lastError =
-    null;
+async function callOpenRouter(request) {
+  let lastError = null;
 
   for (
-    const model
-    of OPENROUTER_FREE_MODELS
+    const model of OPENROUTER_FREE_MODELS
   ) {
-    if (
-      remainingTime(
-        deadline
-      ) <= 1000
-    ) {
-      break;
-    }
-
     try {
+      console.log(
+        `CARMATCH AI - trying OpenRouter model: ${model}`
+      );
+
       return await callOpenRouterModel(
         request,
-        model,
-        deadline
+        model
       );
     } catch (error) {
       lastError =
         error;
 
       console.error(
-        `CARMATCH AI OpenRouter model failed (${model}):`,
+        `CARMATCH AI - OpenRouter ${model} failed:`,
         error
       );
-
-      await sleep(100);
     }
   }
 
   throw (
     lastError ||
     new Error(
-      "All OpenRouter models failed"
+      "All OpenRouter FREE models failed"
     )
   );
 }
 
 
 // ============================================================
-// URL SECURITY
+// OFFICIAL PRICE SOURCE EXTRACTION
 // ============================================================
 
-function isSafeHttpUrl(
-  value
-) {
-  if (!value) {
-    return false;
-  }
-
-  let parsed;
-
-  try {
-    parsed =
-      new URL(value);
-  } catch (_) {
-    return false;
-  }
+function extractOfficialSources(car) {
+  const sources = [];
 
   if (
-    parsed.protocol !==
-      "https:" &&
-    parsed.protocol !==
-      "http:"
-  ) {
-    return false;
-  }
-
-  const hostname =
-    parsed.hostname
-      .toLowerCase()
-      .replace(
-        /^www\./,
-        ""
-      );
-
-  if (!hostname) {
-    return false;
-  }
-
-  if (
-    hostname ===
-      "localhost" ||
-    hostname.endsWith(
-      ".localhost"
-    ) ||
-    hostname ===
-      "127.0.0.1" ||
-    hostname ===
-      "0.0.0.0" ||
-    hostname ===
-      "::1"
-  ) {
-    return false;
-  }
-
-  if (
-    hostname.startsWith(
-      "10."
-    ) ||
-    hostname.startsWith(
-      "192.168."
-    ) ||
-    hostname.startsWith(
-      "172.16."
-    ) ||
-    hostname.startsWith(
-      "172.17."
-    ) ||
-    hostname.startsWith(
-      "172.18."
-    ) ||
-    hostname.startsWith(
-      "172.19."
-    ) ||
-    hostname.startsWith(
-      "172.20."
-    ) ||
-    hostname.startsWith(
-      "172.21."
-    ) ||
-    hostname.startsWith(
-      "172.22."
-    ) ||
-    hostname.startsWith(
-      "172.23."
-    ) ||
-    hostname.startsWith(
-      "172.24."
-    ) ||
-    hostname.startsWith(
-      "172.25."
-    ) ||
-    hostname.startsWith(
-      "172.26."
-    ) ||
-    hostname.startsWith(
-      "172.27."
-    ) ||
-    hostname.startsWith(
-      "172.28."
-    ) ||
-    hostname.startsWith(
-      "172.29."
-    ) ||
-    hostname.startsWith(
-      "172.30."
-    ) ||
-    hostname.startsWith(
-      "172.31."
+    isOfficialManufacturerURL(
+      car.priceSource,
+      car.name
     )
   ) {
-    return false;
-  }
-
-  return true;
-}
-
-
-function hostnameOf(
-  value
-) {
-  if (
-    !isSafeHttpUrl(
-      value
-    )
-  ) {
-    return "";
-  }
-
-  try {
-    return new URL(value)
-      .hostname
-      .toLowerCase()
-      .replace(
-        /^www\./,
-        ""
-      );
-  } catch (_) {
-    return "";
-  }
-}
-
-
-function isThirdPartyHost(
-  hostname
-) {
-  return OBVIOUS_THIRD_PARTY_HOSTS.some(
-    domain =>
-      hostname ===
-        domain ||
-      hostname.endsWith(
-        `.${domain}`
-      )
-  );
-}
-
-
-function brandKey(
-  brand
-) {
-  return text(
-    brand,
-    100
-  )
-    .toLowerCase()
-    .replace(
-      /[^a-z0-9]/g,
-      ""
-    );
-}
-
-
-function isOfficialBrandHost(
-  brand,
-  url
-) {
-  const host =
-    hostnameOf(
-      url
-    );
-
-  if (!host) {
-    return false;
-  }
-
-  const key =
-    brandKey(
-      brand
-    );
-
-  const hints =
-    OFFICIAL_DOMAIN_HINTS[
-      key
-    ] || [];
-
-  return hints.some(
-    domain =>
-      host ===
-        domain ||
-      host.endsWith(
-        `.${domain}`
-      )
-  );
-}
-
-
-function isLikelyOfficialUrl(
-  brand,
-  url
-) {
-  if (
-    !isSafeHttpUrl(
-      url
-    )
-  ) {
-    return false;
-  }
-
-  const host =
-    hostnameOf(
-      url
-    );
-
-  if (!host) {
-    return false;
-  }
-
-  if (
-    isThirdPartyHost(
-      host
-    )
-  ) {
-    return false;
-  }
-
-  return isOfficialBrandHost(
-    brand,
-    url
-  );
-}
-
-
-// ============================================================
-// PRICE SOURCE VALIDATION
-// ============================================================
-
-async function validateUrlReachable(
-  url,
-  timeout =
-    OFFICIAL_PAGE_TIMEOUT
-) {
-  if (
-    !isSafeHttpUrl(
-      url
-    )
-  ) {
-    return false;
-  }
-
-  try {
-    const response =
-      await fetchWithTimeout(
-        url,
-        {
-          method: "GET",
-
-          headers: {
-            "User-Agent":
-              "CARMATCH-AI/1.0"
-          }
-        },
-        timeout
-      );
-
-    return response.ok;
-  } catch (_) {
-    return false;
-  }
-}
-
-
-function extractNumericPrice(
-  value
-) {
-  if (!value) {
-    return null;
-  }
-
-  const raw =
-    String(value)
-      .replace(
-        /\s/g,
-        ""
-      )
-      .replace(
-        /\./g,
-        ""
-      )
-      .replace(
-        ",",
-        "."
-      );
-
-  const match =
-    raw.match(
-      /(\d+(?:\.\d+)?)/
-    );
-
-  if (!match) {
-    return null;
-  }
-
-  const amount =
-    Number(
-      match[1]
-    );
-
-  if (
-    !Number.isFinite(
-      amount
-    )
-  ) {
-    return null;
-  }
-
-  if (
-    amount < 1000 ||
-    amount > 5000000
-  ) {
-    return null;
-  }
-
-  return amount;
-}
-
-
-function hasRealPrice(
-  car
-) {
-  const price =
-    normalizePrice(
-      car.price
-    );
-
-  return (
-    price !==
-      "Cena na vyžiadanie" &&
-    extractNumericPrice(
-      price
-    ) !== null
-  );
-}
-
-
-async function verifyPriceSource(
-  car
-) {
-  const candidates = [];
-
-  if (
-    car.priceSource &&
-    isLikelyOfficialUrl(
-      car.brand,
+    sources.push(
       car.priceSource
-    )
-  ) {
-    candidates.push(
-      car.priceSource
-    );
-  }
-
-  if (
-    car.officialUrl &&
-    isLikelyOfficialUrl(
-      car.brand,
-      car.officialUrl
-    )
-  ) {
-    candidates.push(
-      car.officialUrl
-    );
-  }
-
-  if (
-    car.configuratorUrl &&
-    isLikelyOfficialUrl(
-      car.brand,
-      car.configuratorUrl
-    )
-  ) {
-    candidates.push(
-      car.configuratorUrl
     );
   }
 
   for (
-    const url
-    of candidates
+    const source of car.dataSources
   ) {
-    const reachable =
-      await validateUrlReachable(
-        url
-      );
-
     if (
-      reachable
+      isOfficialManufacturerURL(
+        source,
+        car.name
+      )
     ) {
-      return {
-        ...car,
-        priceSource:
-          url
-      };
+      sources.push(source);
     }
   }
 
   if (
-    car.priceSource &&
-    isSafeHttpUrl(
-      car.priceSource
+    isOfficialManufacturerURL(
+      car.configurator,
+      car.name
     )
   ) {
-    const reachable =
-      await validateUrlReachable(
-        car.priceSource
-      );
-
-    if (
-      reachable
-    ) {
-      return {
-        ...car
-      };
-    }
+    sources.push(
+      car.configurator
+    );
   }
 
-  return {
-    ...car,
-
-    price:
-      hasRealPrice(
-        car
-      )
-        ? car.price
-        : "Cena na vyžiadanie"
-  };
-}
-
-
-async function verifyPricesAndSources(
-  request,
-  cars,
-  liveWeb
-) {
-  const results =
-    await Promise.all(
-      cars.map(
-        car =>
-          verifyPriceSource(
-            car
-          )
-      )
-    );
-
-  return results.map(
-    car => ({
-      ...car,
-
-      price:
-        normalizePrice(
-          car.price
-        ),
-
-      priceSource:
-        isSafeHttpUrl(
-          car.priceSource
-        )
-          ? car.priceSource
-          : "",
-
-      configuratorUrl:
-        isSafeHttpUrl(
-          car.configuratorUrl
-        )
-          ? car.configuratorUrl
-          : "",
-
-      officialUrl:
-        isSafeHttpUrl(
-          car.officialUrl
-        )
-          ? car.officialUrl
-          : "",
-
-      dataSources:
-        arrayText(
-          car.dataSources,
-          MAX_DATA_SOURCES,
-          1000
-        ),
-
-      liveWeb:
-        Boolean(
-          liveWeb
-        )
-    })
-  );
+  return [
+    ...new Set(sources)
+  ];
 }
 
 
 // ============================================================
-// IMAGE SEARCH
+// OFFICIAL PAGE TEXT EXTRACTION
 // ============================================================
 
-const IMAGE_REJECT_WORDS = [
-  "motorcycle",
-  "motorbike",
-  "bike",
-  "truck",
-  "pickup",
-  "bus",
-  "van",
-  "tractor",
-  "scooter",
-  "atv",
-  "quad",
-  "concept",
-  "render",
-  "drawing",
-  "sketch",
-  "toy",
-  "model"
-];
-
-
-function normalizeImageText(
-  value
-) {
-  return text(
-    value,
-    1000
-  )
-    .toLowerCase()
+function stripHtml(html) {
+  return String(html || "")
     .replace(
-      /[_-]/g,
+      /<script[\s\S]*?<\/script>/gi,
+      " "
+    )
+    .replace(
+      /<style[\s\S]*?<\/style>/gi,
+      " "
+    )
+    .replace(
+      /<noscript[\s\S]*?<\/noscript>/gi,
+      " "
+    )
+    .replace(
+      /<[^>]+>/g,
+      " "
+    )
+    .replace(
+      /&nbsp;/gi,
+      " "
+    )
+    .replace(
+      /&amp;/gi,
+      "&"
+    )
+    .replace(
+      /&quot;/gi,
+      '"'
+    )
+    .replace(
+      /&#39;/gi,
+      "'"
+    )
+    .replace(
+      /\s+/g,
+      " "
+    )
+    .trim()
+    .slice(
+      0,
+      250000
+    );
+}
+
+
+function normalizedSearchString(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(
+      /[\u0300-\u036f]/g,
+      ""
+    )
+    .replace(
+      /[^a-z0-9]+/g,
       " "
     )
     .replace(
@@ -2755,19 +2684,1068 @@ function normalizeImageText(
 }
 
 
+function carNameSearchTokens(car) {
+  return normalizedSearchString(
+    car.name
+  )
+    .split(" ")
+    .filter(
+      word => word.length >= 3
+    )
+    .slice(0, 6);
+}
+
+
+function formatDetectedEuroPrice(
+  amount,
+  fromPrefix = false
+) {
+  if (
+    !Number.isFinite(amount) ||
+    amount < 1000 ||
+    amount > 10000000
+  ) {
+    return "";
+  }
+
+  const formatted =
+    Math.round(amount)
+      .toLocaleString(
+        "sk-SK",
+        {
+          maximumFractionDigits: 0,
+          useGrouping: true
+        }
+      )
+      .replace(
+        /\u00a0/g,
+        " "
+      );
+
+  return `${
+    fromPrefix ? "Od " : ""
+  }€${formatted}`;
+}
+
+
+function extractOfficialEuroPriceFromText(
+  visible,
+  car
+) {
+  const source =
+    String(visible || "");
+
+  if (!source) {
+    return "";
+  }
+
+  const lower =
+    source.toLowerCase();
+
+  const modelTokens =
+    carNameSearchTokens(car);
+
+  const priceRegex =
+    /(?:od|from|starting(?:\s+at)?|cena\s+od|starting\s+from)?\s*(?:€|eur)\s*(\d{1,3}(?:[ .]\d{3})+(?:[,.]\d{2})?|\d{4,7}(?:[,.]\d{2})?)|(?:od|from|starting(?:\s+at)?|cena\s+od|starting\s+from)?\s*(\d{1,3}(?:[ .]\d{3})+(?:[,.]\d{2})?|\d{4,7}(?:[,.]\d{2})?)\s*(?:€|eur)/gi;
+
+  const financeWords = [
+    "mesac",
+    "mesačne",
+    "mesačne",
+    "splát",
+    "splátka",
+    "per month",
+    "monthly",
+    "lease",
+    "leasing",
+    "deposit",
+    "záloha"
+  ];
+
+  const priceWords = [
+    "cena",
+    "price",
+    "od",
+    "from",
+    "starting",
+    "starting at"
+  ];
+
+  const candidates = [];
+  let match;
+
+  while (
+    (match =
+      priceRegex.exec(
+        lower
+      )) !== null
+  ) {
+    const fullMatch =
+      match[0];
+
+    const numberText =
+      match[1] ||
+      match[2];
+
+    if (!numberText) {
+      continue;
+    }
+
+    const normalizedNumber =
+      numberText
+        .replace(
+          /\s/g,
+          ""
+        )
+        .replace(
+          /\.(?=\d{3}(?:\D|$))/g,
+          ""
+        )
+        .replace(
+          /,(\d{2})$/,
+          ".$1"
+        );
+
+    const amount =
+      Number(
+        normalizedNumber
+      );
+
+    if (
+      !Number.isFinite(amount) ||
+      amount < 1000 ||
+      amount > 10000000
+    ) {
+      continue;
+    }
+
+    const start =
+      Math.max(
+        0,
+        match.index - 1800
+      );
+
+    const end =
+      Math.min(
+        source.length,
+        match.index + 1800
+      );
+
+    const context =
+      lower.slice(
+        start,
+        end
+      );
+
+    const tokenHits =
+      modelTokens.filter(
+        token =>
+          context.includes(token)
+      ).length;
+
+    if (
+      modelTokens.length > 0 &&
+      tokenHits === 0
+    ) {
+      continue;
+    }
+
+    const financeHit =
+      financeWords.some(
+        word =>
+          context.includes(word)
+      );
+
+    if (financeHit) {
+      continue;
+    }
+
+    const priceWordHit =
+      priceWords.some(
+        word =>
+          context.includes(word)
+      );
+
+    const fromPrefix =
+      /\b(?:od|from|starting|cena\s+od)\b/i.test(
+        fullMatch
+      );
+
+    let score =
+      tokenHits * 20;
+
+    if (priceWordHit) {
+      score += 10;
+    }
+
+    if (fromPrefix) {
+      score += 8;
+    }
+
+    candidates.push({
+      amount,
+      score,
+      fromPrefix
+    });
+  }
+
+  if (
+    candidates.length === 0
+  ) {
+    return "";
+  }
+
+  candidates.sort(
+    (a, b) => {
+      if (
+        b.score !== a.score
+      ) {
+        return (
+          b.score -
+          a.score
+        );
+      }
+
+      return (
+        a.amount -
+        b.amount
+      );
+    }
+  );
+
+  return formatDetectedEuroPrice(
+    candidates[0].amount,
+    candidates[0].fromPrefix
+  );
+}
+
+
+async function fetchOfficialPageEvidence(
+  url,
+  car
+) {
+  if (
+    !isOfficialManufacturerURL(
+      url,
+      car.name
+    )
+  ) {
+    return {
+      ok: false,
+      reason:
+        "non_official_url"
+    };
+  }
+
+  if (
+    !isSafeExternalHttpsURL(url)
+  ) {
+    return {
+      ok: false,
+      reason:
+        "unsafe_url"
+    };
+  }
+
+  try {
+    const response =
+      await fetchWithTimeout(
+        url,
+        {
+          method: "GET",
+          headers: {
+            Accept:
+              "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+            "User-Agent":
+              "Mozilla/5.0 (compatible; CARMATCH-AI/7.0; +https://carmatchai.vercel.app)"
+          }
+        },
+        OFFICIAL_PAGE_TIMEOUT
+      );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        reason:
+          `http_${response.status}`
+      };
+    }
+
+    const contentType =
+      String(
+        response.headers.get(
+          "content-type"
+        ) || ""
+      ).toLowerCase();
+
+    if (
+      !contentType.includes(
+        "text/html"
+      ) &&
+      !contentType.includes(
+        "application/xhtml+xml"
+      ) &&
+      !contentType.includes(
+        "application/json"
+      )
+    ) {
+      return {
+        ok: false,
+        reason:
+          "unsupported_content_type"
+      };
+    }
+
+    const raw =
+      await response.text();
+
+    const visible =
+      stripHtml(raw);
+
+    const haystack =
+      normalizedSearchString(
+        visible
+      );
+
+    const tokens =
+      carNameSearchTokens(car);
+
+    const tokenHits =
+      tokens.filter(
+        token =>
+          haystack.includes(token)
+      ).length;
+
+    const hasModelMention =
+      tokenHits >=
+      Math.min(
+        2,
+        tokens.length
+      );
+
+    const detectedPrice =
+      extractOfficialEuroPriceFromText(
+        visible,
+        car
+      );
+
+    const hasEuroPrice =
+      Boolean(
+        detectedPrice
+      );
+
+    const pricePhrases = [
+      "od €",
+      "od eur",
+      "starting at",
+      "from €",
+      "price",
+      "cena"
+    ];
+
+    const hasPricePhrase =
+      pricePhrases.some(
+        phrase =>
+          haystack.includes(
+            normalizedSearchString(
+              phrase
+            )
+          )
+      );
+
+    return {
+      ok:
+        hasModelMention &&
+        hasEuroPrice &&
+        hasPricePhrase,
+      modelMention:
+        hasModelMention,
+      euroPrice:
+        hasEuroPrice,
+      pricePhrase:
+        hasPricePhrase,
+      detectedPrice,
+      contentLength:
+        visible.length,
+      host:
+        hostnameOf(url),
+      finalUrl:
+        response.url || url
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reason:
+        error?.name ===
+        "AbortError"
+          ? "timeout"
+          : "fetch_failed"
+    };
+  }
+}
+
+
+// ============================================================
+// PRICE REPAIR / VERIFICATION
+// ============================================================
+
+function buildRepairRequest(
+  request,
+  cars
+) {
+  return `
+${buildPrompt(
+  request,
+  "repair"
+)}
+
+============================================================
+PREVIOUS CARS TO VERIFY
+============================================================
+${JSON.stringify(
+  cars.map(
+    car => ({
+      name: car.name,
+      generation:
+        car.generation,
+      year: car.year,
+      power: car.power,
+      price: car.price,
+      priceSource:
+        car.priceSource,
+      dataSources:
+        car.dataSources
+    })
+  ),
+  null,
+  2
+)}
+
+============================================================
+REPAIR TASK
+============================================================
+
+For each of the SAME 3 vehicles:
+
+1. Search the official manufacturer website.
+2. Search the official Slovak/EU manufacturer site or configurator.
+3. Verify the current new-vehicle starting price.
+4. Verify the generation/model year.
+5. Verify power from the current generation.
+6. Return the official URL used for price verification.
+
+NEVER guess.
+NEVER use third-party marketplace prices as the primary price.
+
+Return ONLY:
+{
+  "cars": [
+    {
+      "name": "",
+      "generation": "",
+      "year": 2026,
+      "power": "",
+      "price": "",
+      "priceSource": "",
+      "priceVerified": true,
+      "officialSource": true,
+      "dataSources": []
+    }
+  ]
+}
+
+Exactly 3 cars, in the same order.
+`;
+}
+
+
+async function repairWithGroq(
+  request,
+  cars
+) {
+  if (!GROQ_API_KEY) {
+    return null;
+  }
+
+  try {
+    const model =
+      GROQ_MODELS[1];
+
+    const response =
+      await fetchWithTimeout(
+        GROQ_URL,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+            Authorization:
+              `Bearer ${GROQ_API_KEY}`
+          },
+          body: JSON.stringify({
+            model:
+              model.model,
+            messages: [
+              {
+                role: "system",
+                content: `
+You verify automotive facts with live browser search.
+
+Use official manufacturer sources for prices whenever possible.
+
+Return ONLY valid JSON.
+
+Power must be XXX kW / YYY HP using mechanical HP.
+1 kW = 1.34102209 HP.
+Never output PS, ks, CV, bhp or koní as the final power unit.
+`
+              },
+              {
+                role: "user",
+                content:
+                  buildRepairRequest(
+                    request,
+                    cars
+                  )
+              }
+            ],
+            temperature: 0.05,
+            max_completion_tokens: 7000,
+            tools: [
+              {
+                type:
+                  "browser_search"
+              }
+            ],
+            tool_choice:
+              "required",
+            reasoning_effort:
+              "medium",
+            include_reasoning:
+              false
+          })
+        },
+        GROQ_REPAIR_TIMEOUT
+      );
+
+    const raw =
+      await response.text();
+
+    if (!response.ok) {
+      throw new Error(
+        `Groq repair HTTP ${response.status}: ${raw.slice(0, 500)}`
+      );
+    }
+
+    const apiData =
+      JSON.parse(raw);
+
+    const content =
+      extractMessageContent(
+        apiData
+      );
+
+    if (!content) {
+      throw new Error(
+        "Groq repair returned empty content"
+      );
+    }
+
+    return parseAIJson(
+      content
+    );
+  } catch (error) {
+    console.error(
+      "CARMATCH AI price/fact repair failed:",
+      error
+    );
+
+    return null;
+  }
+}
+
+
+function mergeRepairData(
+  cars,
+  repaired
+) {
+  if (
+    !repaired ||
+    !Array.isArray(
+      repaired.cars
+    )
+  ) {
+    return cars;
+  }
+
+  return cars.map(
+    (car, index) => {
+      const patch =
+        repaired.cars[index];
+
+      if (
+        !patch ||
+        typeof patch !==
+          "object"
+      ) {
+        return car;
+      }
+
+      const next = {
+        ...car
+      };
+
+      if (
+        patch.name &&
+        normalizedSearchString(
+          patch.name
+        ) ===
+          normalizedSearchString(
+            car.name
+          )
+      ) {
+        if (
+          patch.generation
+        ) {
+          next.generation =
+            scalarText(
+              patch.generation,
+              300
+            );
+        }
+
+        const repairedYear =
+          Number(
+            patch.year
+          );
+
+        if (
+          Number.isFinite(
+            repairedYear
+          ) &&
+          repairedYear >=
+            2000 &&
+          repairedYear <=
+            2100
+        ) {
+          next.year =
+            repairedYear;
+        }
+
+        const repairedPower =
+          normalizePower(
+            patch.power
+          );
+
+        if (repairedPower) {
+          next.power =
+            repairedPower;
+        }
+
+        const repairedPrice =
+          normalizePrice(
+            patch.price
+          );
+
+        if (repairedPrice) {
+          next.price =
+            repairedPrice;
+        }
+
+        const repairedSource =
+          scalarText(
+            patch.priceSource,
+            2000
+          );
+
+        if (repairedSource) {
+          next.priceSource =
+            repairedSource;
+        }
+
+        if (
+          Array.isArray(
+            patch.dataSources
+          )
+        ) {
+          next.dataSources =
+            arrayText(
+              patch.dataSources,
+              MAX_DATA_SOURCES,
+              1200
+            );
+        }
+
+        next.priceVerified =
+          patch.priceVerified ===
+          true;
+
+        next.priceVerification =
+          patch.priceVerified ===
+          true
+            ? "live-manufacturer-check"
+            : "unverified";
+      }
+
+      return next;
+    }
+  );
+}
+
+
+async function verifyPricesAndSources(
+  request,
+  cars,
+  liveWeb
+) {
+  let working =
+    cars.map(
+      car => ({
+        ...car,
+        price:
+          normalizePrice(
+            car.price
+          ),
+        power:
+          normalizePower(
+            car.power
+          )
+      })
+    );
+
+  // Validate and, where possible, directly fetch the official URL.
+  const pageChecks =
+    await Promise.all(
+      working.map(
+        async car => {
+          const sources =
+            extractOfficialSources(
+              car
+            );
+
+          for (
+            const source of sources.slice(
+              0,
+              2
+            )
+          ) {
+            const evidence =
+              await fetchOfficialPageEvidence(
+                source,
+                car
+              );
+
+            if (
+              evidence.ok
+            ) {
+              return {
+                carName:
+                  car.name,
+                verified:
+                  true,
+                source,
+                detectedPrice:
+                  evidence.detectedPrice ||
+                  ""
+              };
+            }
+          }
+
+          return {
+            carName:
+              car.name,
+            verified:
+              false,
+            source:
+              ""
+          };
+        }
+      )
+    );
+
+  working =
+    working.map(
+      (car, index) => {
+        const check =
+          pageChecks[index];
+
+        if (
+          check?.verified
+        ) {
+          return {
+            ...car,
+            price:
+              check.detectedPrice ||
+              car.price,
+            priceVerified:
+              true,
+            priceVerification:
+              "official-page-confirmed",
+            priceSource:
+              check.source
+          };
+        }
+
+        return car;
+      }
+    );
+
+  const needsRepair =
+    working.some(
+      car => {
+        const officialSource =
+          isOfficialManufacturerURL(
+            car.priceSource,
+            car.name
+          );
+
+        return (
+          !priceHasNumber(
+            car.price
+          ) ||
+          !officialSource
+        );
+      }
+    );
+
+  // Only perform the additional live repair call when needed. This keeps
+  // ordinary requests fast while still giving missing/weak price data a
+  // second research pass.
+  if (
+    needsRepair &&
+    liveWeb &&
+    GROQ_API_KEY
+  ) {
+    const repaired =
+      await repairWithGroq(
+        request,
+        working
+      );
+
+    if (repaired) {
+      working =
+        mergeRepairData(
+          working,
+          repaired
+        );
+    }
+  }
+
+  // Re-check all official sources after the repair pass.
+  const finalChecks =
+    await Promise.all(
+      working.map(
+        async car => {
+          const sources =
+            extractOfficialSources(
+              car
+            );
+
+          for (
+            const source of sources.slice(
+              0,
+              2
+            )
+          ) {
+            const evidence =
+              await fetchOfficialPageEvidence(
+                source,
+                car
+              );
+
+            if (
+              evidence.ok
+            ) {
+              return {
+                verified:
+                  true,
+                source,
+                detectedPrice:
+                  evidence.detectedPrice ||
+                  ""
+              };
+            }
+          }
+
+          return {
+            verified:
+              false,
+            source:
+              ""
+          };
+        }
+      )
+    );
+
+  return working.map(
+    (car, index) => {
+      const check =
+        finalChecks[index];
+
+      const officialSource =
+        isOfficialManufacturerURL(
+          car.priceSource,
+          car.name
+        );
+
+      const reliablePrice =
+        priceHasNumber(
+          car.price
+        ) &&
+        officialSource;
+
+      if (
+        check?.verified
+      ) {
+        return {
+          ...car,
+          price:
+            check.detectedPrice ||
+            car.price,
+          priceVerified:
+            true,
+          priceVerification:
+            "official-page-confirmed",
+          priceSource:
+            check.source
+        };
+      }
+
+      // A live model with browser search may return a valid official price
+      // page that blocks our server fetch (JS challenge, locale gateway, etc.).
+      // In that case retain the price only when the source itself is a clean
+      // official manufacturer URL. Otherwise do not display an unverified
+      // numeric price.
+      if (
+        reliablePrice &&
+        liveWeb
+      ) {
+        return {
+          ...car,
+          priceVerified:
+            Boolean(
+              car.priceVerified
+            ),
+          priceVerification:
+            car.priceVerified
+              ? car.priceVerification
+              : "official-source-reported"
+        };
+      }
+
+      return {
+        ...car,
+        price:
+          "Cena na vyžiadanie",
+        priceSource:
+          officialSource
+            ? car.priceSource
+            : "",
+        priceVerified:
+          false,
+        priceVerification:
+          "unverified"
+      };
+    }
+  );
+}
+
+
+// ============================================================
+// CONFIGURATOR + SOURCE SANITIZATION
+// ============================================================
+
+function sanitizeCarLinks(car) {
+  const configurator =
+    isOfficialManufacturerURL(
+      car.configurator,
+      car.name
+    )
+      ? car.configurator
+      : "";
+
+  const priceSource =
+    isOfficialManufacturerURL(
+      car.priceSource,
+      car.name
+    )
+      ? car.priceSource
+      : "";
+
+  const dataSources =
+    car.dataSources.filter(
+      source =>
+        isSafeExternalHttpsURL(
+          source
+        )
+    );
+
+  return {
+    ...car,
+    configurator,
+    priceSource,
+    dataSources: [
+      ...new Set(
+        dataSources
+      )
+    ].slice(
+      0,
+      MAX_DATA_SOURCES
+    )
+  };
+}
+
+
+// ============================================================
+// IMAGE SEARCH
+// ============================================================
+
+const IMAGE_REJECT_WORDS = [
+  "logo",
+  "icon",
+  "flag",
+  "emblem",
+  "badge",
+  "wheel",
+  "interior",
+  "dashboard",
+  "steering",
+  "engine",
+  "poster",
+  "advertisement",
+  "advert",
+  "brochure",
+  "drawing",
+  "diagram",
+  "blueprint",
+  "model kit",
+  "toy",
+  "miniature",
+  "hot wheels",
+  "matchbox",
+  "scale model",
+  "render",
+  "concept",
+  "prototype",
+  "motorcycle",
+  "motorbike",
+  "truck",
+  "bus",
+  "tractor",
+  "van"
+];
+
+
 function isRejectedImageTitle(
   title
 ) {
-  const normalized =
-    normalizeImageText(
-      title
-    );
+  const lower =
+    String(title || "")
+      .toLowerCase();
 
   return IMAGE_REJECT_WORDS.some(
     word =>
-      normalized.includes(
-        word
-      )
+      lower.includes(word)
   );
 }
 
@@ -2775,190 +3753,280 @@ function isRejectedImageTitle(
 function isWikimediaPhotoURL(
   url
 ) {
-  if (!url) {
-    return false;
-  }
-
   if (
-    !isSafeHttpUrl(
-      url
-    )
+    !url ||
+    typeof url !==
+      "string"
   ) {
     return false;
   }
 
-  const host =
-    hostnameOf(
-      url
+  try {
+    const parsed =
+      new URL(url);
+
+    if (
+      parsed.protocol !==
+      "https:"
+    ) {
+      return false;
+    }
+
+    return (
+      parsed.hostname ===
+        "upload.wikimedia.org" ||
+      parsed.hostname.endsWith(
+        ".wikimedia.org"
+      )
     );
+  } catch (_) {
+    return false;
+  }
+}
+
+
+function isImageExtension(
+  url
+) {
+  const lower =
+    String(url || "")
+      .toLowerCase();
 
   return (
-    host ===
-      "upload.wikimedia.org" ||
-    host.endsWith(
-      ".wikimedia.org"
+    /\.jpe?g(?:[?#]|$)/i.test(
+      lower
+    ) ||
+    /\.png(?:[?#]|$)/i.test(
+      lower
+    ) ||
+    /\.webp(?:[?#]|$)/i.test(
+      lower
     )
   );
+}
+
+
+function cleanSearchText(
+  value
+) {
+  return String(value || "")
+    .replace(
+      /()[\]{},:;|]/g,
+      " "
+    )
+    .replace(
+      /\s+/g,
+      " "
+    )
+    .trim();
+}
+
+
+function vehicleSearchTerms(
+  car
+) {
+  const name =
+    cleanSearchText(
+      buildVehicleName(
+        car
+      ) ||
+        car.name
+    );
+
+  const generation =
+    cleanSearchText(
+      scalarText(
+        car.generation,
+        200
+      )
+    );
+
+  const year =
+    Number(car.year);
+
+  return {
+    name,
+    generation,
+    year:
+      Number.isFinite(year)
+        ? String(year)
+        : ""
+  };
 }
 
 
 function buildImageSearchQueries(
   car
 ) {
-  const brand =
-    text(
-      car.brand,
-      100
-    );
-
-  const model =
-    text(
-      car.model,
-      150
-    );
-
-  const generation =
-    text(
-      car.generation,
-      150
-    );
-
-  const year =
-    text(
-      car.modelYear,
-      50
+  const {
+    name,
+    generation,
+    year
+  } =
+    vehicleSearchTerms(
+      car
     );
 
   const queries = [];
 
   if (
-    brand &&
-    model &&
+    name &&
     generation &&
     year
   ) {
     queries.push(
-      `${brand} ${model} ${generation} ${year}`
+      `${name} ${generation} ${year} car automobile`
+    );
+
+    queries.push(
+      `${name} ${year} exterior production car`
+    );
+
+    queries.push(
+      `${name} ${generation} exterior car`
     );
   }
 
   if (
-    brand &&
-    model &&
+    name &&
     generation
   ) {
     queries.push(
-      `${brand} ${model} ${generation}`
+      `${name} ${generation} car automobile`
     );
   }
 
   if (
-    brand &&
-    model &&
+    name &&
     year
   ) {
     queries.push(
-      `${brand} ${model} ${year}`
+      `${name} ${year} car automobile`
+    );
+
+    queries.push(
+      `${name} ${year} road car`
     );
   }
 
-  if (
-    brand &&
-    model
-  ) {
+  if (name) {
     queries.push(
-      `${brand} ${model}`
+      `${name} car automobile`
+    );
+
+    queries.push(
+      `${name} production car`
     );
   }
 
   return [
     ...new Set(
       queries
-        .map(q =>
-          q.trim()
-        )
-        .filter(Boolean)
     )
   ].slice(
     0,
-    4
+    7
   );
 }
 
 
-function scoreImageCandidate(
+function imageRelevanceScore(
   candidate,
   car
 ) {
   const title =
-    normalizeImageText(
-      candidate.title
-    );
+    String(
+      candidate.title || ""
+    ).toLowerCase();
 
-  const brand =
-    normalizeImageText(
-      car.brand
-    );
+  const query =
+    String(
+      candidate.query || ""
+    ).toLowerCase();
 
-  const model =
-    normalizeImageText(
-      car.model
-    );
+  const combined =
+    `${title} ${query}`;
 
-  const generation =
-    normalizeImageText(
-      car.generation
-    );
-
-  const year =
-    normalizeImageText(
-      car.modelYear
+  const {
+    name,
+    generation,
+    year
+  } =
+    vehicleSearchTerms(
+      car
     );
 
   let score = 0;
 
-  if (
-    brand &&
-    title.includes(
-      brand
-    )
+  const nameWords =
+    name
+      .toLowerCase()
+      .split(
+        /[^a-z0-9áäčďéíľĺňóôŕšťúýž-]+/i
+      )
+      .filter(
+        word =>
+          word.length >= 3
+      );
+
+  const generationWords =
+    generation
+      .toLowerCase()
+      .split(
+        /[^a-z0-9áäčďéíľĺňóôŕšťúýž-]+/i
+      )
+      .filter(
+        word =>
+          word.length >= 2
+      );
+
+  for (
+    const word of nameWords
   ) {
-    score += 30;
+    if (
+      combined.includes(word)
+    ) {
+      score += 8;
+    }
   }
 
-  if (
-    model &&
-    title.includes(
-      model
-    )
+  for (
+    const word of generationWords
   ) {
-    score += 40;
-  }
-
-  if (
-    generation &&
-    title.includes(
-      generation
-    )
-  ) {
-    score += 20;
+    if (
+      combined.includes(word)
+    ) {
+      score += 10;
+    }
   }
 
   if (
     year &&
-    title.includes(
-      year
-    )
+    combined.includes(year)
   ) {
-    score += 10;
+    score += 15;
   }
 
   if (
-    isRejectedImageTitle(
-      title
+    combined.includes("car") ||
+    combined.includes(
+      "automobile"
+    ) ||
+    combined.includes(
+      "vehicle"
     )
   ) {
-    score -= 100;
+    score += 3;
+  }
+
+  if (
+    candidate.queryIndex === 0
+  ) {
+    score += 10;
+  } else if (
+    candidate.queryIndex === 1
+  ) {
+    score += 6;
   }
 
   return score;
@@ -2969,95 +4037,136 @@ function dedupeImageCandidates(
   candidates,
   car
 ) {
-  const seen =
-    new Set();
+  const map =
+    new Map();
 
-  return candidates
-    .filter(
-      candidate =>
-        candidate?.image
-    )
-    .map(
-      candidate => ({
-        ...candidate,
+  for (
+    const candidate of candidates
+  ) {
+    if (!candidate?.image) {
+      continue;
+    }
 
-        score:
-          scoreImageCandidate(
-            candidate,
-            car
-          )
-      })
-    )
-    .filter(
-      candidate => {
-        const key =
-          candidate.image
-            .split("?")[0];
+    if (
+      !isWikimediaPhotoURL(
+        candidate.image
+      )
+    ) {
+      continue;
+    }
 
-        if (
-          seen.has(
-            key
-          )
-        ) {
-          return false;
+    if (
+      !isImageExtension(
+        candidate.image
+      )
+    ) {
+      continue;
+    }
+
+    if (
+      isRejectedImageTitle(
+        candidate.title
+      )
+    ) {
+      continue;
+    }
+
+    const relevance =
+      imageRelevanceScore(
+        candidate,
+        car
+      );
+
+    if (
+      relevance < 15
+    ) {
+      continue;
+    }
+
+    if (
+      !map.has(
+        candidate.image
+      )
+    ) {
+      map.set(
+        candidate.image,
+        {
+          ...candidate,
+          relevance
         }
+      );
+    }
+  }
 
-        seen.add(
-          key
-        );
-
-        return true;
-      }
-    )
+  return [
+    ...map.values()
+  ]
     .sort(
       (a, b) =>
-        b.score -
-        a.score
+        b.relevance -
+        a.relevance
+    )
+    .slice(
+      0,
+      MAX_IMAGE_CANDIDATES
     );
 }
 
 
 async function searchWikimediaImages(
   query,
-  queryIndex
+  queryIndex = 0
 ) {
   const params =
     new URLSearchParams({
       action: "query",
       generator: "search",
-      gsrsearch: query,
+      gsrsearch:
+        `${query} filetype:bitmap`,
       gsrnamespace: "6",
-      gsrlimit: "8",
+      gsrlimit: "20",
       prop: "imageinfo",
-      iiprop: "url|mime",
-      iiurlwidth: "1200",
+      iiprop:
+        "url|mime|size|dimensions|descriptionurl",
+      iiurlwidth: "1600",
       format: "json",
       origin: "*"
     });
 
-  const data =
-    await fetchJson(
+  const response =
+    await fetchWithTimeout(
       `${WIKIMEDIA_API}?${params.toString()}`,
       {
+        method: "GET",
         headers: {
+          Accept:
+            "application/json",
           "User-Agent":
-            "CARMATCH-AI/1.0"
+            "CARMATCHAI/7.0 vehicle-image-lookup"
         }
       },
       WIKIMEDIA_TIMEOUT
     );
 
+  if (!response.ok) {
+    throw new Error(
+      `Wikimedia HTTP ${response.status}`
+    );
+  }
+
+  const data =
+    await response.json();
+
   const pages =
     Object.values(
       data?.query?.pages ||
-      {}
+        {}
     );
 
   const candidates = [];
 
   for (
-    const page
-    of pages
+    const page of pages
   ) {
     const title =
       text(
@@ -3076,46 +4185,78 @@ async function searchWikimediaImages(
     const imageInfo =
       page?.imageinfo?.[0];
 
-    const image =
-      imageInfo?.thumburl ||
-      imageInfo?.url ||
-      "";
-
-    if (
-      !isWikimediaPhotoURL(
-        image
-      )
-    ) {
+    if (!imageInfo) {
       continue;
     }
 
-    const mime =
-      String(
-        imageInfo?.mime ||
-        ""
-      ).toLowerCase();
-
     if (
-      mime &&
-      !mime.startsWith(
+      imageInfo.mime &&
+      !String(
+        imageInfo.mime
+      ).startsWith(
         "image/"
       )
     ) {
       continue;
     }
 
+    const width =
+      Number(
+        imageInfo.width
+      );
+
+    const height =
+      Number(
+        imageInfo.height
+      );
+
+    if (
+      Number.isFinite(
+        width
+      ) &&
+      Number.isFinite(
+        height
+      )
+    ) {
+      if (
+        width < 600 ||
+        height < 350
+      ) {
+        continue;
+      }
+
+      const ratio =
+        width / height;
+
+      if (
+        ratio < 0.8 ||
+        ratio > 3.5
+      ) {
+        continue;
+      }
+    }
+
+    const imageUrl =
+      imageInfo.thumburl ||
+      imageInfo.url ||
+      "";
+
+    if (
+      !isWikimediaPhotoURL(
+        imageUrl
+      )
+    ) {
+      continue;
+    }
+
     candidates.push({
-      image,
-
+      image:
+        imageUrl,
       photoSource:
-        page?.canonicalurl ||
-        page?.fullurl ||
+        imageInfo.descriptionurl ||
         "",
-
       title,
-
       query,
-
       queryIndex
     });
   }
@@ -3126,47 +4267,122 @@ async function searchWikimediaImages(
 
 async function searchWikipediaImages(
   query,
-  queryIndex
+  queryIndex = 0
 ) {
-  const params =
+  const searchParams =
     new URLSearchParams({
       action: "query",
-      generator: "search",
-      gsrsearch: query,
-      gsrnamespace: "0",
-      gsrlimit: "8",
-      prop: "pageimages|info",
-      piprop:
-        "thumbnail|original",
-      pithumbsize: "1200",
-      inprop: "url",
+      list: "search",
+      srsearch: query,
+      srnamespace: "0",
+      srlimit: "10",
       format: "json",
       origin: "*"
     });
 
-  const data =
-    await fetchJson(
-      `${WIKIPEDIA_API}?${params.toString()}`,
+  const searchResponse =
+    await fetchWithTimeout(
+      `${WIKIPEDIA_API}?${searchParams.toString()}`,
       {
+        method: "GET",
         headers: {
+          Accept:
+            "application/json",
           "User-Agent":
-            "CARMATCH-AI/1.0"
+            "CARMATCHAI/7.0 vehicle-image-lookup"
         }
       },
       WIKIPEDIA_TIMEOUT
     );
 
+  if (
+    !searchResponse.ok
+  ) {
+    throw new Error(
+      `Wikipedia search HTTP ${searchResponse.status}`
+    );
+  }
+
+  const searchData =
+    await searchResponse.json();
+
+  const results =
+    searchData?.query?.search;
+
+  if (
+    !Array.isArray(
+      results
+    ) ||
+    results.length === 0
+  ) {
+    return [];
+  }
+
+  const titles =
+    results
+      .slice(0, 10)
+      .map(
+        item =>
+          item?.title
+      )
+      .filter(Boolean)
+      .join("|");
+
+  if (!titles) {
+    return [];
+  }
+
+  const imageParams =
+    new URLSearchParams({
+      action: "query",
+      titles,
+      prop:
+        "pageimages|info",
+      inprop: "url",
+      piprop:
+        "thumbnail",
+      pithumbsize:
+        "1600",
+      format: "json",
+      origin: "*"
+    });
+
+  const imageResponse =
+    await fetchWithTimeout(
+      `${WIKIPEDIA_API}?${imageParams.toString()}`,
+      {
+        method: "GET",
+        headers: {
+          Accept:
+            "application/json",
+          "User-Agent":
+            "CARMATCHAI/7.0 vehicle-image-lookup"
+        }
+      },
+      WIKIPEDIA_TIMEOUT
+    );
+
+  if (
+    !imageResponse.ok
+  ) {
+    throw new Error(
+      `Wikipedia image HTTP ${imageResponse.status}`
+    );
+  }
+
+  const imageData =
+    await imageResponse.json();
+
   const pages =
     Object.values(
-      data?.query?.pages ||
-      {}
+      imageData?.query?.pages ||
+        {}
     );
 
   const candidates = [];
 
   for (
-    const page
-    of pages
+    const page of pages
   ) {
     const title =
       text(
@@ -3184,7 +4400,6 @@ async function searchWikipediaImages(
 
     const thumbnail =
       page?.thumbnail?.source ||
-      page?.original?.source ||
       "";
 
     if (
@@ -3198,15 +4413,11 @@ async function searchWikipediaImages(
     candidates.push({
       image:
         thumbnail,
-
       photoSource:
         page?.fullurl ||
         "",
-
       title,
-
       query,
-
       queryIndex
     });
   }
@@ -3228,7 +4439,6 @@ async function findCarImages(
   ) {
     return {
       ...car,
-
       image: "",
       photoSource: "",
       imageCandidates: []
@@ -3252,12 +4462,11 @@ async function findCarImages(
     );
 
   for (
-    const result
-    of commonsResults
+    const result of commonsResults
   ) {
     if (
       result.status ===
-        "fulfilled"
+      "fulfilled"
     ) {
       candidates.push(
         ...result.value
@@ -3290,12 +4499,11 @@ async function findCarImages(
       );
 
     for (
-      const result
-      of wikipediaResults
+      const result of wikipediaResults
     ) {
       if (
         result.status ===
-          "fulfilled"
+        "fulfilled"
       ) {
         candidates.push(
           ...result.value
@@ -3320,11 +4528,9 @@ async function findCarImages(
         candidate => ({
           url:
             candidate.image,
-
           source:
             candidate.photoSource ||
             "",
-
           title:
             candidate.title ||
             ""
@@ -3336,15 +4542,10 @@ async function findCarImages(
 
   return {
     ...car,
-
     image:
-      first?.url ||
-      "",
-
+      first?.url || "",
     photoSource:
-      first?.source ||
-      "",
-
+      first?.source || "",
     imageCandidates
   };
 }
@@ -3368,103 +4569,247 @@ async function addCarImages(
 // FINAL RESULT SANITIZATION
 // ============================================================
 
-function sanitizeCarLinks(
-  car
-) {
-  const result = {
-    ...car
-  };
-
-  if (
-    !isSafeHttpUrl(
-      result.officialUrl
-    )
-  ) {
-    result.officialUrl =
-      "";
-  }
-
-  if (
-    !isSafeHttpUrl(
-      result.configuratorUrl
-    )
-  ) {
-    result.configuratorUrl =
-      "";
-  }
-
-  if (
-    !isSafeHttpUrl(
-      result.priceSource
-    )
-  ) {
-    result.priceSource =
-      "";
-  }
-
-  if (
-    Array.isArray(
-      result.dataSources
-    )
-  ) {
-    result.dataSources =
-      result.dataSources
-        .filter(
-          url =>
-            isSafeHttpUrl(
-              url
-            )
-        )
-        .slice(
-          0,
-          MAX_DATA_SOURCES
-        );
-  } else {
-    result.dataSources =
-      [];
-  }
-
-  return result;
-}
-
-
 function finalSanitizeCars(
   cars
 ) {
   return cars.map(
-    car => {
-      const sanitized =
-        sanitizeCarLinks({
-          ...car,
-
-          power:
-            normalizePower(
-              car.power
-            ),
-
-          price:
-            normalizePrice(
-              car.price
+    (
+      rawCar,
+      index
+    ) => {
+      const car = {
+        ...rawCar,
+        name:
+          buildVehicleName(
+            rawCar
+          ),
+        generation:
+          scalarText(
+            rawCar.generation,
+            300
+          ),
+        year:
+          Number(
+            rawCar.year
+          ),
+        score:
+          Math.max(
+            0,
+            Math.min(
+              100,
+              Math.round(
+                Number(
+                  rawCar.score
+                ) || 0
+              )
             )
-        });
+          ),
+        price:
+          normalizePrice(
+            rawCar.price
+          ) ||
+          "Cena na vyžiadanie",
+        power:
+          normalizePower(
+            rawCar.power
+          ),
+        seats:
+          Number.isFinite(
+            Number(
+              rawCar.seats
+            )
+          )
+            ? Math.round(
+                Number(
+                  rawCar.seats
+                )
+              )
+            : null,
+        trunk:
+          scalarText(
+            rawCar.trunk,
+            150
+          ),
+        drive:
+          scalarText(
+            rawCar.drive,
+            150
+          ),
+        fuel:
+          scalarText(
+            rawCar.fuel,
+            150
+          ),
+        transmission:
+          scalarText(
+            rawCar.transmission,
+            150
+          ),
+        body:
+          scalarText(
+            rawCar.body,
+            150
+          ),
+        reason:
+          scalarText(
+            rawCar.reason,
+            1500
+          ) ||
+          "Spĺňa zadané požiadavky používateľa.",
+        pros:
+          arrayText(
+            rawCar.pros,
+            8,
+            500
+          ),
+        cons:
+          arrayText(
+            rawCar.cons,
+            8,
+            500
+          ),
+        maintenance:
+          scalarText(
+            rawCar.maintenance,
+            1500
+          ),
+        image:
+          isWikimediaPhotoURL(
+            rawCar.image
+          )
+            ? rawCar.image
+            : "",
+        photoSource:
+          isSafeExternalHttpsURL(
+            rawCar.photoSource
+          )
+            ? rawCar.photoSource
+            : "",
+        configurator:
+          scalarText(
+            rawCar.configurator,
+            2000
+          ),
+        priceSource:
+          scalarText(
+            rawCar.priceSource,
+            2000
+          ),
+        priceVerified:
+          rawCar.priceVerified ===
+          true,
+        priceVerification:
+          scalarText(
+            rawCar.priceVerification,
+            100
+          ) ||
+          "unverified",
+        dataSources:
+          arrayText(
+            rawCar.dataSources,
+            MAX_DATA_SOURCES,
+            1200
+          ),
+        imageCandidates:
+          Array.isArray(
+            rawCar.imageCandidates
+          )
+            ? rawCar.imageCandidates
+                .map(
+                  item => ({
+                    url:
+                      isWikimediaPhotoURL(
+                        item?.url
+                      )
+                        ? item.url
+                        : "",
+                    source:
+                      isSafeExternalHttpsURL(
+                        item?.source
+                      )
+                        ? item.source
+                        : "",
+                    title:
+                      scalarText(
+                        item?.title,
+                        500
+                      )
+                  })
+                )
+                .filter(
+                  item =>
+                    item.url
+                )
+                .slice(
+                  0,
+                  MAX_IMAGE_CANDIDATES
+                )
+            : []
+      };
 
-      if (
-        !sanitized.power
-      ) {
-        sanitized.power = {
-          kw: "",
-          hp: ""
-        };
+      if (!car.name) {
+        throw new Error(
+          `Vehicle name missing at position ${index + 1}`
+        );
+      }
+
+      if (!car.generation) {
+        throw new Error(
+          `Generation missing for ${car.name}`
+        );
       }
 
       if (
-        !sanitized.price
+        !Number.isFinite(
+          car.year
+        ) ||
+        car.year < 2000 ||
+        car.year > 2100
       ) {
-        sanitized.price =
-          "Cena na vyžiadanie";
+        throw new Error(
+          `Invalid model year for ${car.name}`
+        );
       }
 
-      return sanitized;
+      car.configurator =
+        isOfficialManufacturerURL(
+          car.configurator,
+          car.name
+        )
+          ? car.configurator
+          : "";
+
+      car.priceSource =
+        isOfficialManufacturerURL(
+          car.priceSource,
+          car.name
+        )
+          ? car.priceSource
+          : "";
+
+      const cleanCandidates =
+        car.imageCandidates.filter(
+          candidate =>
+            candidate.title !==
+            "[object Object]"
+        );
+
+      car.imageCandidates =
+        cleanCandidates;
+
+      if (
+        !car.image &&
+        cleanCandidates[0]
+      ) {
+        car.image =
+          cleanCandidates[0].url;
+
+        car.photoSource =
+          cleanCandidates[0].source ||
+          "";
+      }
+
+      return car;
     }
   );
 }
@@ -3504,7 +4849,7 @@ export default async function handler(
 
   if (
     req.method ===
-      "OPTIONS"
+    "OPTIONS"
   ) {
     return res
       .status(200)
@@ -3513,7 +4858,7 @@ export default async function handler(
 
   if (
     req.method !==
-      "POST"
+    "POST"
   ) {
     return sendJson(
       res,
@@ -3527,15 +4872,6 @@ export default async function handler(
 
   const startedAt =
     Date.now();
-
-  // IMPORTANT:
-  // Must remain outside try so that
-  // a charged search can safely be refunded.
-  let searchCharged =
-    false;
-
-  let accessToken =
-    "";
 
   try {
     // --------------------------------------------------------
@@ -3556,7 +4892,6 @@ export default async function handler(
         {
           error:
             "Configuration error",
-
           message:
             "CARMATCH AI nemá správne nastavený Supabase backend."
         }
@@ -3573,7 +4908,6 @@ export default async function handler(
         {
           error:
             "Configuration error",
-
           message:
             "CARMATCH AI nemá nakonfigurovaný GROQ_API_KEY ani OPENROUTER_API_KEY."
         }
@@ -3605,7 +4939,7 @@ export default async function handler(
       );
     }
 
-    accessToken =
+    const accessToken =
       authorization
         .slice(7)
         .trim();
@@ -3655,10 +4989,8 @@ export default async function handler(
       );
 
     if (
-      request
-        .naturalLanguage
-        .length >
-        3000 ||
+      request.naturalLanguage
+        .length > 3000 ||
       JSON.stringify(
         request.filters
       ).length >
@@ -3678,6 +5010,9 @@ export default async function handler(
     // DAILY LIMIT
     // --------------------------------------------------------
 
+    let searchCharged =
+      false;
+
     const usage =
       await useSearch(
         accessToken
@@ -3692,12 +5027,9 @@ export default async function handler(
         {
           error:
             "Denný limit vyhľadávaní bol dosiahnutý.",
-
           message:
             `Použil si všetkých ${MAX_SEARCHES_PER_DAY} vyhľadávaní pre dnešok.`,
-
-          remaining:
-            0
+          remaining: 0
         }
       );
     }
@@ -3706,38 +5038,20 @@ export default async function handler(
       true;
 
     // --------------------------------------------------------
-    // GLOBAL AI DEADLINE
-    // --------------------------------------------------------
-
-    const aiDeadline =
-      createDeadline(
-        TOTAL_AI_TIMEOUT
-      );
-
-    // --------------------------------------------------------
     // PRIMARY PROVIDER
     // --------------------------------------------------------
 
-    let result =
-      null;
-
+    let result = null;
     let groqFailed =
       false;
-
     let openRouterFailed =
       false;
 
-    if (
-      GROQ_API_KEY &&
-      remainingTime(
-        aiDeadline
-      ) > 1000
-    ) {
+    if (GROQ_API_KEY) {
       try {
         result =
           await callGroqResearch(
-            request,
-            aiDeadline
+            request
           );
       } catch (error) {
         groqFailed =
@@ -3751,21 +5065,17 @@ export default async function handler(
     }
 
     // --------------------------------------------------------
-    // OPENROUTER FALLBACK
+    // FALLBACK PROVIDER
     // --------------------------------------------------------
 
     if (
       !result &&
-      OPENROUTER_API_KEY &&
-      remainingTime(
-        aiDeadline
-      ) > 1000
+      OPENROUTER_API_KEY
     ) {
       try {
         result =
           await callOpenRouter(
-            request,
-            aiDeadline
+            request
           );
       } catch (error) {
         openRouterFailed =
@@ -3779,7 +5089,7 @@ export default async function handler(
     }
 
     // --------------------------------------------------------
-    // ALL AI PROVIDERS FAILED
+    // ALL FAILED -> REFUND SEARCH
     // --------------------------------------------------------
 
     if (!result) {
@@ -3812,15 +5122,11 @@ export default async function handler(
         {
           error:
             "AI temporarily unavailable",
-
           message:
             "CARMATCH AI momentálne nemá dostupnú AI službu. Toto vyhľadávanie sa nezapočítalo do denného limitu.",
-
           retryable:
             true,
-
           remaining,
-
           providerStatus: {
             groq:
               !GROQ_API_KEY
@@ -3828,7 +5134,6 @@ export default async function handler(
                 : groqFailed
                   ? "unavailable"
                   : "unknown",
-
             openrouter:
               !OPENROUTER_API_KEY
                 ? "not_configured"
@@ -3848,12 +5153,10 @@ export default async function handler(
       result.cars.map(
         car => ({
           ...car,
-
           power:
             normalizePower(
               car.power
             ),
-
           price:
             normalizePrice(
               car.price
@@ -3888,13 +5191,9 @@ export default async function handler(
         cars
       );
 
-    // --------------------------------------------------------
-    // EXACT 3-CAR CONTRACT
-    // --------------------------------------------------------
-
+    // Exact 3-car final contract.
     if (
-      cars.length !==
-        3
+      cars.length !== 3
     ) {
       throw new Error(
         "Final result does not contain exactly 3 cars"
@@ -3910,23 +5209,17 @@ export default async function handler(
       200,
       {
         cars,
-
         remaining:
           usage.remaining,
-
         ai: {
           provider:
             result.provider,
-
           liveWeb:
             Boolean(
               result.liveWeb
             ),
-
           generatedAt:
-            new Date()
-              .toISOString(),
-
+            new Date().toISOString(),
           processingMs:
             Date.now() -
             startedAt
@@ -3939,49 +5232,32 @@ export default async function handler(
       error
     );
 
-    // --------------------------------------------------------
-    // SAFE REFUND
-    // --------------------------------------------------------
-
     let remaining =
       null;
 
     if (
-      searchCharged &&
-      accessToken
+      searchCharged
     ) {
-      try {
-        const refund =
-          await refundSearch(
-            accessToken
-          );
-
-        searchCharged =
-          false;
-
-        const refundRemaining =
-          Number(
-            refund?.remaining
-          );
-
-        if (
-          Number.isFinite(
-            refundRemaining
-          )
-        ) {
-          remaining =
-            Math.max(
-              0,
-              refundRemaining
-            );
-        }
-      } catch (
-        refundError
-      ) {
-        console.error(
-          "CARMATCH AI INTERNAL REFUND ERROR:",
-          refundError
+      const refund =
+        await refundSearch(
+          accessToken
         );
+
+      const refundRemaining =
+        Number(
+          refund?.remaining
+        );
+
+      if (
+        Number.isFinite(
+          refundRemaining
+        )
+      ) {
+        remaining =
+          Math.max(
+            0,
+            refundRemaining
+          );
       }
     }
 
@@ -3990,14 +5266,11 @@ export default async function handler(
       500,
       {
         error:
-          "Server configuration error",
-
+          "Search failed",
         message:
-          "CARMATCH AI sa nepodarilo dokončiť požiadavku. Vyhľadávanie sa nezapočítalo do limitu, ak bolo možné ho bezpečne vrátiť.",
-
+          "CARMATCH AI sa nepodarilo dokončiť toto vyhľadávanie. Vyhľadávanie sa nezapočítalo do limitu, ak bolo možné ho bezpečne vrátiť.",
         retryable:
           true,
-
         ...(remaining !==
         null
           ? {
