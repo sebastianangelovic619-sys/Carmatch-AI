@@ -1,25 +1,30 @@
 // ============================================================
-// CARMATCH AI - PRODUCTION BACKEND v7
+// CARMATCH AI - PRODUCTION BACKEND v8
 // ============================================================
 //
-// Core features
+// FIXED v8
+// - Groq browser_search compatible request
+// - NO Groq JSON mode + browser tool conflict
+// - Defensive Groq response extraction
+// - Defensive OpenRouter response extraction
+// - Global AI deadline protection
+// - Faster provider fallback chain
+// - Empty-response recovery
+// - Search refund protection
 // - Supabase anonymous auth
-// - 5 searches / day via Supabase RPC
-// - Groq GPT-OSS with live browser search
-// - Official-manufacturer price priority
-// - Server-side validation of official price URLs
-// - kW + mechanical HP output
-// - Current generation / model-year guardrails
-// - 3-car exact output contract
-// - OpenRouter FREE multi-fallback
-// - Search refund when every provider fails
-// - Wikimedia Commons + Wikipedia image fallback
-// - Image rejection / relevance ranking
-// - Strong SSRF-safe URL validation
-// - Defensive parsing and normalization
-// - FIXED: searchCharged scope for safe refunds
+// - 5 searches/day
+// - Exact 3-car output
+// - Official price/source validation
+// - kW + mechanical HP
+// - Wikimedia + Wikipedia image engine preserved
+// - SSRF-safe URLs
+// - Defensive normalization
 // ============================================================
 
+
+// ============================================================
+// API URLS
+// ============================================================
 
 const GROQ_URL =
   "https://api.groq.com/openai/v1/chat/completions";
@@ -33,6 +38,10 @@ const WIKIMEDIA_API =
 const WIKIPEDIA_API =
   "https://en.wikipedia.org/w/api.php";
 
+
+// ============================================================
+// ENVIRONMENT
+// ============================================================
 
 const SUPABASE_URL =
   process.env.SUPABASE_URL;
@@ -53,15 +62,22 @@ const OPENROUTER_API_KEY =
 
 const MAX_SEARCHES_PER_DAY = 5;
 
-const REQUEST_TIMEOUT = 55000;
-const GROQ_PRIMARY_TIMEOUT = 52000;
-const GROQ_REPAIR_TIMEOUT = 24000;
-const OPENROUTER_TIMEOUT = 30000;
+// Global protection.
+// Vercel can terminate long-running requests around 300 s.
+// We deliberately keep the complete AI chain much shorter.
+const TOTAL_AI_TIMEOUT = 135000;
 
-const SUPABASE_TIMEOUT = 10000;
-const OFFICIAL_PAGE_TIMEOUT = 6500;
-const WIKIMEDIA_TIMEOUT = 7000;
-const WIKIPEDIA_TIMEOUT = 7000;
+const GROQ_PRIMARY_TIMEOUT = 43000;
+const GROQ_REPAIR_TIMEOUT = 22000;
+
+const OPENROUTER_TIMEOUT = 16000;
+
+const SUPABASE_TIMEOUT = 8000;
+
+const OFFICIAL_PAGE_TIMEOUT = 4000;
+
+const WIKIMEDIA_TIMEOUT = 5000;
+const WIKIPEDIA_TIMEOUT = 5000;
 
 const MAX_IMAGE_CANDIDATES = 8;
 const MAX_DATA_SOURCES = 12;
@@ -356,7 +372,10 @@ function sendJson(res, status, data) {
 
 
 function text(value, maxLength = 5000) {
-  if (value === null || value === undefined) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
     return "";
   }
 
@@ -367,30 +386,43 @@ function text(value, maxLength = 5000) {
 }
 
 
-function arrayText(value, maxItems = 10, itemLength = 500) {
+function arrayText(
+  value,
+  maxItems = 10,
+  itemLength = 500
+) {
   if (!Array.isArray(value)) {
     return [];
   }
 
   return value
-    .map(item => text(item, itemLength))
+    .map(item =>
+      text(item, itemLength)
+    )
     .filter(Boolean)
     .slice(0, maxItems);
 }
 
 
 function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise(resolve =>
+    setTimeout(resolve, ms)
+  );
 }
 
 
 function currentDate() {
-  return new Date().toISOString().slice(0, 10);
+  return new Date()
+    .toISOString()
+    .slice(0, 10);
 }
 
 
 function getHeader(req, name) {
-  const value = req?.headers?.[name.toLowerCase()];
+  const value =
+    req?.headers?.[
+      name.toLowerCase()
+    ];
 
   if (Array.isArray(value)) {
     return value[0] || "";
@@ -401,28 +433,85 @@ function getHeader(req, name) {
 
 
 // ============================================================
+// DEADLINE HELPERS
+// ============================================================
+
+function createDeadline(timeout) {
+  return Date.now() + timeout;
+}
+
+
+function remainingTime(deadline) {
+  return Math.max(
+    0,
+    deadline - Date.now()
+  );
+}
+
+
+function timeoutFor(
+  desiredTimeout,
+  deadline
+) {
+  const remaining =
+    remainingTime(deadline);
+
+  if (remaining <= 0) {
+    throw new Error(
+      "CARMATCH AI global timeout reached"
+    );
+  }
+
+  return Math.min(
+    desiredTimeout,
+    remaining
+  );
+}
+
+
+// ============================================================
 // JSON PARSING
 // ============================================================
 
 function parseAIJson(raw) {
-  if (!raw) {
-    throw new Error("AI returned an empty response");
+  if (
+    raw === null ||
+    raw === undefined ||
+    raw === ""
+  ) {
+    throw new Error(
+      "AI returned an empty response"
+    );
   }
 
-  let value = String(raw).trim();
+  let value =
+    String(raw).trim();
 
-  value = value
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .trim();
+  value =
+    value
+      .replace(
+        /^```json\s*/i,
+        ""
+      )
+      .replace(
+        /^```\s*/i,
+        ""
+      )
+      .replace(
+        /\s*```$/i,
+        ""
+      )
+      .trim();
 
   try {
     return JSON.parse(value);
   } catch (_) {}
 
-  const firstBrace = value.indexOf("{");
-  const lastBrace = value.lastIndexOf("}");
+  const firstBrace =
+    value.indexOf("{");
+
+  const lastBrace =
+    value.lastIndexOf("}");
 
   if (
     firstBrace !== -1 &&
@@ -431,12 +520,17 @@ function parseAIJson(raw) {
   ) {
     try {
       return JSON.parse(
-        value.slice(firstBrace, lastBrace + 1)
+        value.slice(
+          firstBrace,
+          lastBrace + 1
+        )
       );
     } catch (_) {}
   }
 
-  throw new Error("AI returned invalid JSON");
+  throw new Error(
+    "AI returned invalid JSON"
+  );
 }
 
 
@@ -449,18 +543,25 @@ async function fetchWithTimeout(
   options = {},
   timeout = 30000
 ) {
-  const controller = new AbortController();
+  const controller =
+    new AbortController();
 
-  const timer = setTimeout(
-    () => controller.abort(),
-    timeout
-  );
+  const timer =
+    setTimeout(
+      () =>
+        controller.abort(),
+      timeout
+    );
 
   try {
-    return await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
+    return await fetch(
+      url,
+      {
+        ...options,
+        signal:
+          controller.signal
+      }
+    );
   } finally {
     clearTimeout(timer);
   }
@@ -472,18 +573,21 @@ async function fetchJson(
   options = {},
   timeout = 30000
 ) {
-  const response = await fetchWithTimeout(
-    url,
-    options,
-    timeout
-  );
+  const response =
+    await fetchWithTimeout(
+      url,
+      options,
+      timeout
+    );
 
-  const raw = await response.text();
+  const raw =
+    await response.text();
 
   let data = null;
 
   try {
-    data = JSON.parse(raw);
+    data =
+      JSON.parse(raw);
   } catch (_) {
     throw new Error(
       `Invalid JSON response from ${url}`
@@ -504,8 +608,13 @@ async function fetchJson(
 // SUPABASE AUTH / RPC
 // ============================================================
 
-async function verifyUser(accessToken) {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+async function verifyUser(
+  accessToken
+) {
+  if (
+    !SUPABASE_URL ||
+    !SUPABASE_ANON_KEY
+  ) {
     throw new Error(
       "Supabase environment variables are missing"
     );
@@ -515,23 +624,27 @@ async function verifyUser(accessToken) {
     return null;
   }
 
-  const response = await fetchWithTimeout(
-    `${SUPABASE_URL}/auth/v1/user`,
-    {
-      method: "GET",
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${accessToken}`
-      }
-    },
-    SUPABASE_TIMEOUT
-  );
+  const response =
+    await fetchWithTimeout(
+      `${SUPABASE_URL}/auth/v1/user`,
+      {
+        method: "GET",
+        headers: {
+          apikey:
+            SUPABASE_ANON_KEY,
+          Authorization:
+            `Bearer ${accessToken}`
+        }
+      },
+      SUPABASE_TIMEOUT
+    );
 
   if (!response.ok) {
     return null;
   }
 
-  const user = await response.json();
+  const user =
+    await response.json();
 
   if (!user?.id) {
     return null;
@@ -546,26 +659,35 @@ async function callSupabaseRpc(
   accessToken,
   body
 ) {
-  const response = await fetchWithTimeout(
-    `${SUPABASE_URL}/rest/v1/rpc/${functionName}`,
-    {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json"
+  const response =
+    await fetchWithTimeout(
+      `${SUPABASE_URL}/rest/v1/rpc/${functionName}`,
+      {
+        method: "POST",
+        headers: {
+          apikey:
+            SUPABASE_ANON_KEY,
+          Authorization:
+            `Bearer ${accessToken}`,
+          "Content-Type":
+            "application/json"
+        },
+        body:
+          JSON.stringify(
+            body || {}
+          )
       },
-      body: JSON.stringify(body || {})
-    },
-    SUPABASE_TIMEOUT
-  );
+      SUPABASE_TIMEOUT
+    );
 
-  const raw = await response.text();
+  const raw =
+    await response.text();
 
   let data = null;
 
   try {
-    data = JSON.parse(raw);
+    data =
+      JSON.parse(raw);
   } catch (_) {
     data = raw;
   }
@@ -580,7 +702,9 @@ async function callSupabaseRpc(
 }
 
 
-function normalizeUsageResult(value) {
+function normalizeUsageResult(
+  value
+) {
   if (Array.isArray(value)) {
     value = value[0];
   }
@@ -589,17 +713,28 @@ function normalizeUsageResult(value) {
     typeof value === "number" ||
     typeof value === "string"
   ) {
-    const remaining = Number(value);
+    const remaining =
+      Number(value);
 
     return {
-      allowed: remaining > 0,
-      remaining: Number.isFinite(remaining)
-        ? Math.max(0, remaining)
-        : null
+      allowed:
+        remaining > 0,
+      remaining:
+        Number.isFinite(
+          remaining
+        )
+          ? Math.max(
+              0,
+              remaining
+            )
+          : null
     };
   }
 
-  if (!value || typeof value !== "object") {
+  if (
+    !value ||
+    typeof value !== "object"
+  ) {
     return {
       allowed: false,
       remaining: null
@@ -613,24 +748,35 @@ function normalizeUsageResult(value) {
     value.success ??
     false;
 
-  const remaining = Number(
-    value.remaining ??
-    value.searches_remaining ??
-    value.remaining_searches ??
-    value.left ??
-    0
-  );
+  const remaining =
+    Number(
+      value.remaining ??
+      value.searches_remaining ??
+      value.remaining_searches ??
+      value.left ??
+      0
+    );
 
   return {
-    allowed: Boolean(allowed),
-    remaining: Number.isFinite(remaining)
-      ? Math.max(0, remaining)
-      : null
+    allowed:
+      Boolean(allowed),
+
+    remaining:
+      Number.isFinite(
+        remaining
+      )
+        ? Math.max(
+            0,
+            remaining
+          )
+        : null
   };
 }
 
 
-async function useSearch(accessToken) {
+async function useSearch(
+  accessToken
+) {
   const rpcNames = [
     "use_search",
     "consume_search",
@@ -639,22 +785,32 @@ async function useSearch(accessToken) {
 
   let lastError = null;
 
-  for (const rpcName of rpcNames) {
+  for (
+    const rpcName
+    of rpcNames
+  ) {
     try {
-      const result = await callSupabaseRpc(
-        rpcName,
-        accessToken,
-        {
-          max_searches: MAX_SEARCHES_PER_DAY,
-          daily_limit: MAX_SEARCHES_PER_DAY
-        }
-      );
+      const result =
+        await callSupabaseRpc(
+          rpcName,
+          accessToken,
+          {
+            max_searches:
+              MAX_SEARCHES_PER_DAY,
+
+            daily_limit:
+              MAX_SEARCHES_PER_DAY
+          }
+        );
 
       const normalized =
-        normalizeUsageResult(result);
+        normalizeUsageResult(
+          result
+        );
 
       if (
-        normalized.remaining !== null ||
+        normalized.remaining !==
+          null ||
         normalized.allowed
       ) {
         return normalized;
@@ -674,7 +830,9 @@ async function useSearch(accessToken) {
 }
 
 
-async function refundSearch(accessToken) {
+async function refundSearch(
+  accessToken
+) {
   const rpcNames = [
     "refund_search",
     "refund_search_usage",
@@ -683,22 +841,29 @@ async function refundSearch(accessToken) {
 
   let lastError = null;
 
-  for (const rpcName of rpcNames) {
+  for (
+    const rpcName
+    of rpcNames
+  ) {
     try {
-      const result = await callSupabaseRpc(
-        rpcName,
-        accessToken,
-        {
-          amount: 1
-        }
-      );
+      const result =
+        await callSupabaseRpc(
+          rpcName,
+          accessToken,
+          {
+            amount: 1
+          }
+        );
 
       const normalized =
-        normalizeUsageResult(result);
+        normalizeUsageResult(
+          result
+        );
 
       return {
         success: true,
-        remaining: normalized.remaining
+        remaining:
+          normalized.remaining
       };
     } catch (error) {
       lastError = error;
@@ -723,62 +888,105 @@ async function refundSearch(accessToken) {
 
 function normalizeRequest(body) {
   const source =
-    body && typeof body === "object"
+    body &&
+    typeof body === "object"
       ? body
       : {};
 
-  const naturalLanguage = text(
-    source.naturalLanguage ??
-    source.query ??
-    source.prompt ??
-    source.search ??
-    "",
-    3000
-  );
+  const naturalLanguage =
+    text(
+      source.naturalLanguage ??
+      source.query ??
+      source.prompt ??
+      source.search ??
+      "",
+      3000
+    );
 
   const filters =
     source.filters &&
-    typeof source.filters === "object"
+    typeof source.filters ===
+      "object"
       ? source.filters
       : {};
 
   return {
     naturalLanguage,
+
     filters: {
-      budget: text(filters.budget, 300),
-      seats: text(filters.seats, 100),
-      minPower: text(
-        filters.minPower ??
-        filters.minPowerKw ??
-        filters.power,
-        100
-      ),
-      trunk: text(
-        filters.trunk ??
-        filters.minTrunk,
-        100
-      ),
-      drive: text(
-        filters.drive ??
-        filters.drivetrain,
-        100
-      ),
-      fuel: text(filters.fuel, 100),
-      body: text(
-        filters.body ??
-        filters.bodyType,
-        100
-      ),
-      style: text(filters.style, 150),
-      length: text(filters.length, 100),
-      year: text(filters.year, 100),
-      avoidBrands: arrayText(
-        filters.avoidBrands ??
-        filters.avoid ??
-        [],
-        30,
-        100
-      )
+      budget:
+        text(
+          filters.budget,
+          300
+        ),
+
+      seats:
+        text(
+          filters.seats,
+          100
+        ),
+
+      minPower:
+        text(
+          filters.minPower ??
+          filters.minPowerKw ??
+          filters.power,
+          100
+        ),
+
+      trunk:
+        text(
+          filters.trunk ??
+          filters.minTrunk,
+          100
+        ),
+
+      drive:
+        text(
+          filters.drive ??
+          filters.drivetrain,
+          100
+        ),
+
+      fuel:
+        text(
+          filters.fuel,
+          100
+        ),
+
+      body:
+        text(
+          filters.body ??
+          filters.bodyType,
+          100
+        ),
+
+      style:
+        text(
+          filters.style,
+          150
+        ),
+
+      length:
+        text(
+          filters.length,
+          100
+        ),
+
+      year:
+        text(
+          filters.year,
+          100
+        ),
+
+      avoidBrands:
+        arrayText(
+          filters.avoidBrands ??
+          filters.avoid ??
+          [],
+          30,
+          100
+        )
     }
   };
 }
@@ -788,7 +996,9 @@ function normalizeRequest(body) {
 // AUTOMOTIVE PROMPT
 // ============================================================
 
-function buildResearchPrompt(request) {
+function buildResearchPrompt(
+  request
+) {
   return `
 You are CARMATCH AI, an automotive research assistant.
 
@@ -799,7 +1009,11 @@ USER REQUEST:
 ${request.naturalLanguage || "(No natural-language request)"}
 
 FILTERS:
-${JSON.stringify(request.filters, null, 2)}
+${JSON.stringify(
+  request.filters,
+  null,
+  2
+)}
 
 YOUR TASK:
 Find exactly 3 real passenger cars that best satisfy the user's
@@ -831,8 +1045,8 @@ IMPORTANT:
 PRICE RULE:
 Prefer official manufacturer pricing from the manufacturer's
 official website for the relevant country/market.
-If an official price is unavailable, use a trustworthy source and
-clearly identify it.
+If an official price is unavailable, use a trustworthy source
+and clearly identify it.
 Never fabricate a price.
 
 IMAGE RULE:
@@ -840,8 +1054,11 @@ Do NOT invent image URLs.
 Return image/photoSource as empty strings.
 The backend will search Wikimedia Commons/Wikipedia separately.
 
-OUTPUT:
-Return ONLY valid JSON.
+JSON RULE:
+Return ONLY a JSON object.
+Do not use markdown.
+Do not write an explanation before or after the JSON.
+Do not wrap the JSON in \`\`\` fences.
 
 Required structure:
 
@@ -881,16 +1098,79 @@ Required structure:
   "liveWeb": true
 }
 
-Do not add commentary outside JSON.
+The response must contain exactly 3 cars.
 `;
 }
 
 
 // ============================================================
-// AI RESPONSE EXTRACTION
+// ROBUST AI CONTENT EXTRACTION
 // ============================================================
 
-function extractMessageContent(data) {
+function contentPartToText(
+  part
+) {
+  if (
+    part === null ||
+    part === undefined
+  ) {
+    return "";
+  }
+
+  if (
+    typeof part === "string"
+  ) {
+    return part;
+  }
+
+  if (
+    typeof part === "number" ||
+    typeof part === "boolean"
+  ) {
+    return String(part);
+  }
+
+  if (
+    typeof part === "object"
+  ) {
+    if (
+      typeof part.text ===
+        "string"
+    ) {
+      return part.text;
+    }
+
+    if (
+      typeof part.content ===
+        "string"
+    ) {
+      return part.content;
+    }
+
+    if (
+      typeof part.output_text ===
+        "string"
+    ) {
+      return part.output_text;
+    }
+
+    if (
+      typeof part.value ===
+        "string"
+    ) {
+      return part.value;
+    }
+
+    return "";
+  }
+
+  return "";
+}
+
+
+function extractMessageContent(
+  data
+) {
   const choice =
     data?.choices?.[0];
 
@@ -898,24 +1178,151 @@ function extractMessageContent(data) {
     return "";
   }
 
+  const message =
+    choice.message || {};
+
   const content =
-    choice.message?.content ??
+    message.content ??
+    choice.content ??
     choice.text ??
     "";
 
-  if (Array.isArray(content)) {
+  if (
+    Array.isArray(content)
+  ) {
     return content
-      .map(item => {
-        if (typeof item === "string") {
-          return item;
-        }
-
-        return item?.text || "";
-      })
+      .map(
+        contentPartToText
+      )
+      .filter(Boolean)
       .join("\n");
   }
 
-  return String(content || "");
+  const direct =
+    contentPartToText(
+      content
+    );
+
+  if (direct.trim()) {
+    return direct;
+  }
+
+  // Some OpenAI-compatible providers
+  // put generated text into output_text.
+  if (
+    typeof data.output_text ===
+      "string" &&
+    data.output_text.trim()
+  ) {
+    return data.output_text;
+  }
+
+  // Some providers return output blocks.
+  if (
+    Array.isArray(data.output)
+  ) {
+    const outputText =
+      data.output
+        .map(item => {
+          if (
+            typeof item ===
+              "string"
+          ) {
+            return item;
+          }
+
+          if (
+            typeof item?.text ===
+              "string"
+          ) {
+            return item.text;
+          }
+
+          if (
+            Array.isArray(
+              item?.content
+            )
+          ) {
+            return item.content
+              .map(
+                contentPartToText
+              )
+              .join("\n");
+          }
+
+          return "";
+        })
+        .filter(Boolean)
+        .join("\n");
+
+    if (
+      outputText.trim()
+    ) {
+      return outputText;
+    }
+  }
+
+  return "";
+}
+
+
+function summarizeProviderResponse(
+  data
+) {
+  try {
+    const choice =
+      data?.choices?.[0];
+
+    return {
+      hasChoices:
+        Array.isArray(
+          data?.choices
+        ),
+
+      choices:
+        Array.isArray(
+          data?.choices
+        )
+          ? data.choices.length
+          : 0,
+
+      finishReason:
+        choice?.finish_reason ||
+        "",
+
+      hasMessage:
+        Boolean(
+          choice?.message
+        ),
+
+      contentType:
+        Array.isArray(
+          choice?.message?.content
+        )
+          ? "array"
+          : typeof
+              choice?.message?.content,
+
+      hasToolCalls:
+        Array.isArray(
+          choice?.message?.tool_calls
+        ) &&
+        choice.message
+          .tool_calls.length >
+          0,
+
+      hasOutput:
+        Array.isArray(
+          data?.output
+        ) &&
+        data.output.length >
+          0
+    };
+  } catch (_) {
+    return {
+      parseError: true
+    };
+  }
 }
 
 
@@ -923,17 +1330,29 @@ function extractMessageContent(data) {
 // CAR NORMALIZATION
 // ============================================================
 
-function normalizeBrand(value) {
-  return text(value, 100);
+function normalizeBrand(
+  value
+) {
+  return text(
+    value,
+    100
+  );
 }
 
 
-function normalizeModel(value) {
-  return text(value, 150);
+function normalizeModel(
+  value
+) {
+  return text(
+    value,
+    150
+  );
 }
 
 
-function normalizePower(value) {
+function normalizePower(
+  value
+) {
   if (!value) {
     return {
       kw: "",
@@ -941,50 +1360,86 @@ function normalizePower(value) {
     };
   }
 
-  if (typeof value === "object") {
-    let kw = Number(
-      String(value.kw ?? "")
-        .replace(",", ".")
-        .replace(/[^\d.]/g, "")
-    );
+  if (
+    typeof value ===
+      "object"
+  ) {
+    let kw =
+      Number(
+        String(
+          value.kw ??
+          ""
+        )
+          .replace(
+            ",",
+            "."
+          )
+          .replace(
+            /[^\d.]/g,
+            ""
+          )
+      );
 
-    let hp = Number(
-      String(value.hp ?? "")
-        .replace(",", ".")
-        .replace(/[^\d.]/g, "")
-    );
+    let hp =
+      Number(
+        String(
+          value.hp ??
+          ""
+        )
+          .replace(
+            ",",
+            "."
+          )
+          .replace(
+            /[^\d.]/g,
+            ""
+          )
+      );
 
     if (
       !Number.isFinite(kw) &&
       Number.isFinite(hp)
     ) {
-      kw = hp * POWER_HP_TO_KW;
+      kw =
+        hp *
+        POWER_HP_TO_KW;
     }
 
     if (
       !Number.isFinite(hp) &&
       Number.isFinite(kw)
     ) {
-      hp = kw * POWER_KW_TO_HP;
+      hp =
+        kw *
+        POWER_KW_TO_HP;
     }
 
     return {
-      kw: Number.isFinite(kw)
-        ? `${Math.round(kw)} kW`
-        : "",
-      hp: Number.isFinite(hp)
-        ? `${Math.round(hp)} hp`
-        : ""
+      kw:
+        Number.isFinite(kw)
+          ? `${Math.round(kw)} kW`
+          : "",
+
+      hp:
+        Number.isFinite(hp)
+          ? `${Math.round(hp)} hp`
+          : ""
     };
   }
 
-  const raw = String(value)
-    .toLowerCase()
-    .replace(",", ".")
-    .trim();
+  const raw =
+    String(value)
+      .toLowerCase()
+      .replace(
+        ",",
+        "."
+      )
+      .trim();
 
   const kwMatch =
-    raw.match(/(\d+(?:\.\d+)?)\s*kw/);
+    raw.match(
+      /(\d+(?:\.\d+)?)\s*kw/
+    );
 
   const hpMatch =
     raw.match(
@@ -993,54 +1448,77 @@ function normalizePower(value) {
 
   let kw =
     kwMatch
-      ? Number(kwMatch[1])
+      ? Number(
+          kwMatch[1]
+        )
       : NaN;
 
   let hp =
     hpMatch
-      ? Number(hpMatch[1])
+      ? Number(
+          hpMatch[1]
+        )
       : NaN;
 
   if (
     !Number.isFinite(kw) &&
     Number.isFinite(hp)
   ) {
-    kw = hp * POWER_HP_TO_KW;
+    kw =
+      hp *
+      POWER_HP_TO_KW;
   }
 
   if (
     !Number.isFinite(hp) &&
     Number.isFinite(kw)
   ) {
-    hp = kw * POWER_KW_TO_HP;
+    hp =
+      kw *
+      POWER_KW_TO_HP;
   }
 
   return {
-    kw: Number.isFinite(kw)
-      ? `${Math.round(kw)} kW`
-      : "",
-    hp: Number.isFinite(hp)
-      ? `${Math.round(hp)} hp`
-      : ""
+    kw:
+      Number.isFinite(kw)
+        ? `${Math.round(kw)} kW`
+        : "",
+
+    hp:
+      Number.isFinite(hp)
+        ? `${Math.round(hp)} hp`
+        : ""
   };
 }
 
 
-function normalizePrice(value) {
+function normalizePrice(
+  value
+) {
   if (!value) {
     return "Cena na vyžiadanie";
   }
 
-  if (typeof value === "object") {
-    const amount = Number(
-      String(
-        value.amount ??
-        value.price ??
-        ""
-      )
-        .replace(",", ".")
-        .replace(/[^\d.]/g, "")
-    );
+  if (
+    typeof value ===
+      "object"
+  ) {
+    const amount =
+      Number(
+        String(
+          value.amount ??
+          value.price ??
+          ""
+        )
+          .replace(
+            ",",
+            "."
+          )
+          .replace(
+            /[^\d.]/g,
+            ""
+          )
+      );
 
     const currency =
       text(
@@ -1049,16 +1527,24 @@ function normalizePrice(value) {
         10
       ).toUpperCase();
 
-    if (Number.isFinite(amount)) {
+    if (
+      Number.isFinite(
+        amount
+      )
+    ) {
       return `${Math.round(amount).toLocaleString("sk-SK")} ${currency}`;
     }
 
     return "Cena na vyžiadanie";
   }
 
-  const raw = String(value)
-    .replace(/\s+/g, " ")
-    .trim();
+  const raw =
+    String(value)
+      .replace(
+        /\s+/g,
+        " "
+      )
+      .trim();
 
   if (
     !raw ||
@@ -1069,20 +1555,32 @@ function normalizePrice(value) {
     return "Cena na vyžiadanie";
   }
 
-  return raw.slice(0, 150);
+  return raw.slice(
+    0,
+    150
+  );
 }
 
 
-function normalizeCar(raw, index) {
+function normalizeCar(
+  raw,
+  index
+) {
   const car =
-    raw && typeof raw === "object"
+    raw &&
+    typeof raw ===
+      "object"
       ? raw
       : {};
 
   return {
     rank:
-      Number.isFinite(Number(car.rank))
-        ? Number(car.rank)
+      Number.isFinite(
+        Number(car.rank)
+      )
+        ? Number(
+            car.rank
+          )
         : index + 1,
 
     brand:
@@ -1112,7 +1610,9 @@ function normalizeCar(raw, index) {
       ),
 
     price:
-      normalizePrice(car.price),
+      normalizePrice(
+        car.price
+      ),
 
     priceCurrency:
       text(
@@ -1135,7 +1635,9 @@ function normalizeCar(raw, index) {
       ),
 
     power:
-      normalizePower(car.power),
+      normalizePower(
+        car.power
+      ),
 
     fuel:
       text(
@@ -1239,19 +1741,30 @@ function normalizeCar(raw, index) {
 }
 
 
-function normalizeCars(rawCars) {
-  if (!Array.isArray(rawCars)) {
+function normalizeCars(
+  rawCars
+) {
+  if (
+    !Array.isArray(
+      rawCars
+    )
+  ) {
     return [];
   }
 
   return rawCars
     .slice(0, 10)
-    .map((car, index) =>
-      normalizeCar(car, index)
+    .map(
+      (car, index) =>
+        normalizeCar(
+          car,
+          index
+        )
     )
-    .filter(car =>
-      car.brand &&
-      car.model
+    .filter(
+      car =>
+        car.brand &&
+        car.model
     );
 }
 
@@ -1260,7 +1773,10 @@ function normalizeCars(rawCars) {
 // AI RESULT NORMALIZATION
 // ============================================================
 
-function normalizeAIResult(data, provider) {
+function normalizeAIResult(
+  data,
+  provider
+) {
   const cars =
     normalizeCars(
       data?.cars ||
@@ -1269,7 +1785,9 @@ function normalizeAIResult(data, provider) {
       []
     );
 
-  if (cars.length !== 3) {
+  if (
+    cars.length !== 3
+  ) {
     throw new Error(
       `AI returned ${cars.length} cars instead of exactly 3`
     );
@@ -1277,6 +1795,7 @@ function normalizeAIResult(data, provider) {
 
   return {
     cars,
+
     liveWeb:
       Boolean(
         data?.liveWeb ??
@@ -1296,7 +1815,8 @@ function normalizeAIResult(data, provider) {
 async function callGroqModel(
   request,
   modelConfig,
-  repair = false
+  repair = false,
+  deadline
 ) {
   if (!GROQ_API_KEY) {
     throw new Error(
@@ -1305,67 +1825,87 @@ async function callGroqModel(
   }
 
   const prompt =
-    buildResearchPrompt(request);
+    buildResearchPrompt(
+      request
+    );
 
-  const response = await fetchWithTimeout(
-    GROQ_URL,
-    {
-      method: "POST",
-      headers: {
-        Authorization:
-          `Bearer ${GROQ_API_KEY}`,
-        "Content-Type":
-          "application/json"
-      },
-      body: JSON.stringify({
-        model: modelConfig.model,
+  const timeout =
+    timeoutFor(
+      modelConfig.timeout,
+      deadline
+    );
 
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a precise automotive research engine. Follow the requested JSON contract exactly."
-          },
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
+  const response =
+    await fetchWithTimeout(
+      GROQ_URL,
+      {
+        method: "POST",
 
-        temperature: 0.1,
+        headers: {
+          Authorization:
+            `Bearer ${GROQ_API_KEY}`,
 
-        max_tokens:
-          repair
-            ? 8000
-            : 12000,
-
-        response_format: {
-          type: "json_object"
+          "Content-Type":
+            "application/json"
         },
 
-        tools: [
-          {
-            type: "browser_search"
-          }
-        ]
-      })
-    },
-    modelConfig.timeout
-  );
+        body:
+          JSON.stringify({
+            model:
+              modelConfig.model,
+
+            messages: [
+              {
+                role: "system",
+
+                content:
+                  "You are a precise automotive research engine. Use browser search when available. Follow the requested JSON contract exactly. Return ONLY the JSON object."
+              },
+
+              {
+                role: "user",
+                content: prompt
+              }
+            ],
+
+            temperature:
+              0.1,
+
+            max_tokens:
+              repair
+                ? 8000
+                : 12000,
+
+            // IMPORTANT:
+            // DO NOT add response_format here.
+            // Groq rejects JSON mode together
+            // with browser_search.
+
+            tools: [
+              {
+                type:
+                  "browser_search"
+              }
+            ]
+          })
+      },
+      timeout
+    );
 
   const raw =
     await response.text();
 
   if (!response.ok) {
     throw new Error(
-      `Groq ${modelConfig.model} HTTP ${response.status}: ${raw.slice(0, 500)}`
+      `Groq ${modelConfig.model} HTTP ${response.status}: ${raw.slice(0, 800)}`
     );
   }
 
   let data;
 
   try {
-    data = JSON.parse(raw);
+    data =
+      JSON.parse(raw);
   } catch (_) {
     throw new Error(
       "Groq returned invalid JSON envelope"
@@ -1373,10 +1913,45 @@ async function callGroqModel(
   }
 
   const content =
-    extractMessageContent(data);
+    extractMessageContent(
+      data
+    );
 
-  const parsed =
-    parseAIJson(content);
+  if (
+    !content.trim()
+  ) {
+    console.error(
+      "CARMATCH AI Groq empty content:",
+      JSON.stringify(
+        summarizeProviderResponse(
+          data
+        )
+      )
+    );
+
+    throw new Error(
+      `Groq ${modelConfig.model} returned an empty message content`
+    );
+  }
+
+  let parsed;
+
+  try {
+    parsed =
+      parseAIJson(
+        content
+      );
+  } catch (error) {
+    console.error(
+      `CARMATCH AI Groq invalid JSON from ${modelConfig.model}:`,
+      content.slice(
+        0,
+        1500
+      )
+    );
+
+    throw error;
+  }
 
   return normalizeAIResult(
     parsed,
@@ -1385,18 +1960,36 @@ async function callGroqModel(
 }
 
 
-async function callGroqResearch(request) {
-  let lastError = null;
+async function callGroqResearch(
+  request,
+  deadline
+) {
+  let lastError =
+    null;
 
-  for (const modelConfig of GROQ_MODELS) {
+  for (
+    const modelConfig
+    of GROQ_MODELS
+  ) {
+    if (
+      remainingTime(
+        deadline
+      ) <= 1000
+    ) {
+      break;
+    }
+
     try {
       return await callGroqModel(
         request,
         modelConfig,
-        modelConfig.purpose === "repair"
+        modelConfig.purpose ===
+          "repair",
+        deadline
       );
     } catch (error) {
-      lastError = error;
+      lastError =
+        error;
 
       console.error(
         `CARMATCH AI Groq model failed (${modelConfig.model}):`,
@@ -1405,10 +1998,12 @@ async function callGroqResearch(request) {
     }
   }
 
-  throw lastError ||
+  throw (
+    lastError ||
     new Error(
       "All Groq models failed"
-    );
+    )
+  );
 }
 
 
@@ -1418,7 +2013,8 @@ async function callGroqResearch(request) {
 
 async function callOpenRouterModel(
   request,
-  model
+  model,
+  deadline
 ) {
   if (!OPENROUTER_API_KEY) {
     throw new Error(
@@ -1426,11 +2022,18 @@ async function callOpenRouterModel(
     );
   }
 
+  const timeout =
+    timeoutFor(
+      OPENROUTER_TIMEOUT,
+      deadline
+    );
+
   const response =
     await fetchWithTimeout(
       OPENROUTER_URL,
       {
         method: "POST",
+
         headers: {
           Authorization:
             `Bearer ${OPENROUTER_API_KEY}`,
@@ -1445,32 +2048,40 @@ async function callOpenRouterModel(
             "CARMATCH AI"
         },
 
-        body: JSON.stringify({
-          model,
+        body:
+          JSON.stringify({
+            model,
 
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are CARMATCH AI. Return exactly valid JSON with exactly 3 real current cars."
-            },
-            {
-              role: "user",
-              content:
-                buildResearchPrompt(request)
-            }
-          ],
+            messages: [
+              {
+                role: "system",
 
-          temperature: 0.1,
+                content:
+                  "You are CARMATCH AI. Return exactly one valid JSON object with exactly 3 real current passenger cars. No markdown and no commentary."
+              },
 
-          max_tokens: 10000,
+              {
+                role: "user",
 
-          response_format: {
-            type: "json_object"
-          }
-        })
+                content:
+                  buildResearchPrompt(
+                    request
+                  )
+              }
+            ],
+
+            temperature:
+              0.1,
+
+            max_tokens:
+              10000
+
+            // Deliberately no response_format.
+            // This makes the fallback compatible
+            // with more FREE OpenRouter models.
+          })
       },
-      OPENROUTER_TIMEOUT
+      timeout
     );
 
   const raw =
@@ -1478,14 +2089,15 @@ async function callOpenRouterModel(
 
   if (!response.ok) {
     throw new Error(
-      `OpenRouter ${model} HTTP ${response.status}: ${raw.slice(0, 500)}`
+      `OpenRouter ${model} HTTP ${response.status}: ${raw.slice(0, 800)}`
     );
   }
 
   let data;
 
   try {
-    data = JSON.parse(raw);
+    data =
+      JSON.parse(raw);
   } catch (_) {
     throw new Error(
       "OpenRouter returned invalid JSON envelope"
@@ -1493,10 +2105,45 @@ async function callOpenRouterModel(
   }
 
   const content =
-    extractMessageContent(data);
+    extractMessageContent(
+      data
+    );
 
-  const parsed =
-    parseAIJson(content);
+  if (
+    !content.trim()
+  ) {
+    console.error(
+      "CARMATCH AI OpenRouter empty content:",
+      JSON.stringify(
+        summarizeProviderResponse(
+          data
+        )
+      )
+    );
+
+    throw new Error(
+      `OpenRouter ${model} returned an empty response`
+    );
+  }
+
+  let parsed;
+
+  try {
+    parsed =
+      parseAIJson(
+        content
+      );
+  } catch (error) {
+    console.error(
+      `CARMATCH AI OpenRouter invalid JSON from ${model}:`,
+      content.slice(
+        0,
+        1500
+      )
+    );
+
+    throw error;
+  }
 
   return normalizeAIResult(
     parsed,
@@ -1505,31 +2152,50 @@ async function callOpenRouterModel(
 }
 
 
-async function callOpenRouter(request) {
-  let lastError = null;
+async function callOpenRouter(
+  request,
+  deadline
+) {
+  let lastError =
+    null;
 
-  for (const model of OPENROUTER_FREE_MODELS) {
+  for (
+    const model
+    of OPENROUTER_FREE_MODELS
+  ) {
+    if (
+      remainingTime(
+        deadline
+      ) <= 1000
+    ) {
+      break;
+    }
+
     try {
       return await callOpenRouterModel(
         request,
-        model
+        model,
+        deadline
       );
     } catch (error) {
-      lastError = error;
+      lastError =
+        error;
 
       console.error(
         `CARMATCH AI OpenRouter model failed (${model}):`,
         error
       );
 
-      await sleep(150);
+      await sleep(100);
     }
   }
 
-  throw lastError ||
+  throw (
+    lastError ||
     new Error(
       "All OpenRouter models failed"
-    );
+    )
+  );
 }
 
 
@@ -1537,7 +2203,9 @@ async function callOpenRouter(request) {
 // URL SECURITY
 // ============================================================
 
-function isSafeHttpUrl(value) {
+function isSafeHttpUrl(
+  value
+) {
   if (!value) {
     return false;
   }
@@ -1545,14 +2213,17 @@ function isSafeHttpUrl(value) {
   let parsed;
 
   try {
-    parsed = new URL(value);
+    parsed =
+      new URL(value);
   } catch (_) {
     return false;
   }
 
   if (
-    parsed.protocol !== "https:" &&
-    parsed.protocol !== "http:"
+    parsed.protocol !==
+      "https:" &&
+    parsed.protocol !==
+      "http:"
   ) {
     return false;
   }
@@ -1560,41 +2231,86 @@ function isSafeHttpUrl(value) {
   const hostname =
     parsed.hostname
       .toLowerCase()
-      .replace(/^www\./, "");
+      .replace(
+        /^www\./,
+        ""
+      );
 
   if (!hostname) {
     return false;
   }
 
   if (
-    hostname === "localhost" ||
-    hostname.endsWith(".localhost") ||
-    hostname === "127.0.0.1" ||
-    hostname === "0.0.0.0" ||
-    hostname === "::1"
+    hostname ===
+      "localhost" ||
+    hostname.endsWith(
+      ".localhost"
+    ) ||
+    hostname ===
+      "127.0.0.1" ||
+    hostname ===
+      "0.0.0.0" ||
+    hostname ===
+      "::1"
   ) {
     return false;
   }
 
   if (
-    hostname.startsWith("10.") ||
-    hostname.startsWith("192.168.") ||
-    hostname.startsWith("172.16.") ||
-    hostname.startsWith("172.17.") ||
-    hostname.startsWith("172.18.") ||
-    hostname.startsWith("172.19.") ||
-    hostname.startsWith("172.20.") ||
-    hostname.startsWith("172.21.") ||
-    hostname.startsWith("172.22.") ||
-    hostname.startsWith("172.23.") ||
-    hostname.startsWith("172.24.") ||
-    hostname.startsWith("172.25.") ||
-    hostname.startsWith("172.26.") ||
-    hostname.startsWith("172.27.") ||
-    hostname.startsWith("172.28.") ||
-    hostname.startsWith("172.29.") ||
-    hostname.startsWith("172.30.") ||
-    hostname.startsWith("172.31.")
+    hostname.startsWith(
+      "10."
+    ) ||
+    hostname.startsWith(
+      "192.168."
+    ) ||
+    hostname.startsWith(
+      "172.16."
+    ) ||
+    hostname.startsWith(
+      "172.17."
+    ) ||
+    hostname.startsWith(
+      "172.18."
+    ) ||
+    hostname.startsWith(
+      "172.19."
+    ) ||
+    hostname.startsWith(
+      "172.20."
+    ) ||
+    hostname.startsWith(
+      "172.21."
+    ) ||
+    hostname.startsWith(
+      "172.22."
+    ) ||
+    hostname.startsWith(
+      "172.23."
+    ) ||
+    hostname.startsWith(
+      "172.24."
+    ) ||
+    hostname.startsWith(
+      "172.25."
+    ) ||
+    hostname.startsWith(
+      "172.26."
+    ) ||
+    hostname.startsWith(
+      "172.27."
+    ) ||
+    hostname.startsWith(
+      "172.28."
+    ) ||
+    hostname.startsWith(
+      "172.29."
+    ) ||
+    hostname.startsWith(
+      "172.30."
+    ) ||
+    hostname.startsWith(
+      "172.31."
+    )
   ) {
     return false;
   }
@@ -1603,8 +2319,14 @@ function isSafeHttpUrl(value) {
 }
 
 
-function hostnameOf(value) {
-  if (!isSafeHttpUrl(value)) {
+function hostnameOf(
+  value
+) {
+  if (
+    !isSafeHttpUrl(
+      value
+    )
+  ) {
     return "";
   }
 
@@ -1612,29 +2334,42 @@ function hostnameOf(value) {
     return new URL(value)
       .hostname
       .toLowerCase()
-      .replace(/^www\./, "");
+      .replace(
+        /^www\./,
+        ""
+      );
   } catch (_) {
     return "";
   }
 }
 
 
-function isThirdPartyHost(hostname) {
+function isThirdPartyHost(
+  hostname
+) {
   return OBVIOUS_THIRD_PARTY_HOSTS.some(
     domain =>
-      hostname === domain ||
-      hostname.endsWith(`.${domain}`)
+      hostname ===
+        domain ||
+      hostname.endsWith(
+        `.${domain}`
+      )
   );
 }
 
 
-function brandKey(brand) {
+function brandKey(
+  brand
+) {
   return text(
     brand,
     100
   )
     .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
+    .replace(
+      /[^a-z0-9]/g,
+      ""
+    );
 }
 
 
@@ -1643,21 +2378,31 @@ function isOfficialBrandHost(
   url
 ) {
   const host =
-    hostnameOf(url);
+    hostnameOf(
+      url
+    );
 
   if (!host) {
     return false;
   }
 
   const key =
-    brandKey(brand);
+    brandKey(
+      brand
+    );
 
   const hints =
-    OFFICIAL_DOMAIN_HINTS[key] || [];
+    OFFICIAL_DOMAIN_HINTS[
+      key
+    ] || [];
 
-  return hints.some(domain =>
-    host === domain ||
-    host.endsWith(`.${domain}`)
+  return hints.some(
+    domain =>
+      host ===
+        domain ||
+      host.endsWith(
+        `.${domain}`
+      )
   );
 }
 
@@ -1666,18 +2411,28 @@ function isLikelyOfficialUrl(
   brand,
   url
 ) {
-  if (!isSafeHttpUrl(url)) {
+  if (
+    !isSafeHttpUrl(
+      url
+    )
+  ) {
     return false;
   }
 
   const host =
-    hostnameOf(url);
+    hostnameOf(
+      url
+    );
 
   if (!host) {
     return false;
   }
 
-  if (isThirdPartyHost(host)) {
+  if (
+    isThirdPartyHost(
+      host
+    )
+  ) {
     return false;
   }
 
@@ -1694,9 +2449,14 @@ function isLikelyOfficialUrl(
 
 async function validateUrlReachable(
   url,
-  timeout = OFFICIAL_PAGE_TIMEOUT
+  timeout =
+    OFFICIAL_PAGE_TIMEOUT
 ) {
-  if (!isSafeHttpUrl(url)) {
+  if (
+    !isSafeHttpUrl(
+      url
+    )
+  ) {
     return false;
   }
 
@@ -1706,6 +2466,7 @@ async function validateUrlReachable(
         url,
         {
           method: "GET",
+
           headers: {
             "User-Agent":
               "CARMATCH-AI/1.0"
@@ -1721,20 +2482,31 @@ async function validateUrlReachable(
 }
 
 
-function extractNumericPrice(value) {
+function extractNumericPrice(
+  value
+) {
   if (!value) {
     return null;
   }
 
   const raw =
     String(value)
-      .replace(/\s/g, "")
-      .replace(/\./g, "")
-      .replace(",", ".");
+      .replace(
+        /\s/g,
+        ""
+      )
+      .replace(
+        /\./g,
+        ""
+      )
+      .replace(
+        ",",
+        "."
+      );
 
   const match =
     raw.match(
-      /(\d+(?:\.\d+)?)/ 
+      /(\d+(?:\.\d+)?)/
     );
 
   if (!match) {
@@ -1742,9 +2514,15 @@ function extractNumericPrice(value) {
   }
 
   const amount =
-    Number(match[1]);
+    Number(
+      match[1]
+    );
 
-  if (!Number.isFinite(amount)) {
+  if (
+    !Number.isFinite(
+      amount
+    )
+  ) {
     return null;
   }
 
@@ -1759,13 +2537,20 @@ function extractNumericPrice(value) {
 }
 
 
-function hasRealPrice(car) {
+function hasRealPrice(
+  car
+) {
   const price =
-    normalizePrice(car.price);
+    normalizePrice(
+      car.price
+    );
 
   return (
-    price !== "Cena na vyžiadanie" &&
-    extractNumericPrice(price) !== null
+    price !==
+      "Cena na vyžiadanie" &&
+    extractNumericPrice(
+      price
+    ) !== null
   );
 }
 
@@ -1811,16 +2596,22 @@ async function verifyPriceSource(
     );
   }
 
-  for (const url of candidates) {
+  for (
+    const url
+    of candidates
+  ) {
     const reachable =
       await validateUrlReachable(
         url
       );
 
-    if (reachable) {
+    if (
+      reachable
+    ) {
       return {
         ...car,
-        priceSource: url
+        priceSource:
+          url
       };
     }
   }
@@ -1836,7 +2627,9 @@ async function verifyPriceSource(
         car.priceSource
       );
 
-    if (reachable) {
+    if (
+      reachable
+    ) {
       return {
         ...car
       };
@@ -1845,8 +2638,11 @@ async function verifyPriceSource(
 
   return {
     ...car,
+
     price:
-      hasRealPrice(car)
+      hasRealPrice(
+        car
+      )
         ? car.price
         : "Cena na vyžiadanie"
   };
@@ -1860,48 +2656,57 @@ async function verifyPricesAndSources(
 ) {
   const results =
     await Promise.all(
-      cars.map(car =>
-        verifyPriceSource(car)
+      cars.map(
+        car =>
+          verifyPriceSource(
+            car
+          )
       )
     );
 
-  return results.map(car => ({
-    ...car,
+  return results.map(
+    car => ({
+      ...car,
 
-    price:
-      normalizePrice(car.price),
+      price:
+        normalizePrice(
+          car.price
+        ),
 
-    priceSource:
-      isSafeHttpUrl(
-        car.priceSource
-      )
-        ? car.priceSource
-        : "",
+      priceSource:
+        isSafeHttpUrl(
+          car.priceSource
+        )
+          ? car.priceSource
+          : "",
 
-    configuratorUrl:
-      isSafeHttpUrl(
-        car.configuratorUrl
-      )
-        ? car.configuratorUrl
-        : "",
+      configuratorUrl:
+        isSafeHttpUrl(
+          car.configuratorUrl
+        )
+          ? car.configuratorUrl
+          : "",
 
-    officialUrl:
-      isSafeHttpUrl(
-        car.officialUrl
-      )
-        ? car.officialUrl
-        : "",
+      officialUrl:
+        isSafeHttpUrl(
+          car.officialUrl
+        )
+          ? car.officialUrl
+          : "",
 
-    dataSources:
-      arrayText(
-        car.dataSources,
-        MAX_DATA_SOURCES,
-        1000
-      ),
+      dataSources:
+        arrayText(
+          car.dataSources,
+          MAX_DATA_SOURCES,
+          1000
+        ),
 
-    liveWeb:
-      Boolean(liveWeb)
-  }));
+      liveWeb:
+        Boolean(
+          liveWeb
+        )
+    })
+  );
 }
 
 
@@ -1930,60 +2735,99 @@ const IMAGE_REJECT_WORDS = [
 ];
 
 
-function normalizeImageText(value) {
+function normalizeImageText(
+  value
+) {
   return text(
     value,
     1000
   )
     .toLowerCase()
-    .replace(/[_-]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(
+      /[_-]/g,
+      " "
+    )
+    .replace(
+      /\s+/g,
+      " "
+    )
     .trim();
 }
 
 
-function isRejectedImageTitle(title) {
+function isRejectedImageTitle(
+  title
+) {
   const normalized =
-    normalizeImageText(title);
+    normalizeImageText(
+      title
+    );
 
   return IMAGE_REJECT_WORDS.some(
     word =>
-      normalized.includes(word)
+      normalized.includes(
+        word
+      )
   );
 }
 
 
-function isWikimediaPhotoURL(url) {
+function isWikimediaPhotoURL(
+  url
+) {
   if (!url) {
     return false;
   }
 
-  if (!isSafeHttpUrl(url)) {
+  if (
+    !isSafeHttpUrl(
+      url
+    )
+  ) {
     return false;
   }
 
   const host =
-    hostnameOf(url);
+    hostnameOf(
+      url
+    );
 
   return (
-    host === "upload.wikimedia.org" ||
-    host.endsWith(".wikimedia.org")
+    host ===
+      "upload.wikimedia.org" ||
+    host.endsWith(
+      ".wikimedia.org"
+    )
   );
 }
 
 
-function buildImageSearchQueries(car) {
+function buildImageSearchQueries(
+  car
+) {
   const brand =
-    text(car.brand, 100);
+    text(
+      car.brand,
+      100
+    );
 
   const model =
-    text(car.model, 150);
+    text(
+      car.model,
+      150
+    );
 
   const generation =
-    text(car.generation, 150);
+    text(
+      car.generation,
+      150
+    );
 
   const year =
-    text(car.modelYear, 50);
+    text(
+      car.modelYear,
+      50
+    );
 
   const queries = [];
 
@@ -2035,7 +2879,10 @@ function buildImageSearchQueries(car) {
         )
         .filter(Boolean)
     )
-  ].slice(0, 4);
+  ].slice(
+    0,
+    4
+  );
 }
 
 
@@ -2072,34 +2919,44 @@ function scoreImageCandidate(
 
   if (
     brand &&
-    title.includes(brand)
+    title.includes(
+      brand
+    )
   ) {
     score += 30;
   }
 
   if (
     model &&
-    title.includes(model)
+    title.includes(
+      model
+    )
   ) {
     score += 40;
   }
 
   if (
     generation &&
-    title.includes(generation)
+    title.includes(
+      generation
+    )
   ) {
     score += 20;
   }
 
   if (
     year &&
-    title.includes(year)
+    title.includes(
+      year
+    )
   ) {
     score += 10;
   }
 
   if (
-    isRejectedImageTitle(title)
+    isRejectedImageTitle(
+      title
+    )
   ) {
     score -= 100;
   }
@@ -2116,33 +2973,46 @@ function dedupeImageCandidates(
     new Set();
 
   return candidates
-    .filter(candidate =>
-      candidate?.image
+    .filter(
+      candidate =>
+        candidate?.image
     )
-    .map(candidate => ({
-      ...candidate,
-      score:
-        scoreImageCandidate(
-          candidate,
-          car
-        )
-    }))
-    .filter(candidate => {
-      const key =
-        candidate.image
-          .split("?")[0];
+    .map(
+      candidate => ({
+        ...candidate,
 
-      if (seen.has(key)) {
-        return false;
+        score:
+          scoreImageCandidate(
+            candidate,
+            car
+          )
+      })
+    )
+    .filter(
+      candidate => {
+        const key =
+          candidate.image
+            .split("?")[0];
+
+        if (
+          seen.has(
+            key
+          )
+        ) {
+          return false;
+        }
+
+        seen.add(
+          key
+        );
+
+        return true;
       }
-
-      seen.add(key);
-
-      return true;
-    })
+    )
     .sort(
       (a, b) =>
-        b.score - a.score
+        b.score -
+        a.score
     );
 }
 
@@ -2179,12 +3049,16 @@ async function searchWikimediaImages(
 
   const pages =
     Object.values(
-      data?.query?.pages || {}
+      data?.query?.pages ||
+      {}
     );
 
   const candidates = [];
 
-  for (const page of pages) {
+  for (
+    const page
+    of pages
+  ) {
     const title =
       text(
         page?.title,
@@ -2223,19 +3097,25 @@ async function searchWikimediaImages(
 
     if (
       mime &&
-      !mime.startsWith("image/")
+      !mime.startsWith(
+        "image/"
+      )
     ) {
       continue;
     }
 
     candidates.push({
       image,
+
       photoSource:
         page?.canonicalurl ||
         page?.fullurl ||
         "",
+
       title,
+
       query,
+
       queryIndex
     });
   }
@@ -2256,7 +3136,8 @@ async function searchWikipediaImages(
       gsrnamespace: "0",
       gsrlimit: "8",
       prop: "pageimages|info",
-      piprop: "thumbnail|original",
+      piprop:
+        "thumbnail|original",
       pithumbsize: "1200",
       inprop: "url",
       format: "json",
@@ -2277,12 +3158,16 @@ async function searchWikipediaImages(
 
   const pages =
     Object.values(
-      data?.query?.pages || {}
+      data?.query?.pages ||
+      {}
     );
 
   const candidates = [];
 
-  for (const page of pages) {
+  for (
+    const page
+    of pages
+  ) {
     const title =
       text(
         page?.title,
@@ -2311,12 +3196,17 @@ async function searchWikipediaImages(
     }
 
     candidates.push({
-      image: thumbnail,
+      image:
+        thumbnail,
+
       photoSource:
         page?.fullurl ||
         "",
+
       title,
+
       query,
+
       queryIndex
     });
   }
@@ -2325,7 +3215,9 @@ async function searchWikipediaImages(
 }
 
 
-async function findCarImages(car) {
+async function findCarImages(
+  car
+) {
   const queries =
     buildImageSearchQueries(
       car
@@ -2336,6 +3228,7 @@ async function findCarImages(car) {
   ) {
     return {
       ...car,
+
       image: "",
       photoSource: "",
       imageCandidates: []
@@ -2347,7 +3240,10 @@ async function findCarImages(car) {
   const commonsResults =
     await Promise.allSettled(
       queries.map(
-        (query, index) =>
+        (
+          query,
+          index
+        ) =>
           searchWikimediaImages(
             query,
             index
@@ -2361,7 +3257,7 @@ async function findCarImages(car) {
   ) {
     if (
       result.status ===
-      "fulfilled"
+        "fulfilled"
     ) {
       candidates.push(
         ...result.value
@@ -2382,7 +3278,10 @@ async function findCarImages(car) {
     const wikipediaResults =
       await Promise.allSettled(
         queries.map(
-          (query, index) =>
+          (
+            query,
+            index
+          ) =>
             searchWikipediaImages(
               query,
               index
@@ -2396,7 +3295,7 @@ async function findCarImages(car) {
     ) {
       if (
         result.status ===
-        "fulfilled"
+          "fulfilled"
       ) {
         candidates.push(
           ...result.value
@@ -2417,37 +3316,49 @@ async function findCarImages(car) {
         0,
         MAX_IMAGE_CANDIDATES
       )
-      .map(candidate => ({
-        url:
-          candidate.image,
-        source:
-          candidate.photoSource ||
-          "",
-        title:
-          candidate.title ||
-          ""
-      }));
+      .map(
+        candidate => ({
+          url:
+            candidate.image,
+
+          source:
+            candidate.photoSource ||
+            "",
+
+          title:
+            candidate.title ||
+            ""
+        })
+      );
 
   const first =
     imageCandidates[0];
 
   return {
     ...car,
+
     image:
       first?.url ||
       "",
+
     photoSource:
       first?.source ||
       "",
+
     imageCandidates
   };
 }
 
 
-async function addCarImages(cars) {
+async function addCarImages(
+  cars
+) {
   return Promise.all(
-    cars.map(car =>
-      findCarImages(car)
+    cars.map(
+      car =>
+        findCarImages(
+          car
+        )
     )
   );
 }
@@ -2457,7 +3368,9 @@ async function addCarImages(cars) {
 // FINAL RESULT SANITIZATION
 // ============================================================
 
-function sanitizeCarLinks(car) {
+function sanitizeCarLinks(
+  car
+) {
   const result = {
     ...car
   };
@@ -2467,7 +3380,8 @@ function sanitizeCarLinks(car) {
       result.officialUrl
     )
   ) {
-    result.officialUrl = "";
+    result.officialUrl =
+      "";
   }
 
   if (
@@ -2475,7 +3389,8 @@ function sanitizeCarLinks(car) {
       result.configuratorUrl
     )
   ) {
-    result.configuratorUrl = "";
+    result.configuratorUrl =
+      "";
   }
 
   if (
@@ -2483,7 +3398,8 @@ function sanitizeCarLinks(car) {
       result.priceSource
     )
   ) {
-    result.priceSource = "";
+    result.priceSource =
+      "";
   }
 
   if (
@@ -2493,54 +3409,64 @@ function sanitizeCarLinks(car) {
   ) {
     result.dataSources =
       result.dataSources
-        .filter(url =>
-          isSafeHttpUrl(url)
+        .filter(
+          url =>
+            isSafeHttpUrl(
+              url
+            )
         )
         .slice(
           0,
           MAX_DATA_SOURCES
         );
   } else {
-    result.dataSources = [];
+    result.dataSources =
+      [];
   }
 
   return result;
 }
 
 
-function finalSanitizeCars(cars) {
-  return cars.map(car => {
-    const sanitized =
-      sanitizeCarLinks({
-        ...car,
-        power:
-          normalizePower(
-            car.power
-          ),
-        price:
-          normalizePrice(
-            car.price
-          )
-      });
+function finalSanitizeCars(
+  cars
+) {
+  return cars.map(
+    car => {
+      const sanitized =
+        sanitizeCarLinks({
+          ...car,
 
-    if (
-      !sanitized.power
-    ) {
-      sanitized.power = {
-        kw: "",
-        hp: ""
-      };
+          power:
+            normalizePower(
+              car.power
+            ),
+
+          price:
+            normalizePrice(
+              car.price
+            )
+        });
+
+      if (
+        !sanitized.power
+      ) {
+        sanitized.power = {
+          kw: "",
+          hp: ""
+        };
+      }
+
+      if (
+        !sanitized.price
+      ) {
+        sanitized.price =
+          "Cena na vyžiadanie";
+      }
+
+      return sanitized;
     }
-
-    if (
-      !sanitized.price
-    ) {
-      sanitized.price =
-        "Cena na vyžiadanie";
-    }
-
-    return sanitized;
-  });
+  );
 }
 
 
@@ -2577,7 +3503,8 @@ export default async function handler(
   );
 
   if (
-    req.method === "OPTIONS"
+    req.method ===
+      "OPTIONS"
   ) {
     return res
       .status(200)
@@ -2585,7 +3512,8 @@ export default async function handler(
   }
 
   if (
-    req.method !== "POST"
+    req.method !==
+      "POST"
   ) {
     return sendJson(
       res,
@@ -2600,9 +3528,9 @@ export default async function handler(
   const startedAt =
     Date.now();
 
-  // FIX:
-  // Must be outside try so catch can safely refund
-  // a search that was already charged.
+  // IMPORTANT:
+  // Must remain outside try so that
+  // a charged search can safely be refunded.
   let searchCharged =
     false;
 
@@ -2628,6 +3556,7 @@ export default async function handler(
         {
           error:
             "Configuration error",
+
           message:
             "CARMATCH AI nemá správne nastavený Supabase backend."
         }
@@ -2644,6 +3573,7 @@ export default async function handler(
         {
           error:
             "Configuration error",
+
           message:
             "CARMATCH AI nemá nakonfigurovaný GROQ_API_KEY ani OPENROUTER_API_KEY."
         }
@@ -2682,7 +3612,8 @@ export default async function handler(
 
     if (
       !accessToken ||
-      accessToken.length > 10000
+      accessToken.length >
+        10000
     ) {
       return sendJson(
         res,
@@ -2724,7 +3655,9 @@ export default async function handler(
       );
 
     if (
-      request.naturalLanguage.length >
+      request
+        .naturalLanguage
+        .length >
         3000 ||
       JSON.stringify(
         request.filters
@@ -2759,8 +3692,10 @@ export default async function handler(
         {
           error:
             "Denný limit vyhľadávaní bol dosiahnutý.",
+
           message:
             `Použil si všetkých ${MAX_SEARCHES_PER_DAY} vyhľadávaní pre dnešok.`,
+
           remaining:
             0
         }
@@ -2769,6 +3704,15 @@ export default async function handler(
 
     searchCharged =
       true;
+
+    // --------------------------------------------------------
+    // GLOBAL AI DEADLINE
+    // --------------------------------------------------------
+
+    const aiDeadline =
+      createDeadline(
+        TOTAL_AI_TIMEOUT
+      );
 
     // --------------------------------------------------------
     // PRIMARY PROVIDER
@@ -2784,12 +3728,16 @@ export default async function handler(
       false;
 
     if (
-      GROQ_API_KEY
+      GROQ_API_KEY &&
+      remainingTime(
+        aiDeadline
+      ) > 1000
     ) {
       try {
         result =
           await callGroqResearch(
-            request
+            request,
+            aiDeadline
           );
       } catch (error) {
         groqFailed =
@@ -2803,17 +3751,21 @@ export default async function handler(
     }
 
     // --------------------------------------------------------
-    // FALLBACK PROVIDER
+    // OPENROUTER FALLBACK
     // --------------------------------------------------------
 
     if (
       !result &&
-      OPENROUTER_API_KEY
+      OPENROUTER_API_KEY &&
+      remainingTime(
+        aiDeadline
+      ) > 1000
     ) {
       try {
         result =
           await callOpenRouter(
-            request
+            request,
+            aiDeadline
           );
       } catch (error) {
         openRouterFailed =
@@ -2827,7 +3779,7 @@ export default async function handler(
     }
 
     // --------------------------------------------------------
-    // ALL FAILED -> REFUND SEARCH
+    // ALL AI PROVIDERS FAILED
     // --------------------------------------------------------
 
     if (!result) {
@@ -2896,10 +3848,12 @@ export default async function handler(
       result.cars.map(
         car => ({
           ...car,
+
           power:
             normalizePower(
               car.power
             ),
+
           price:
             normalizePrice(
               car.price
@@ -2934,9 +3888,13 @@ export default async function handler(
         cars
       );
 
-    // Exact 3-car final contract.
+    // --------------------------------------------------------
+    // EXACT 3-CAR CONTRACT
+    // --------------------------------------------------------
+
     if (
-      cars.length !== 3
+      cars.length !==
+        3
     ) {
       throw new Error(
         "Final result does not contain exactly 3 cars"
@@ -3040,7 +3998,8 @@ export default async function handler(
         retryable:
           true,
 
-        ...(remaining !== null
+        ...(remaining !==
+        null
           ? {
               remaining
             }
