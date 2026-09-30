@@ -1,200 +1,113 @@
 // ============================================================
-// CARMATCH AI - FINAL FRONTEND v9
+// CARMATCH AI - FINAL FRONTEND v10
 // ============================================================
-// - Presne 3 výsledné autá
-// - Supabase anonymous auth
-// - 5 vyhľadávaní denne cez backend
-// - Oprava [object Object]
-// - Robustné chybové hlášky
-// - Obrázky / imageCandidates
-// - Cena / výkon / kufor / pohon / palivo
-// - Oficiálna cena / konfigurátor / zdroje
-// - Vibrácia + zvuk po dokončení
-// - Mobilné zobrazenie
+// One frontend implementation only.
+// No duplicated inline JavaScript.
+// Robust object handling.
+// Supabase anonymous authentication.
+// 5 searches/day through backend.
+// Exactly 3 results.
+// Safe error handling.
+// Image candidates.
+// Vibration + sound.
 // ============================================================
 
+"use strict";
 
-// ============================================================
-// SUPABASE CONFIG
-// ============================================================
-// MUSIA tu byť tvoje EXISTUJÚCE PUBLIC hodnoty.
-// Nikdy sem nedávaj service_role key.
-
-const CARMATCH_CONFIG = window.CARMATCH_CONFIG || {
-  supabaseUrl: "PASTE_YOUR_SUPABASE_URL_HERE",
-  supabaseAnonKey: "PASTE_YOUR_SUPABASE_ANON_KEY_HERE",
-  apiEndpoint: "/api/search"
+const CONFIG = window.CARMATCH_CONFIG || {
+    supabaseUrl: "",
+    supabaseAnonKey: "",
+    apiEndpoint: "/api/search"
 };
 
-
-const API_ENDPOINT =
-  String(CARMATCH_CONFIG.apiEndpoint || "/api/search").trim();
-
-
-const SUPABASE_URL =
-  String(CARMATCH_CONFIG.supabaseUrl || "")
-    .trim()
-    .replace(/\/+$/, "");
-
-
-const SUPABASE_ANON_KEY =
-  String(CARMATCH_CONFIG.supabaseAnonKey || "").trim();
-
-
-const SUPABASE_CLIENT_CDN =
-  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js";
-
-
-const REQUEST_TIMEOUT = 70000;
-
-
 let supabaseClient = null;
-let supabaseScriptPromise = null;
-let activeRequest = false;
+let initialized = false;
+let searching = false;
 
 
 // ============================================================
-// SAFE VALUE HELPERS
+// SAFE TEXT
 // ============================================================
 
 function safeDisplayText(value, fallback = "") {
-  if (value === null || value === undefined) {
-    return fallback;
-  }
+    if (value === null || value === undefined) {
+        return fallback;
+    }
 
-  if (typeof value === "string") {
-    const clean = value.trim();
-    return clean || fallback;
-  }
+    if (typeof value === "string") {
+        const text = value.trim();
+        return text || fallback;
+    }
 
-  if (
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return String(value);
-  }
+    if (
+        typeof value === "number" ||
+        typeof value === "boolean"
+    ) {
+        return String(value);
+    }
 
-  if (Array.isArray(value)) {
-    const parts = value
-      .map(item => safeDisplayText(item, ""))
-      .filter(Boolean);
+    if (Array.isArray(value)) {
+        return value
+            .map(item => safeDisplayText(item, ""))
+            .filter(Boolean)
+            .join(", ") || fallback;
+    }
 
-    return parts.length
-      ? parts.join(", ")
-      : fallback;
-  }
+    if (typeof value === "object") {
+        const preferredKeys = [
+            "message",
+            "error",
+            "text",
+            "value",
+            "name",
+            "description",
+            "reason",
+            "title"
+        ];
 
-  if (typeof value === "object") {
-    const preferredKeys = [
-      "message",
-      "error",
-      "text",
-      "value",
-      "name",
-      "description",
-      "reason",
-      "title"
-    ];
-
-    for (const key of preferredKeys) {
-      if (
-        Object.prototype.hasOwnProperty.call(value, key) &&
-        value[key] !== null &&
-        value[key] !== undefined
-      ) {
-        const result =
-          safeDisplayText(value[key], "");
-
-        if (result) {
-          return result;
+        for (const key of preferredKeys) {
+            if (
+                Object.prototype.hasOwnProperty.call(value, key) &&
+                value[key] !== null &&
+                value[key] !== undefined
+            ) {
+                const result = safeDisplayText(value[key], "");
+                if (result) {
+                    return result;
+                }
+            }
         }
-      }
+
+        try {
+            const json = JSON.stringify(value);
+            return json && json !== "{}"
+                ? json
+                : fallback;
+        } catch {
+            return fallback;
+        }
     }
 
-    try {
-      return JSON.stringify(value);
-    } catch (_) {
-      return fallback;
-    }
-  }
-
-  return fallback;
+    return fallback;
 }
 
+
+// ============================================================
+// HTML ESCAPING
+// ============================================================
 
 function escapeHTML(value) {
-  return safeDisplayText(value, "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+    return safeDisplayText(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
 }
 
 
-function formatText(value, fallback = "—") {
-  const clean =
-    safeDisplayText(value, "").trim();
-
-  return clean
-    ? escapeHTML(clean)
-    : fallback;
-}
-
-
-function formatPrice(value) {
-  const clean =
-    safeDisplayText(value, "").trim();
-
-  if (!clean) {
-    return "Cena na vyžiadanie";
-  }
-
-  return escapeHTML(clean);
-}
-
-
-function safeNumber(value, fallback = null) {
-  const number = Number(value);
-
-  return Number.isFinite(number)
-    ? number
-    : fallback;
-}
-
-
-function safeHTTPSUrl(value) {
-  const clean =
-    safeDisplayText(value, "").trim();
-
-  if (!clean) {
-    return "";
-  }
-
-  try {
-    const url = new URL(clean);
-
-    if (url.protocol !== "https:") {
-      return "";
-    }
-
-    return url.href;
-  } catch (_) {
-    return "";
-  }
-}
-
-
-function clampScore(value) {
-  const number = safeNumber(value, 0);
-
-  return Math.max(
-    0,
-    Math.min(
-      100,
-      Math.round(number)
-    )
-  );
+function escapeAttribute(value) {
+    return escapeHTML(value);
 }
 
 
@@ -202,76 +115,29 @@ function clampScore(value) {
 // DOM
 // ============================================================
 
-function firstExistingId(ids) {
-  for (const id of ids) {
-    const element =
-      document.getElementById(id);
-
-    if (element) {
-      return element;
-    }
-  }
-
-  return null;
+function get(id) {
+    return document.getElementById(id);
 }
 
 
-function readValue(ids, fallback = "") {
-  const element =
-    firstExistingId(ids);
-
-  if (!element) {
-    return fallback;
-  }
-
-  return safeDisplayText(
-    element.value,
-    fallback
-  ).trim();
+function getSearchButton() {
+    return (
+        get("searchButton") ||
+        document.querySelector(".find")
+    );
 }
 
 
-function readNumber(ids, fallback = "") {
-  const raw =
-    readValue(ids, "");
-
-  if (!raw) {
-    return fallback;
-  }
-
-  const number =
-    Number(raw);
-
-  return Number.isFinite(number)
-    ? number
-    : fallback;
+function getResultsElement() {
+    return (
+        get("results") ||
+        get("output")
+    );
 }
 
 
-function getOutputElement() {
-  return (
-    document.getElementById("output") ||
-    document.getElementById("results")
-  );
-}
-
-
-function getFindButton() {
-  return (
-    document.querySelector("button.find") ||
-    document.querySelector("button.primary") ||
-    document.querySelector(
-      'button[onclick="findCars()"]'
-    ) ||
-    Array.from(
-      document.querySelectorAll("button")
-    ).find(button =>
-      /nájsť moje auto/i.test(
-        button.textContent || ""
-      )
-    ) ||
-    null
-  );
+function getStatusElement() {
+    return get("status");
 }
 
 
@@ -279,216 +145,60 @@ function getFindButton() {
 // STATUS
 // ============================================================
 
-function ensureStatusElement() {
-  let status =
-    document.getElementById(
-      "carmatch-status"
-    );
+function setStatus(message, type = "") {
+    const element = getStatusElement();
 
-  if (status) {
-    return status;
-  }
+    if (!element) {
+        return;
+    }
 
-  const button =
-    getFindButton();
+    element.className = "status";
 
-  if (
-    !button ||
-    !button.parentElement
-  ) {
-    return null;
-  }
+    if (type) {
+        element.classList.add(type);
+    }
 
-  status =
-    document.createElement("div");
-
-  status.id =
-    "carmatch-status";
-
-  status.setAttribute(
-    "aria-live",
-    "polite"
-  );
-
-  status.style.marginTop =
-    "10px";
-
-  status.style.fontSize =
-    "13px";
-
-  status.style.color =
-    "#6b6b6b";
-
-  status.style.textAlign =
-    "center";
-
-  button.insertAdjacentElement(
-    "afterend",
-    status
-  );
-
-  return status;
+    element.textContent = safeDisplayText(message);
 }
 
 
-function setStatus(
-  message = "",
-  isError = false
-) {
-  const status =
-    ensureStatusElement();
+function clearStatus() {
+    const element = getStatusElement();
 
-  if (!status) {
-    return;
-  }
+    if (!element) {
+        return;
+    }
 
-  status.textContent =
-    safeDisplayText(
-      message,
-      ""
-    );
-
-  status.style.color =
-    isError
-      ? "#9b1c1c"
-      : "#6b6b6b";
+    element.textContent = "";
+    element.className = "status";
 }
 
+
+// ============================================================
+// BUTTON
+// ============================================================
 
 function setButtonBusy(busy) {
-  const button =
-    getFindButton();
+    const button = getSearchButton();
 
-  if (!button) {
-    return;
-  }
-
-  button.disabled =
-    Boolean(busy);
-
-  button.style.opacity =
-    busy ? "0.65" : "1";
-
-  button.style.cursor =
-    busy ? "wait" : "pointer";
-
-  if (busy) {
-    if (
-      !button.dataset.originalText
-    ) {
-      button.dataset.originalText =
-        button.textContent;
+    if (!button) {
+        return;
     }
 
-    button.textContent =
-      "HĽADÁM…";
-  } else {
-    if (
-      button.dataset.originalText
-    ) {
-      button.textContent =
-        button.dataset.originalText;
-    }
-  }
-}
+    searching = busy;
+    button.disabled = busy || !initialized;
+    button.classList.toggle("loading", busy);
 
+    const normalText = button.querySelector(".button-text");
+    const loadingText = button.querySelector(".button-loading");
 
-// ============================================================
-// FEEDBACK
-// ============================================================
-
-function vibrateSuccess() {
-  try {
-    if (
-      "vibrate" in navigator
-    ) {
-      navigator.vibrate([
-        80,
-        45,
-        120
-      ]);
-    }
-  } catch (_) {}
-}
-
-
-function playReadySound() {
-  try {
-    const AudioContextClass =
-      window.AudioContext ||
-      window.webkitAudioContext;
-
-    if (!AudioContextClass) {
-      return;
+    if (normalText) {
+        normalText.hidden = busy;
     }
 
-    const context =
-      new AudioContextClass();
-
-    const now =
-      context.currentTime;
-
-    const oscillator =
-      context.createOscillator();
-
-    const gain =
-      context.createGain();
-
-    oscillator.type =
-      "sine";
-
-    oscillator.frequency
-      .setValueAtTime(
-        660,
-        now
-      );
-
-    oscillator.frequency
-      .setValueAtTime(
-        880,
-        now + 0.08
-      );
-
-    gain.gain
-      .setValueAtTime(
-        0.0001,
-        now
-      );
-
-    gain.gain
-      .exponentialRampToValueAtTime(
-        0.12,
-        now + 0.015
-      );
-
-    gain.gain
-      .exponentialRampToValueAtTime(
-        0.0001,
-        now + 0.22
-      );
-
-    oscillator.connect(gain);
-    gain.connect(context.destination);
-
-    oscillator.start(now);
-    oscillator.stop(
-      now + 0.24
-    );
-
-    oscillator.addEventListener(
-      "ended",
-      () => {
-        context.close()
-          .catch(() => {});
-      }
-    );
-  } catch (_) {}
-}
-
-
-function answerReadyFeedback() {
-  vibrateSuccess();
-  playReadySound();
+    if (loadingText) {
+        loadingText.hidden = !busy;
+    }
 }
 
 
@@ -496,225 +206,190 @@ function answerReadyFeedback() {
 // SUPABASE
 // ============================================================
 
-function configIsUsable() {
-  return (
-    Boolean(SUPABASE_URL) &&
-    Boolean(SUPABASE_ANON_KEY) &&
-    !SUPABASE_URL.includes(
-      "PASTE_YOUR_"
-    ) &&
-    !SUPABASE_ANON_KEY.includes(
-      "PASTE_YOUR_"
-    )
-  );
+function isSupabaseConfigValid() {
+    return (
+        typeof CONFIG.supabaseUrl === "string" &&
+        CONFIG.supabaseUrl.startsWith("http") &&
+        typeof CONFIG.supabaseAnonKey === "string" &&
+        CONFIG.supabaseAnonKey.length > 20
+    );
 }
 
 
-function loadSupabaseScript() {
-  if (
-    window.supabase &&
-    typeof window.supabase.createClient ===
-      "function"
-  ) {
-    return Promise.resolve(
-      window.supabase
-    );
-  }
+function waitForSupabase() {
+    return new Promise((resolve, reject) => {
+        const started = Date.now();
 
-  if (supabaseScriptPromise) {
-    return supabaseScriptPromise;
-  }
-
-  supabaseScriptPromise =
-    new Promise(
-      (resolve, reject) => {
-        const existing =
-          document.querySelector(
-            'script[data-carmatch-supabase="1"]'
-          );
-
-        if (existing) {
-          existing.addEventListener(
-            "load",
-            () => {
-              if (
+        const check = () => {
+            if (
                 window.supabase &&
-                typeof window.supabase.createClient ===
-                  "function"
-              ) {
-                resolve(
-                  window.supabase
-                );
-              } else {
+                typeof window.supabase.createClient === "function"
+            ) {
+                resolve(window.supabase);
+                return;
+            }
+
+            if (Date.now() - started > 10000) {
                 reject(
-                  new Error(
-                    "Supabase JS sa nespustil."
-                  )
+                    new Error(
+                        "Supabase sa nepodarilo načítať."
+                    )
                 );
-              }
+                return;
             }
-          );
 
-          existing.addEventListener(
-            "error",
-            () => {
-              reject(
-                new Error(
-                  "Supabase JS sa nepodarilo načítať."
-                )
-              );
-            }
-          );
-
-          return;
-        }
-
-        const script =
-          document.createElement(
-            "script"
-          );
-
-        script.src =
-          SUPABASE_CLIENT_CDN;
-
-        script.async = true;
-
-        script.dataset.carmatchSupabase =
-          "1";
-
-        script.onload = () => {
-          if (
-            window.supabase &&
-            typeof window.supabase.createClient ===
-              "function"
-          ) {
-            resolve(
-              window.supabase
-            );
-          } else {
-            reject(
-              new Error(
-                "Supabase JS sa nespustil."
-              )
-            );
-          }
+            setTimeout(check, 100);
         };
 
-        script.onerror = () => {
-          reject(
-            new Error(
-              "Supabase JS sa nepodarilo načítať."
-            )
-          );
-        };
-
-        document.head.appendChild(
-          script
-        );
-      }
-    );
-
-  return supabaseScriptPromise;
+        check();
+    });
 }
 
 
 async function getSupabaseClient() {
-  if (supabaseClient) {
-    return supabaseClient;
-  }
+    if (supabaseClient) {
+        return supabaseClient;
+    }
 
-  if (!configIsUsable()) {
-    throw new Error(
-      "Supabase URL alebo anon key nie sú nastavené."
-    );
-  }
+    if (!isSupabaseConfigValid()) {
+        throw new Error(
+            "Supabase konfigurácia nie je nastavená."
+        );
+    }
 
-  const supabase =
-    await loadSupabaseScript();
+    const supabase = await waitForSupabase();
 
-  supabaseClient =
-    supabase.createClient(
-      SUPABASE_URL,
-      SUPABASE_ANON_KEY,
-      {
-        auth: {
-          persistSession: true,
-          autoRefreshToken: true,
-          detectSessionInUrl: false
+    supabaseClient = supabase.createClient(
+        CONFIG.supabaseUrl,
+        CONFIG.supabaseAnonKey,
+        {
+            auth: {
+                persistSession: true,
+                autoRefreshToken: true,
+                detectSessionInUrl: false
+            }
         }
-      }
     );
 
-  return supabaseClient;
+    return supabaseClient;
 }
 
 
 async function ensureAnonymousSession() {
-  const client =
-    await getSupabaseClient();
+    const client = await getSupabaseClient();
 
-  const existing =
-    await client.auth.getSession();
+    const existing = await client.auth.getSession();
 
-  const existingSession =
-    existing?.data?.session;
+    if (existing?.data?.session?.access_token) {
+        return existing.data.session;
+    }
 
-  if (
-    existingSession &&
-    existingSession.access_token
-  ) {
-    return existingSession;
-  }
+    const result = await client.auth.signInAnonymously();
 
-  const signIn =
-    await client.auth.signInAnonymously();
+    if (result.error) {
+        throw new Error(
+            safeDisplayText(
+                result.error.message,
+                "Nepodarilo sa vytvoriť anonymnú reláciu."
+            )
+        );
+    }
 
-  if (signIn?.error) {
-    throw new Error(
-      safeDisplayText(
-        signIn.error.message,
-        "Anonymné prihlásenie do Supabase zlyhalo."
-      )
-    );
-  }
+    if (!result.data?.session) {
+        throw new Error(
+            "Supabase nevytvoril platnú reláciu."
+        );
+    }
 
-  const session =
-    signIn?.data?.session;
-
-  if (
-    !session ||
-    !session.access_token
-  ) {
-    throw new Error(
-      "Supabase nevytvoril platnú reláciu."
-    );
-  }
-
-  return session;
+    return result.data.session;
 }
 
 
-async function getAccessToken() {
-  const client =
-    await getSupabaseClient();
+async function getAccessToken(forceRefresh = false) {
+    const client = await getSupabaseClient();
 
-  const current =
-    await client.auth.getSession();
+    if (forceRefresh) {
+        const refreshed = await client.auth.refreshSession();
 
-  const currentSession =
-    current?.data?.session;
+        if (refreshed.error) {
+            throw new Error(
+                safeDisplayText(
+                    refreshed.error.message,
+                    "Reláciu sa nepodarilo obnoviť."
+                )
+            );
+        }
 
-  if (
-    currentSession &&
-    currentSession.access_token
-  ) {
-    return currentSession.access_token;
-  }
+        return refreshed.data?.session?.access_token || null;
+    }
 
-  const session =
-    await ensureAnonymousSession();
+    const session = await ensureAnonymousSession();
 
-  return session.access_token;
+    return session?.access_token || null;
+}
+
+
+// ============================================================
+// INPUT
+// ============================================================
+
+function readValue(id) {
+    const element = get(id);
+
+    if (!element) {
+        return "";
+    }
+
+    return safeDisplayText(element.value, "");
+}
+
+
+function readNumber(id) {
+    const value = readValue(id);
+
+    if (!value) {
+        return null;
+    }
+
+    const number = Number(value);
+
+    return Number.isFinite(number)
+        ? number
+        : null;
+}
+
+
+function getNaturalLanguage() {
+    const ids = [
+        "aiRequest",
+        "naturalLanguage",
+        "query",
+        "prompt",
+        "request",
+        "search",
+        "message"
+    ];
+
+    for (const id of ids) {
+        const value = readValue(id);
+
+        if (value) {
+            return value;
+        }
+    }
+
+    return "";
+}
+
+
+function getAvoidBrands() {
+    const value = readValue("avoid");
+
+    if (!value) {
+        return "";
+    }
+
+    return value;
 }
 
 
@@ -722,531 +397,340 @@ async function getAccessToken() {
 // REQUEST
 // ============================================================
 
-function getNaturalLanguage() {
-  const element =
-    firstExistingId([
-      "naturalLanguage",
-      "query",
-      "prompt",
-      "request",
-      "search",
-      "message"
-    ]);
-
-  if (!element) {
-    return "";
-  }
-
-  return safeDisplayText(
-    element.value,
-    ""
-  )
-    .replace(/\u0000/g, "")
-    .trim()
-    .slice(0, 3000);
-}
-
-
-function normalizeSelectValue(
-  value,
-  fallback = ""
-) {
-  const clean =
-    safeDisplayText(
-      value,
-      ""
-    ).trim();
-
-  if (
-    !clean ||
-    /^(ľubovoľn|ľubovoľný|ľubovoľná|ľubovoľné|any|all)$/i.test(
-      clean
-    )
-  ) {
-    return fallback;
-  }
-
-  return clean.slice(
-    0,
-    500
-  );
-}
-
-
 function buildRequestPayload() {
-  const budget =
-    readNumber(
-      ["budget"],
-      ""
-    );
-
-  const seats =
-    readNumber(
-      ["seats"],
-      ""
-    );
-
-  const power =
-    readNumber(
-      ["power"],
-      ""
-    );
-
-  const trunk =
-    readNumber(
-      ["trunk"],
-      ""
-    );
-
-  const length =
-    readNumber(
-      ["length"],
-      ""
-    );
-
-  return {
-    naturalLanguage:
-      getNaturalLanguage(),
-
-    filters: {
-      budget:
-        budget === ""
-          ? ""
-          : String(budget),
-
-      seats:
-        seats === ""
-          ? ""
-          : String(seats),
-
-      power:
-        power === ""
-          ? ""
-          : String(power),
-
-      trunk:
-        trunk === ""
-          ? ""
-          : String(trunk),
-
-      drive:
-        normalizeSelectValue(
-          readValue(
-            ["drive"],
-            ""
-          )
-        ),
-
-      fuel:
-        normalizeSelectValue(
-          readValue(
-            ["fuel"],
-            ""
-          )
-        ),
-
-      body:
-        normalizeSelectValue(
-          readValue(
-            ["body"],
-            ""
-          )
-        ),
-
-      style:
-        normalizeSelectValue(
-          readValue(
-            ["style"],
-            ""
-          )
-        ),
-
-      length:
-        length === ""
-          ? ""
-          : String(length),
-
-      year:
-        readValue(
-          ["year"],
-          ""
-        ),
-
-      avoid:
-        readValue(
-          [
-            "avoid",
-            "excludedBrands",
-            "exclude"
-          ],
-          ""
-        ).slice(0, 500)
-    }
-  };
-}
-
-
-// ============================================================
-// FETCH HELPERS
-// ============================================================
-
-function fetchWithTimeout(
-  url,
-  options = {},
-  timeout = REQUEST_TIMEOUT
-) {
-  const controller =
-    new AbortController();
-
-  const timer =
-    setTimeout(
-      () => controller.abort(),
-      timeout
-    );
-
-  return fetch(
-    url,
-    {
-      ...options,
-      signal:
-        controller.signal
-    }
-  ).finally(() => {
-    clearTimeout(timer);
-  });
-}
-
-
-async function parseResponseBody(
-  response
-) {
-  const raw =
-    await response.text();
-
-  if (!raw) {
-    return {};
-  }
-
-  try {
-    return JSON.parse(raw);
-  } catch (_) {
     return {
-      error:
-        "Invalid JSON response",
-      message:
-        raw.slice(0, 1000)
+        naturalLanguage: getNaturalLanguage(),
+
+        filters: {
+            budget: readNumber("budget"),
+            seats: readNumber("seats"),
+            power: readNumber("power"),
+            trunk: readNumber("trunk"),
+
+            drive: readValue("drive"),
+            fuel: readValue("fuel"),
+            body: readValue("body"),
+            style: readValue("style"),
+            length: readNumber("length"),
+            year: readNumber("year"),
+            avoid: getAvoidBrands()
+        }
     };
-  }
 }
 
 
-function createApiError(
-  response,
-  data
-) {
-  const status =
-    response.status;
+function hasSearchInput(payload) {
+    if (payload.naturalLanguage?.trim()) {
+        return true;
+    }
 
-  const message =
-    safeDisplayText(
-      data?.message ??
-      data?.error ??
-      data?.detail ??
-      data,
-      `Server vrátil chybu HTTP ${status}.`
-    );
+    const filters = payload.filters || {};
 
-  const error =
-    new Error(message);
+    return Object.values(filters).some(value => {
+        if (value === null || value === undefined) {
+            return false;
+        }
 
-  error.status =
-    status;
-
-  error.payload =
-    data;
-
-  return error;
+        return String(value).trim() !== "";
+    });
 }
 
 
 // ============================================================
-// API SEARCH
+// API RESPONSE
 // ============================================================
 
-async function performSearch(
-  payload
-) {
-  let token =
-    await getAccessToken();
+async function parseResponse(response) {
+    const raw = await response.text();
 
-  let response =
-    await fetchWithTimeout(
-      API_ENDPOINT,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type":
-            "application/json",
+    if (!raw) {
+        return {};
+    }
 
-          Authorization:
-            `Bearer ${token}`
-        },
-
-        body:
-          JSON.stringify(payload),
-
-        cache:
-          "no-store"
-      }
-    );
-
-
-  // Retry once with a fresh token.
-  if (response.status === 401) {
     try {
-      const client =
-        await getSupabaseClient();
+        return JSON.parse(raw);
+    } catch {
+        return {
+            error: "Invalid JSON response",
+            message: raw
+        };
+    }
+}
 
-      await client.auth.signOut();
 
-      const session =
-        await ensureAnonymousSession();
+function createApiError(response, data) {
+    const fallback = `Server returned HTTP ${response.status}.`;
 
-      token =
-        session.access_token;
+    const message = safeDisplayText(
+        data?.message ??
+        data?.error ??
+        data?.detail ??
+        data,
+        fallback
+    );
 
-      response =
-        await fetchWithTimeout(
-          API_ENDPOINT,
-          {
+    const error = new Error(message);
+
+    error.status = response.status;
+    error.data = data;
+
+    return error;
+}
+
+
+// ============================================================
+// SEARCH
+// ============================================================
+
+async function performSearch(payload) {
+    let token = await getAccessToken(false);
+
+    if (!token) {
+        throw new Error(
+            "Nepodarilo sa získať prístupový token."
+        );
+    }
+
+    const sendRequest = async accessToken => {
+        return fetch(CONFIG.apiEndpoint, {
             method: "POST",
-            headers: {
-              "Content-Type":
-                "application/json",
 
-              Authorization:
-                `Bearer ${token}`
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${accessToken}`
             },
 
-            body:
-              JSON.stringify(payload),
+            body: JSON.stringify(payload)
+        });
+    };
 
-            cache:
-              "no-store"
-          }
+    let response;
+
+    try {
+        response = await sendRequest(token);
+    } catch (error) {
+        const message = safeDisplayText(
+            error?.message,
+            "Failed to fetch"
         );
-    } catch (retryError) {
-      throw retryError;
+
+        const networkError = new Error(
+            `Nepodarilo sa spojiť so serverom. ${message}`
+        );
+
+        networkError.network = true;
+
+        throw networkError;
     }
-  }
 
+    let data = await parseResponse(response);
 
-  const data =
-    await parseResponseBody(
-      response
-    );
+    // Retry once if token expired.
+    if (response.status === 401) {
+        token = await getAccessToken(true);
 
+        if (!token) {
+            throw createApiError(response, data);
+        }
 
-  if (!response.ok) {
-    throw createApiError(
-      response,
-      data
-    );
-  }
+        try {
+            response = await sendRequest(token);
+        } catch (error) {
+            const message = safeDisplayText(
+                error?.message,
+                "Failed to fetch"
+            );
 
+            const networkError = new Error(
+                `Nepodarilo sa spojiť so serverom. ${message}`
+            );
 
-  if (
-    !Array.isArray(data?.cars)
-  ) {
-    const error =
-      new Error(
-        "Server nevrátil zoznam vozidiel."
-      );
+            networkError.network = true;
 
-    error.status =
-      502;
+            throw networkError;
+        }
 
-    error.payload =
-      data;
+        data = await parseResponse(response);
+    }
 
-    throw error;
-  }
+    if (!response.ok) {
+        throw createApiError(response, data);
+    }
 
+    if (!Array.isArray(data?.cars)) {
+        throw new Error(
+            "Server neposlal platné výsledky áut."
+        );
+    }
 
-  if (data.cars.length !== 3) {
-    const error =
-      new Error(
-        "Server nevrátil presne 3 vozidlá."
-      );
+    if (data.cars.length !== 3) {
+        throw new Error(
+            "Server neposlal presne 3 výsledné autá."
+        );
+    }
 
-    error.status =
-      502;
-
-    error.payload =
-      data;
-
-    throw error;
-  }
-
-
-  return data;
+    return data;
 }
 
 
 // ============================================================
-// IMAGES
+// SAFE NUMBERS
 // ============================================================
+
+function safeNumber(value, fallback = null) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return fallback;
+    }
+
+    const number = Number(value);
+
+    return Number.isFinite(number)
+        ? number
+        : fallback;
+}
+
+
+function formatNumber(value) {
+    const number = safeNumber(value);
+
+    if (number === null) {
+        return "";
+    }
+
+    return new Intl.NumberFormat("sk-SK").format(number);
+}
+
+
+function formatPrice(value) {
+    if (value === null || value === undefined) {
+        return "Cena nie je dostupná";
+    }
+
+    if (typeof value === "object") {
+        value = safeDisplayText(value, "");
+    }
+
+    const text = safeDisplayText(value, "");
+
+    if (!text) {
+        return "Cena nie je dostupná";
+    }
+
+    return text;
+}
+
+
+// ============================================================
+// URL SAFETY
+// ============================================================
+
+function safeHTTPSUrl(value) {
+    const text = safeDisplayText(value, "");
+
+    if (!text) {
+        return "";
+    }
+
+    try {
+        const url = new URL(text);
+
+        if (
+            url.protocol !== "https:" &&
+            url.protocol !== "http:"
+        ) {
+            return "";
+        }
+
+        return url.href;
+    } catch {
+        return "";
+    }
+}
+
+
+// ============================================================
+// IMAGE
+// ============================================================
+
+function getImageCandidates(car) {
+    if (!car || typeof car !== "object") {
+        return [];
+    }
+
+    const candidates = [];
+
+    if (Array.isArray(car.imageCandidates)) {
+        candidates.push(...car.imageCandidates);
+    }
+
+    if (car.image) {
+        candidates.push(car.image);
+    }
+
+    const result = [];
+
+    for (const item of candidates) {
+        let url = "";
+
+        if (typeof item === "string") {
+            url = safeHTTPSUrl(item);
+        } else if (item && typeof item === "object") {
+            url = safeHTTPSUrl(
+                item.url ||
+                item.image ||
+                item.src ||
+                item.href
+            );
+        }
+
+        if (!url) {
+            continue;
+        }
+
+        if (!result.includes(url)) {
+            result.push(url);
+        }
+    }
+
+    return result;
+}
+
 
 function bestImageForCar(car) {
-  const direct =
-    safeHTTPSUrl(
-      car?.image
-    );
+    const candidates = getImageCandidates(car);
 
-  if (direct) {
-    return direct;
-  }
-
-
-  const candidates =
-    Array.isArray(
-      car?.imageCandidates
-    )
-      ? car.imageCandidates
-      : [];
-
-
-  for (
-    const candidate
-    of candidates
-  ) {
-    const url =
-      safeHTTPSUrl(
-        candidate?.url
-      );
-
-    if (url) {
-      return url;
-    }
-  }
-
-
-  return "";
-}
-
-
-function imageSourceForCar(car) {
-  const direct =
-    safeHTTPSUrl(
-      car?.photoSource
-    );
-
-  if (direct) {
-    return direct;
-  }
-
-
-  const candidates =
-    Array.isArray(
-      car?.imageCandidates
-    )
-      ? car.imageCandidates
-      : [];
-
-
-  for (
-    const candidate
-    of candidates
-  ) {
-    const source =
-      safeHTTPSUrl(
-        candidate?.source
-      );
-
-    if (source) {
-      return source;
-    }
-  }
-
-
-  return "";
+    return candidates[0] || "";
 }
 
 
 function renderImage(car) {
-  const image =
-    bestImageForCar(car);
+    const image = bestImageForCar(car);
 
-  if (!image) {
+    if (!image) {
+        return `
+            <div class="car-image no-image">
+                <span>Fotografia nie je dostupná</span>
+            </div>
+        `;
+    }
+
     return `
-      <div
-        style="
-          min-height:220px;
-          display:flex;
-          align-items:center;
-          justify-content:center;
-          background:#f1f2f4;
-          color:#777;
-          font-size:14px;
-        "
-      >
-        Foto sa nepodarilo nájsť
-      </div>
+        <div class="car-image">
+            <img
+                src="${escapeAttribute(image)}"
+                alt="${escapeAttribute(
+                    safeDisplayText(car?.name, "Auto")
+                )}"
+                loading="lazy"
+                referrerpolicy="no-referrer"
+                onerror="this.closest('.car-image')?.classList.add('image-error'); this.style.display='none';"
+            >
+        </div>
     `;
-  }
-
-
-  const source =
-    imageSourceForCar(car);
-
-
-  const sourceHtml =
-    source
-      ? `
-        <a
-          href="${escapeHTML(source)}"
-          target="_blank"
-          rel="noopener noreferrer"
-          style="
-            display:block;
-            margin-top:6px;
-            font-size:11px;
-            color:#666;
-          "
-        >
-          Zdroj fotografie
-        </a>
-      `
-      : "";
-
-
-  return `
-    <div>
-      <img
-        src="${escapeHTML(image)}"
-        alt="${escapeHTML(
-          safeDisplayText(
-            car?.name,
-            "Vozidlo"
-          )
-        )}"
-        loading="lazy"
-        referrerpolicy="no-referrer"
-        style="
-          width:100%;
-          height:220px;
-          object-fit:cover;
-          display:block;
-        "
-        onerror="
-          this.style.display='none';
-          this.parentElement.classList.add('carmatch-photo-error');
-        "
-      >
-
-      ${sourceHtml}
-    </div>
-  `;
 }
 
 
@@ -1254,41 +738,25 @@ function renderImage(car) {
 // LISTS
 // ============================================================
 
-function renderList(
-  items,
-  emptyText
-) {
-  const safeItems =
-    Array.isArray(items)
-      ? items
-          .map(item =>
-            safeDisplayText(
-              item,
-              ""
-            )
-          )
-          .filter(Boolean)
-          .slice(0, 6)
-      : [];
+function renderList(value) {
+    if (!Array.isArray(value)) {
+        const text = safeDisplayText(value, "");
 
+        return text
+            ? `<div class="list-item">${escapeHTML(text)}</div>`
+            : "";
+    }
 
-  if (!safeItems.length) {
-    return `
-      <li>
-        ${escapeHTML(
-          emptyText
-        )}
-      </li>
-    `;
-  }
+    return value
+        .map(item => {
+            const text = safeDisplayText(item, "");
 
-
-  return safeItems
-    .map(
-      item =>
-        `<li>${escapeHTML(item)}</li>`
-    )
-    .join("");
+            return text
+                ? `<div class="list-item">• ${escapeHTML(text)}</div>`
+                : "";
+        })
+        .filter(Boolean)
+        .join("");
 }
 
 
@@ -1296,449 +764,376 @@ function renderList(
 // CAR CARD
 // ============================================================
 
-function renderCarCard(
-  car,
-  index
-) {
-  const score =
-    clampScore(
-      car?.score
+function renderCarCard(car, index) {
+    if (!car || typeof car !== "object") {
+        return "";
+    }
+
+    const name = safeDisplayText(
+        car.name,
+        "Neznáme vozidlo"
     );
 
-
-  const year =
-    safeNumber(
-      car?.year,
-      null
+    const generation = safeDisplayText(
+        car.generation,
+        ""
     );
 
-
-  const seats =
-    safeNumber(
-      car?.seats,
-      null
+    const year = safeDisplayText(
+        car.year,
+        ""
     );
 
-
-  const image =
-    renderImage(car);
-
-
-  const priceSource =
-    safeHTTPSUrl(
-      car?.priceSource
+    const score = safeNumber(
+        car.score ?? car.matchScore,
+        null
     );
 
-
-  const configurator =
-    safeHTTPSUrl(
-      car?.configurator
+    const price = formatPrice(
+        car.price ??
+        car.priceText ??
+        car.officialPrice
     );
 
+    const power = safeDisplayText(
+        car.power ??
+        car.powerKw ??
+        car.kw,
+        ""
+    );
 
-  const dataSources =
-    Array.isArray(
-      car?.dataSources
-    )
-      ? car.dataSources
-          .map(
-            source =>
-              safeHTTPSUrl(
+    const seats = safeDisplayText(
+        car.seats,
+        ""
+    );
+
+    const trunk = safeDisplayText(
+        car.trunk ??
+        car.trunkLiters ??
+        car.boot,
+        ""
+    );
+
+    const drive = safeDisplayText(
+        car.drive,
+        ""
+    );
+
+    const fuel = safeDisplayText(
+        car.fuel,
+        ""
+    );
+
+    const reason = safeDisplayText(
+        car.reason ??
+        car.matchReason ??
+        car.description,
+        ""
+    );
+
+    const maintenance = safeDisplayText(
+        car.maintenance,
+        ""
+    );
+
+    const officialPriceUrl = safeHTTPSUrl(
+        car.officialPriceUrl ??
+        car.priceUrl ??
+        car.officialPriceLink
+    );
+
+    const configuratorUrl = safeHTTPSUrl(
+        car.configuratorUrl ??
+        car.configurator
+    );
+
+    const sources = Array.isArray(car.sources)
+        ? car.sources
+        : [];
+
+    const sourceLinks = sources
+        .map(source => {
+            const url = safeHTTPSUrl(
+                source?.url ??
+                source?.href ??
                 source
-              )
-          )
-          .filter(Boolean)
-          .filter(
-            (
-              source,
-              i,
-              all
-            ) =>
-              all.indexOf(
-                source
-              ) === i
-          )
-          .slice(0, 6)
-      : [];
+            );
 
-
-  return `
-    <article
-      class="carmatch-car-card"
-      style="
-        background:#fff;
-        border-radius:20px;
-        overflow:hidden;
-        box-shadow:
-          0 8px 28px
-          rgba(0,0,0,.08);
-        border:
-          1px solid #ececec;
-      "
-    >
-
-      <div
-        class="carmatch-photo-wrap"
-      >
-        ${image}
-      </div>
-
-
-      <div
-        style="
-          padding:18px;
-        "
-      >
-
-        <div
-          style="
-            font-size:12px;
-            font-weight:800;
-            letter-spacing:.08em;
-            color:#6b6b6b;
-            text-transform:uppercase;
-          "
-        >
-          #${index + 1}
-          NAJLEPŠIA ZHODA
-        </div>
-
-
-        <h3
-          style="
-            margin:
-              7px 0 4px;
-            font-size:22px;
-            line-height:1.15;
-          "
-        >
-          ${formatText(
-            car?.name,
-            "Neznáme vozidlo"
-          )}
-        </h3>
-
-
-        <div
-          style="
-            font-size:13px;
-            color:#666;
-            margin-bottom:12px;
-          "
-        >
-          ${formatText(
-            car?.generation,
-            "Generácia neoverená"
-          )}
-
-          ·
-
-          ${
-            year !== null
-              ? escapeHTML(
-                  String(
-                    Math.round(year)
-                  )
-                )
-              : "—"
-          }
-        </div>
-
-
-        <div
-          style="
-            display:inline-block;
-            padding:
-              7px 10px;
-            border-radius:
-              999px;
-            background:#f0f1f3;
-            font-size:14px;
-            font-weight:800;
-            margin-bottom:12px;
-          "
-        >
-          Zhoda ${score}%
-        </div>
-
-
-        <div
-          style="
-            font-size:14px;
-            line-height:1.8;
-            color:#3e3e3e;
-          "
-        >
-          <div>
-            <strong>Cena:</strong>
-            ${formatPrice(
-              car?.price
-            )}
-          </div>
-
-          <div>
-            <strong>Výkon:</strong>
-            ${formatText(
-              car?.power
-            )}
-          </div>
-
-          <div>
-            <strong>Sedadlá:</strong>
-            ${
-              seats !== null
-                ? escapeHTML(
-                    String(
-                      Math.round(
-                        seats
-                      )
-                    )
-                  )
-                : "—"
+            if (!url) {
+                return "";
             }
-          </div>
 
-          <div>
-            <strong>Kufor:</strong>
-            ${formatText(
-              car?.trunk
-            )}
-          </div>
+            const label = safeDisplayText(
+                source?.title ??
+                source?.name ??
+                url,
+                "Zdroj"
+            );
 
-          <div>
-            <strong>Pohon:</strong>
-            ${formatText(
-              car?.drive
-            )}
-          </div>
-
-          <div>
-            <strong>Palivo:</strong>
-            ${formatText(
-              car?.fuel
-            )}
-          </div>
-        </div>
-
-
-        <div
-          style="
-            margin-top:15px;
-          "
-        >
-          <strong>
-            Prečo:
-          </strong>
-
-          <div
-            style="
-              margin-top:5px;
-              color:#555;
-              line-height:1.6;
-            "
-          >
-            ${formatText(
-              car?.reason,
-              "Spĺňa zadané požiadavky."
-            )}
-          </div>
-        </div>
-
-
-        <div
-          style="
-            display:grid;
-            grid-template-columns:
-              1fr 1fr;
-            gap:14px;
-            margin-top:16px;
-          "
-        >
-
-          <div>
-            <strong>
-              Výhody
-            </strong>
-
-            <ul
-              style="
-                padding-left:18px;
-                margin:
-                  7px 0;
-                line-height:1.6;
-                color:#555;
-              "
-            >
-              ${renderList(
-                car?.pros,
-                "Neboli uvedené."
-              )}
-            </ul>
-          </div>
-
-
-          <div>
-            <strong>
-              Nevýhody
-            </strong>
-
-            <ul
-              style="
-                padding-left:18px;
-                margin:
-                  7px 0;
-                line-height:1.6;
-                color:#555;
-              "
-            >
-              ${renderList(
-                car?.cons,
-                "Neboli uvedené."
-              )}
-            </ul>
-          </div>
-
-        </div>
-
-
-        <div
-          style="
-            margin-top:14px;
-          "
-        >
-          <strong>
-            Údržba
-          </strong>
-
-          <div
-            style="
-              margin-top:5px;
-              color:#555;
-              line-height:1.6;
-            "
-          >
-            ${formatText(
-              car?.maintenance,
-              "Údaje o údržbe nie sú uvedené."
-            )}
-          </div>
-        </div>
-
-
-        <div
-          style="
-            display:flex;
-            flex-wrap:wrap;
-            gap:8px;
-            margin-top:16px;
-          "
-        >
-
-          ${
-            priceSource
-              ? `
+            return `
                 <a
-                  href="${escapeHTML(
-                    priceSource
-                  )}"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style="
-                    display:inline-block;
-                    padding:
-                      9px 12px;
-                    border-radius:
-                      10px;
-                    background:#111;
-                    color:#fff;
-                    text-decoration:none;
-                    font-size:13px;
-                    font-weight:700;
-                  "
+                    class="source-link"
+                    href="${escapeAttribute(url)}"
+                    target="_blank"
+                    rel="noopener noreferrer"
                 >
-                  Oficiálna cena
+                    ${escapeHTML(label)}
                 </a>
-              `
-              : ""
-          }
+            `;
+        })
+        .filter(Boolean)
+        .join("");
 
+    const imageCandidates = getImageCandidates(car);
 
-          ${
-            configurator
-              ? `
-                <a
-                  href="${escapeHTML(
-                    configurator
-                  )}"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style="
-                    display:inline-block;
-                    padding:
-                      9px 12px;
-                    border-radius:
-                      10px;
-                    background:#ededed;
-                    color:#111;
-                    text-decoration:none;
-                    font-size:13px;
-                    font-weight:700;
-                  "
-                >
-                  Konfigurátor
-                </a>
-              `
-              : ""
-          }
+    return `
+        <article class="car">
 
-        </div>
+            ${renderImage(car)}
 
+            <div class="car-body">
 
-        ${
-          dataSources.length
-            ? `
-              <div
-                style="
-                  margin-top:12px;
-                  font-size:12px;
-                  line-height:1.7;
-                "
-              >
-                <strong>
-                  Zdroje:
-                </strong>
+                <div class="car-top">
 
-                ${dataSources
-                  .map(
-                    (
-                      source,
-                      sourceIndex
-                    ) => `
-                      <a
-                        href="${escapeHTML(
-                          source
-                        )}"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style="
-                          margin-left:8px;
-                          color:#555;
-                        "
-                      >
-                        ${sourceIndex + 1}
-                      </a>
-                    `
-                  )
-                  .join("")}
-              </div>
-            `
-            : ""
-        }
+                    <div class="rank">
+                        #${index + 1}
+                    </div>
 
-      </div>
+                    ${
+                        score !== null
+                            ? `
+                                <div class="score">
+                                    ${escapeHTML(
+                                        formatNumber(score)
+                                    )} %
+                                </div>
+                            `
+                            : ""
+                    }
 
-    </article>
-  `;
+                </div>
+
+                <h2 class="car-name">
+                    ${escapeHTML(name)}
+                </h2>
+
+                ${
+                    generation || year
+                        ? `
+                            <div class="generation">
+                                ${escapeHTML(
+                                    [generation, year]
+                                        .filter(Boolean)
+                                        .join(" • ")
+                                )}
+                            </div>
+                        `
+                        : ""
+                }
+
+                <div class="specs">
+
+                    ${
+                        price
+                            ? `
+                                <div class="spec">
+                                    <span>Cena</span>
+                                    <strong>
+                                        ${escapeHTML(price)}
+                                    </strong>
+                                </div>
+                            `
+                            : ""
+                    }
+
+                    ${
+                        power
+                            ? `
+                                <div class="spec">
+                                    <span>Výkon</span>
+                                    <strong>
+                                        ${escapeHTML(power)}
+                                    </strong>
+                                </div>
+                            `
+                            : ""
+                    }
+
+                    ${
+                        seats
+                            ? `
+                                <div class="spec">
+                                    <span>Miesta</span>
+                                    <strong>
+                                        ${escapeHTML(seats)}
+                                    </strong>
+                                </div>
+                            `
+                            : ""
+                    }
+
+                    ${
+                        trunk
+                            ? `
+                                <div class="spec">
+                                    <span>Kufor</span>
+                                    <strong>
+                                        ${escapeHTML(trunk)}
+                                    </strong>
+                                </div>
+                            `
+                            : ""
+                    }
+
+                    ${
+                        drive
+                            ? `
+                                <div class="spec">
+                                    <span>Pohon</span>
+                                    <strong>
+                                        ${escapeHTML(drive)}
+                                    </strong>
+                                </div>
+                            `
+                            : ""
+                    }
+
+                    ${
+                        fuel
+                            ? `
+                                <div class="spec">
+                                    <span>Palivo</span>
+                                    <strong>
+                                        ${escapeHTML(fuel)}
+                                    </strong>
+                                </div>
+                            `
+                            : ""
+                    }
+
+                </div>
+
+                ${
+                    reason
+                        ? `
+                            <section class="section">
+                                <h3>Prečo toto auto?</h3>
+                                <p>
+                                    ${escapeHTML(reason)}
+                                </p>
+                            </section>
+                        `
+                        : ""
+                }
+
+                ${
+                    car.pros
+                        ? `
+                            <section class="section pros">
+                                <h3>Výhody</h3>
+                                ${renderList(car.pros)}
+                            </section>
+                        `
+                        : ""
+                }
+
+                ${
+                    car.cons
+                        ? `
+                            <section class="section cons">
+                                <h3>Nevýhody</h3>
+                                ${renderList(car.cons)}
+                            </section>
+                        `
+                        : ""
+                }
+
+                ${
+                    maintenance
+                        ? `
+                            <section class="section">
+                                <h3>Údržba</h3>
+                                <p>
+                                    ${escapeHTML(maintenance)}
+                                </p>
+                            </section>
+                        `
+                        : ""
+                }
+
+                ${
+                    officialPriceUrl || configuratorUrl
+                        ? `
+                            <div class="actions">
+
+                                ${
+                                    officialPriceUrl
+                                        ? `
+                                            <a
+                                                class="configure"
+                                                href="${escapeAttribute(
+                                                    officialPriceUrl
+                                                )}"
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                            >
+                                                Oficiálna cena
+                                            </a>
+                                        `
+                                        : ""
+                                }
+
+                                ${
+                                    configuratorUrl
+                                        ? `
+                                            <a
+                                                class="configure secondary"
+                                                href="${escapeAttribute(
+                                                    configuratorUrl
+                                                )}"
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                            >
+                                                Konfigurátor
+                                            </a>
+                                        `
+                                        : ""
+                                }
+
+                            </div>
+                        `
+                        : ""
+                }
+
+                ${
+                    imageCandidates.length > 1
+                        ? `
+                            <div class="photo-info">
+                                ${escapeHTML(
+                                    `${imageCandidates.length} overených fotografií`
+                                )}
+                            </div>
+                        `
+                        : ""
+                }
+
+                ${
+                    sourceLinks
+                        ? `
+                            <section class="section sources">
+                                <h3>Zdroje</h3>
+                                <div class="source-list">
+                                    ${sourceLinks}
+                                </div>
+                            </section>
+                        `
+                        : ""
+                }
+
+            </div>
+
+        </article>
+    `;
 }
 
 
@@ -1746,143 +1141,28 @@ function renderCarCard(
 // RESULTS
 // ============================================================
 
-function applyResponsiveStyles() {
-  const styleId =
-    "carmatch-results-responsive";
+function renderResults(cars) {
+    const results = getResultsElement();
 
-  if (
-    document.getElementById(
-      styleId
-    )
-  ) {
-    return;
-  }
-
-  const style =
-    document.createElement(
-      "style"
-    );
-
-  style.id =
-    styleId;
-
-  style.textContent = `
-    @media (max-width: 900px) {
-      #output .carmatch-results-grid {
-        grid-template-columns:1fr !important;
-      }
+    if (!results) {
+        return;
     }
 
-    @media (max-width: 560px) {
-      #output .carmatch-car-card ul {
-        font-size:13px;
-      }
-
-      #output .carmatch-car-card h3 {
-        font-size:20px !important;
-      }
+    if (!Array.isArray(cars) || cars.length !== 3) {
+        results.innerHTML = `
+            <div class="error-box">
+                Server neposlal presne 3 výsledné autá.
+            </div>
+        `;
+        return;
     }
-  `;
 
-  document.head.appendChild(
-    style
-  );
-}
-
-
-function updateRemaining(
-  remaining
-) {
-  const number =
-    safeNumber(
-      remaining,
-      null
-    );
-
-  if (number === null) {
-    return;
-  }
-
-  setStatus(
-    `Zostáva ${Math.max(
-      0,
-      Math.round(number)
-    )} vyhľadávaní dnes.`
-  );
-}
-
-
-function renderResults(data) {
-  const output =
-    getOutputElement();
-
-  if (!output) {
-    return;
-  }
-
-  const cars =
-    Array.isArray(
-      data?.cars
-    )
-      ? data.cars.slice(0, 3)
-      : [];
-
-
-  if (cars.length !== 3) {
-    renderError(
-      "Server nevrátil presne 3 vozidlá.",
-      502,
-      data
-    );
-
-    return;
-  }
-
-
-  output.innerHTML = `
-    <div
-      style="
-        margin-top:20px;
-      "
-    >
-
-      <div
-        class="carmatch-results-grid"
-        style="
-          display:grid;
-          grid-template-columns:
-            repeat(
-              3,
-              minmax(0,1fr)
-            );
-          gap:18px;
-        "
-      >
-
-        ${cars
-          .map(
-            (
-              car,
-              index
-            ) =>
-              renderCarCard(
-                car,
-                index
-              )
-          )
-          .join("")}
-
-      </div>
-
-    </div>
-  `;
-
-
-  applyResponsiveStyles();
-
-  updateRemaining(
-    data?.remaining
-  );
+    results.innerHTML = cars
+        .slice(0, 3)
+        .map((car, index) =>
+            renderCarCard(car, index)
+        )
+        .join("");
 }
 
 
@@ -1890,279 +1170,322 @@ function renderResults(data) {
 // ERROR
 // ============================================================
 
-function renderError(
-  message,
-  status = null,
-  payload = null
-) {
-  const output =
-    getOutputElement();
+function renderError(error) {
+    const results = getResultsElement();
 
-  const safeMessage =
-    safeDisplayText(
-      message,
-      "Nastala chyba."
+    const message = safeDisplayText(
+        error?.message,
+        "Vyhľadávanie sa nepodarilo dokončiť."
     );
 
+    if (results) {
+        results.innerHTML = `
+            <div class="error-box">
+                <strong>Vyhľadávanie sa nepodarilo dokončiť.</strong>
+                <p>${escapeHTML(message)}</p>
+            </div>
+        `;
+    }
 
-  if (!output) {
+    if (error?.status === 429) {
+        setStatus(
+            "Dosiahol si denný limit vyhľadávaní.",
+            "error"
+        );
+        return;
+    }
+
+    if (error?.status === 503) {
+        setStatus(
+            "AI vyhľadávanie je momentálne nedostupné. Skús to znova.",
+            "error"
+        );
+        return;
+    }
+
     setStatus(
-      safeMessage,
-      true
+        "Vyhľadávanie sa nepodarilo dokončiť.",
+        "error"
     );
-
-    return;
-  }
-
-
-  let finalMessage =
-    safeMessage;
-
-
-  if (status === 429) {
-    finalMessage =
-      safeDisplayText(
-        payload?.message,
-        "Denný limit vyhľadávaní bol dosiahnutý."
-      );
-  }
-
-
-  if (status === 503) {
-    finalMessage =
-      safeDisplayText(
-        payload?.message,
-        "AI je momentálne nedostupná. Vyhľadávanie sa podľa servera nezapočítalo do limitu."
-      );
-  }
-
-
-  output.innerHTML = `
-    <div
-      style="
-        margin-top:20px;
-        background:#fff;
-        border:1px solid #e5e5e5;
-        border-radius:18px;
-        padding:18px;
-        color:#222;
-        box-shadow:
-          0 6px 22px
-          rgba(0,0,0,.06);
-      "
-    >
-      ${escapeHTML(
-        finalMessage
-      )}
-    </div>
-  `;
-
-
-  if (
-    status === 429 ||
-    status === 503
-  ) {
-    updateRemaining(
-      payload?.remaining
-    );
-  } else {
-    setStatus(
-      finalMessage,
-      true
-    );
-  }
 }
 
 
 // ============================================================
-// MAIN
+// USAGE
+// ============================================================
+
+function updateUsage(remaining) {
+    const text = get("usageText");
+    const dot = get("usageDot");
+
+    const value = safeNumber(remaining, null);
+
+    if (value === null) {
+        if (text) {
+            text.textContent =
+                "Vyhľadávania sú dostupné.";
+        }
+
+        return;
+    }
+
+    if (text) {
+        text.textContent =
+            `Zostáva ${formatNumber(value)} vyhľadávaní dnes`;
+    }
+
+    if (dot) {
+        dot.classList.toggle(
+            "low",
+            value <= 1
+        );
+    }
+}
+
+
+// ============================================================
+// FEEDBACK
+// ============================================================
+
+function vibrate() {
+    try {
+        if (
+            navigator.vibrate &&
+            typeof navigator.vibrate === "function"
+        ) {
+            navigator.vibrate([
+                100,
+                60,
+                140
+            ]);
+        }
+    } catch {
+        // Ignore vibration errors.
+    }
+}
+
+
+function playReadySound() {
+    try {
+        const AudioContext =
+            window.AudioContext ||
+            window.webkitAudioContext;
+
+        if (!AudioContext) {
+            return;
+        }
+
+        const context = new AudioContext();
+
+        const oscillator =
+            context.createOscillator();
+
+        const gain =
+            context.createGain();
+
+        oscillator.type = "sine";
+
+        oscillator.frequency.setValueAtTime(
+            620,
+            context.currentTime
+        );
+
+        oscillator.frequency.linearRampToValueAtTime(
+            880,
+            context.currentTime + 0.12
+        );
+
+        gain.gain.setValueAtTime(
+            0.0001,
+            context.currentTime
+        );
+
+        gain.gain.exponentialRampToValueAtTime(
+            0.08,
+            context.currentTime + 0.02
+        );
+
+        gain.gain.exponentialRampToValueAtTime(
+            0.0001,
+            context.currentTime + 0.18
+        );
+
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+
+        oscillator.start();
+
+        oscillator.stop(
+            context.currentTime + 0.2
+        );
+
+        setTimeout(() => {
+            context.close().catch(() => {});
+        }, 400);
+
+    } catch {
+        // Audio can be blocked by browser.
+    }
+}
+
+
+function notifySearchFinished() {
+    vibrate();
+    playReadySound();
+}
+
+
+// ============================================================
+// SEARCH
 // ============================================================
 
 async function findCars() {
-  if (activeRequest) {
-    return;
-  }
-
-
-  activeRequest = true;
-
-  setButtonBusy(
-    true
-  );
-
-  setStatus(
-    "Pripravujem vyhľadávanie…"
-  );
-
-
-  const output =
-    getOutputElement();
-
-  if (output) {
-    output.innerHTML =
-      "";
-  }
-
-
-  try {
-    const payload =
-      buildRequestPayload();
-
-
-    const hasAnyFilter =
-      Object.values(
-        payload.filters
-      ).some(
-        value =>
-          safeDisplayText(
-            value,
-            ""
-          ).trim() !== ""
-      );
-
-
-    if (
-      !payload.naturalLanguage &&
-      !hasAnyFilter
-    ) {
-      throw new Error(
-        "Zadaj aspoň jednu požiadavku alebo nastav filter."
-      );
+    if (searching) {
+        return;
     }
 
+    const payload = buildRequestPayload();
+
+    if (!hasSearchInput(payload)) {
+        setStatus(
+            "Zadaj požiadavku alebo vyplň aspoň jeden filter.",
+            "error"
+        );
+        return;
+    }
+
+    const results = getResultsElement();
+
+    if (results) {
+        results.innerHTML = "";
+    }
+
+    clearStatus();
+    setButtonBusy(true);
 
     setStatus(
-      "Vyhľadávam vhodné autá…"
+        "Vyhľadávam aktuálne informácie o vozidlách..."
     );
 
+    try {
+        const data = await performSearch(payload);
 
-    const data =
-      await performSearch(
-        payload
-      );
+        renderResults(data.cars);
 
+        if (
+            data.remaining !== undefined &&
+            data.remaining !== null
+        ) {
+            updateUsage(data.remaining);
+        }
 
-    renderResults(
-      data
-    );
+        setStatus(
+            "Vyhľadávanie dokončené.",
+            "success"
+        );
 
+        notifySearchFinished();
 
-    updateRemaining(
-      data?.remaining
-    );
+    } catch (error) {
+        console.error(
+            "CARMATCH AI search error:",
+            error
+        );
 
+        renderError(error);
 
-    setStatus(
-      Number.isFinite(
-        Number(
-          data?.remaining
-        )
-      )
-        ? `Hotovo · zostáva ${Math.max(
-            0,
-            Math.round(
-              Number(
-                data.remaining
-              )
-            )
-          )} vyhľadávaní dnes.`
-        : "Hotovo."
-    );
-
-
-    answerReadyFeedback();
-
-  } catch (error) {
-    console.error(
-      "CARMATCH AI:",
-      error
-    );
-
-
-    const status =
-      safeNumber(
-        error?.status,
-        null
-      );
-
-
-    const message =
-      safeDisplayText(
-        error?.message,
-        "Vyhľadávanie sa nepodarilo dokončiť."
-      );
-
-
-    renderError(
-      message,
-      status,
-      error?.payload
-    );
-
-  } finally {
-    activeRequest =
-      false;
-
-    setButtonBusy(
-      false
-    );
-  }
+    } finally {
+        setButtonBusy(false);
+    }
 }
 
 
 // ============================================================
-// HELPER TEXT
+// INITIALIZATION
 // ============================================================
 
-function addMissingHelperText() {
-  const button =
-    getFindButton();
+async function initializeApp() {
+    if (initialized) {
+        return;
+    }
 
-  if (
-    !button ||
-    !button.parentElement
-  ) {
-    return;
-  }
+    const button = getSearchButton();
 
+    if (!button) {
+        console.error(
+            "CARMATCH AI: search button not found."
+        );
+        return;
+    }
 
-  if (
-    document.getElementById(
-      "carmatch-helper"
-    )
-  ) {
-    return;
-  }
-
-
-  const helper =
-    document.createElement(
-      "div"
+    button.addEventListener(
+        "click",
+        findCars
     );
 
-  helper.id =
-    "carmatch-helper";
+    try {
+        setStatus(
+            "Pripravujem CARMATCH AI..."
+        );
 
-  helper.textContent =
-    "Zjednoduš alebo oprav zadaný text.";
+        await ensureAnonymousSession();
 
-  helper.style.marginTop =
-    "8px";
+        initialized = true;
 
-  helper.style.fontSize =
-    "12px";
+        button.disabled = false;
 
-  helper.style.color =
-    "#777";
+        updateUsage(null);
 
-  helper.style.textAlign =
-    "center";
+        setStatus(
+            "CARMATCH AI je pripravené.",
+            "success"
+        );
+
+    } catch (error) {
+        console.error(
+            "CARMATCH AI initialization error:",
+            error
+        );
+
+        button.disabled = true;
+
+        setStatus(
+            "Nepodarilo sa inicializovať vyhľadávanie. Obnov stránku a skús znova.",
+            "error"
+        );
+    }
+}
 
 
-  button.insertAdjacentElement(
-    "afterend",
-    helper
-  );
+// ============================================================
+// ENTER / CTRL+ENTER
+// ============================================================
+
+function setupKeyboard() {
+    const input = get("aiRequest");
+
+    if (!input) {
+        return;
+    }
+
+    input.addEventListener(
+        "keydown",
+        event => {
+            if (
+                event.key === "Enter" &&
+                (event.ctrlKey || event.metaKey)
+            ) {
+                event.preventDefault();
+
+                if (
+                    initialized &&
+                    !searching
+                ) {
+                    findCars();
+                }
+            }
+        }
+    );
 }
 
 
@@ -2170,24 +1493,12 @@ function addMissingHelperText() {
 // START
 // ============================================================
 
-function startCarmatch() {
-  addMissingHelperText();
-  ensureStatusElement();
-}
-
-
-window.findCars =
-  findCars;
-
-
-if (
-  document.readyState ===
-  "loading"
-) {
-  document.addEventListener(
+document.addEventListener(
     "DOMContentLoaded",
-    startCarmatch
-  );
-} else {
-  startCarmatch();
-}
+    () => {
+        setupKeyboard();
+        initializeApp();
+    }
+);
+
+window.findCars = findCars;
