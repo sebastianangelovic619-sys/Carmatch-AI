@@ -1,28 +1,38 @@
 // ============================================================
 // CARMATCH AI - FINAL FRONTEND v10
 // ============================================================
-// One frontend implementation only.
-// No duplicated inline JavaScript.
-// Robust object handling.
-// Supabase anonymous authentication.
-// 5 searches/day through backend.
-// Exactly 3 results.
-// Safe error handling.
-// Image candidates.
-// Vibration + sound.
+// - Exactly 3 cars
+// - Supabase anonymous authentication
+// - 5 searches/day
+// - Search refund support
+// - Robust API error handling
+// - No [object Object]
+// - Slovak UI
+// - Image candidates
+// - Vibration + sound
+// - aiRequest support
 // ============================================================
 
 "use strict";
 
 const CONFIG = window.CARMATCH_CONFIG || {
-    supabaseUrl: "",
-    supabaseAnonKey: "",
-    apiEndpoint: "/api/search"
+  supabaseUrl: "",
+  supabaseAnonKey: "",
+  apiEndpoint: "/api/search"
 };
 
 let supabaseClient = null;
-let initialized = false;
-let searching = false;
+let currentSession = null;
+let isSearching = false;
+
+
+// ============================================================
+// DOM
+// ============================================================
+
+function $(id) {
+  return document.getElementById(id);
+}
 
 
 // ============================================================
@@ -30,597 +40,80 @@ let searching = false;
 // ============================================================
 
 function safeDisplayText(value, fallback = "") {
-    if (value === null || value === undefined) {
-        return fallback;
-    }
-
-    if (typeof value === "string") {
-        const text = value.trim();
-        return text || fallback;
-    }
-
-    if (
-        typeof value === "number" ||
-        typeof value === "boolean"
-    ) {
-        return String(value);
-    }
-
-    if (Array.isArray(value)) {
-        return value
-            .map(item => safeDisplayText(item, ""))
-            .filter(Boolean)
-            .join(", ") || fallback;
-    }
-
-    if (typeof value === "object") {
-        const preferredKeys = [
-            "message",
-            "error",
-            "text",
-            "value",
-            "name",
-            "description",
-            "reason",
-            "title"
-        ];
-
-        for (const key of preferredKeys) {
-            if (
-                Object.prototype.hasOwnProperty.call(value, key) &&
-                value[key] !== null &&
-                value[key] !== undefined
-            ) {
-                const result = safeDisplayText(value[key], "");
-                if (result) {
-                    return result;
-                }
-            }
-        }
-
-        try {
-            const json = JSON.stringify(value);
-            return json && json !== "{}"
-                ? json
-                : fallback;
-        } catch {
-            return fallback;
-        }
-    }
-
+  if (value === null || value === undefined) {
     return fallback;
+  }
+
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text || fallback;
+  }
+
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map(item => safeDisplayText(item, ""))
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  if (typeof value === "object") {
+    const preferredKeys = [
+      "message",
+      "error",
+      "text",
+      "value",
+      "name",
+      "description",
+      "reason",
+      "title"
+    ];
+
+    for (const key of preferredKeys) {
+      if (
+        Object.prototype.hasOwnProperty.call(value, key)
+      ) {
+        const result = safeDisplayText(value[key], "");
+
+        if (result) {
+          return result;
+        }
+      }
+    }
+
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return fallback;
+    }
+  }
+
+  return fallback;
 }
 
 
 // ============================================================
-// HTML ESCAPING
+// HTML SAFETY
 // ============================================================
 
 function escapeHTML(value) {
-    return safeDisplayText(value)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
+  return safeDisplayText(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 
 function escapeAttribute(value) {
-    return escapeHTML(value);
-}
-
-
-// ============================================================
-// DOM
-// ============================================================
-
-function get(id) {
-    return document.getElementById(id);
-}
-
-
-function getSearchButton() {
-    return (
-        get("searchButton") ||
-        document.querySelector(".find")
-    );
-}
-
-
-function getResultsElement() {
-    return (
-        get("results") ||
-        get("output")
-    );
-}
-
-
-function getStatusElement() {
-    return get("status");
-}
-
-
-// ============================================================
-// STATUS
-// ============================================================
-
-function setStatus(message, type = "") {
-    const element = getStatusElement();
-
-    if (!element) {
-        return;
-    }
-
-    element.className = "status";
-
-    if (type) {
-        element.classList.add(type);
-    }
-
-    element.textContent = safeDisplayText(message);
-}
-
-
-function clearStatus() {
-    const element = getStatusElement();
-
-    if (!element) {
-        return;
-    }
-
-    element.textContent = "";
-    element.className = "status";
-}
-
-
-// ============================================================
-// BUTTON
-// ============================================================
-
-function setButtonBusy(busy) {
-    const button = getSearchButton();
-
-    if (!button) {
-        return;
-    }
-
-    searching = busy;
-    button.disabled = busy || !initialized;
-    button.classList.toggle("loading", busy);
-
-    const normalText = button.querySelector(".button-text");
-    const loadingText = button.querySelector(".button-loading");
-
-    if (normalText) {
-        normalText.hidden = busy;
-    }
-
-    if (loadingText) {
-        loadingText.hidden = !busy;
-    }
-}
-
-
-// ============================================================
-// SUPABASE
-// ============================================================
-
-function isSupabaseConfigValid() {
-    return (
-        typeof CONFIG.supabaseUrl === "string" &&
-        CONFIG.supabaseUrl.startsWith("http") &&
-        typeof CONFIG.supabaseAnonKey === "string" &&
-        CONFIG.supabaseAnonKey.length > 20
-    );
-}
-
-
-function waitForSupabase() {
-    return new Promise((resolve, reject) => {
-        const started = Date.now();
-
-        const check = () => {
-            if (
-                window.supabase &&
-                typeof window.supabase.createClient === "function"
-            ) {
-                resolve(window.supabase);
-                return;
-            }
-
-            if (Date.now() - started > 10000) {
-                reject(
-                    new Error(
-                        "Supabase sa nepodarilo načítať."
-                    )
-                );
-                return;
-            }
-
-            setTimeout(check, 100);
-        };
-
-        check();
-    });
-}
-
-
-async function getSupabaseClient() {
-    if (supabaseClient) {
-        return supabaseClient;
-    }
-
-    if (!isSupabaseConfigValid()) {
-        throw new Error(
-            "Supabase konfigurácia nie je nastavená."
-        );
-    }
-
-    const supabase = await waitForSupabase();
-
-    supabaseClient = supabase.createClient(
-        CONFIG.supabaseUrl,
-        CONFIG.supabaseAnonKey,
-        {
-            auth: {
-                persistSession: true,
-                autoRefreshToken: true,
-                detectSessionInUrl: false
-            }
-        }
-    );
-
-    return supabaseClient;
-}
-
-
-async function ensureAnonymousSession() {
-    const client = await getSupabaseClient();
-
-    const existing = await client.auth.getSession();
-
-    if (existing?.data?.session?.access_token) {
-        return existing.data.session;
-    }
-
-    const result = await client.auth.signInAnonymously();
-
-    if (result.error) {
-        throw new Error(
-            safeDisplayText(
-                result.error.message,
-                "Nepodarilo sa vytvoriť anonymnú reláciu."
-            )
-        );
-    }
-
-    if (!result.data?.session) {
-        throw new Error(
-            "Supabase nevytvoril platnú reláciu."
-        );
-    }
-
-    return result.data.session;
-}
-
-
-async function getAccessToken(forceRefresh = false) {
-    const client = await getSupabaseClient();
-
-    if (forceRefresh) {
-        const refreshed = await client.auth.refreshSession();
-
-        if (refreshed.error) {
-            throw new Error(
-                safeDisplayText(
-                    refreshed.error.message,
-                    "Reláciu sa nepodarilo obnoviť."
-                )
-            );
-        }
-
-        return refreshed.data?.session?.access_token || null;
-    }
-
-    const session = await ensureAnonymousSession();
-
-    return session?.access_token || null;
-}
-
-
-// ============================================================
-// INPUT
-// ============================================================
-
-function readValue(id) {
-    const element = get(id);
-
-    if (!element) {
-        return "";
-    }
-
-    return safeDisplayText(element.value, "");
-}
-
-
-function readNumber(id) {
-    const value = readValue(id);
-
-    if (!value) {
-        return null;
-    }
-
-    const number = Number(value);
-
-    return Number.isFinite(number)
-        ? number
-        : null;
-}
-
-
-function getNaturalLanguage() {
-    const ids = [
-        "aiRequest",
-        "naturalLanguage",
-        "query",
-        "prompt",
-        "request",
-        "search",
-        "message"
-    ];
-
-    for (const id of ids) {
-        const value = readValue(id);
-
-        if (value) {
-            return value;
-        }
-    }
-
-    return "";
-}
-
-
-function getAvoidBrands() {
-    const value = readValue("avoid");
-
-    if (!value) {
-        return "";
-    }
-
-    return value;
-}
-
-
-// ============================================================
-// REQUEST
-// ============================================================
-
-function buildRequestPayload() {
-    return {
-        naturalLanguage: getNaturalLanguage(),
-
-        filters: {
-            budget: readNumber("budget"),
-            seats: readNumber("seats"),
-            power: readNumber("power"),
-            trunk: readNumber("trunk"),
-
-            drive: readValue("drive"),
-            fuel: readValue("fuel"),
-            body: readValue("body"),
-            style: readValue("style"),
-            length: readNumber("length"),
-            year: readNumber("year"),
-            avoid: getAvoidBrands()
-        }
-    };
-}
-
-
-function hasSearchInput(payload) {
-    if (payload.naturalLanguage?.trim()) {
-        return true;
-    }
-
-    const filters = payload.filters || {};
-
-    return Object.values(filters).some(value => {
-        if (value === null || value === undefined) {
-            return false;
-        }
-
-        return String(value).trim() !== "";
-    });
-}
-
-
-// ============================================================
-// API RESPONSE
-// ============================================================
-
-async function parseResponse(response) {
-    const raw = await response.text();
-
-    if (!raw) {
-        return {};
-    }
-
-    try {
-        return JSON.parse(raw);
-    } catch {
-        return {
-            error: "Invalid JSON response",
-            message: raw
-        };
-    }
-}
-
-
-function createApiError(response, data) {
-    const fallback = `Server returned HTTP ${response.status}.`;
-
-    const message = safeDisplayText(
-        data?.message ??
-        data?.error ??
-        data?.detail ??
-        data,
-        fallback
-    );
-
-    const error = new Error(message);
-
-    error.status = response.status;
-    error.data = data;
-
-    return error;
-}
-
-
-// ============================================================
-// SEARCH
-// ============================================================
-
-async function performSearch(payload) {
-    let token = await getAccessToken(false);
-
-    if (!token) {
-        throw new Error(
-            "Nepodarilo sa získať prístupový token."
-        );
-    }
-
-    const sendRequest = async accessToken => {
-        return fetch(CONFIG.apiEndpoint, {
-            method: "POST",
-
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${accessToken}`
-            },
-
-            body: JSON.stringify(payload)
-        });
-    };
-
-    let response;
-
-    try {
-        response = await sendRequest(token);
-    } catch (error) {
-        const message = safeDisplayText(
-            error?.message,
-            "Failed to fetch"
-        );
-
-        const networkError = new Error(
-            `Nepodarilo sa spojiť so serverom. ${message}`
-        );
-
-        networkError.network = true;
-
-        throw networkError;
-    }
-
-    let data = await parseResponse(response);
-
-    // Retry once if token expired.
-    if (response.status === 401) {
-        token = await getAccessToken(true);
-
-        if (!token) {
-            throw createApiError(response, data);
-        }
-
-        try {
-            response = await sendRequest(token);
-        } catch (error) {
-            const message = safeDisplayText(
-                error?.message,
-                "Failed to fetch"
-            );
-
-            const networkError = new Error(
-                `Nepodarilo sa spojiť so serverom. ${message}`
-            );
-
-            networkError.network = true;
-
-            throw networkError;
-        }
-
-        data = await parseResponse(response);
-    }
-
-    if (!response.ok) {
-        throw createApiError(response, data);
-    }
-
-    if (!Array.isArray(data?.cars)) {
-        throw new Error(
-            "Server neposlal platné výsledky áut."
-        );
-    }
-
-    if (data.cars.length !== 3) {
-        throw new Error(
-            "Server neposlal presne 3 výsledné autá."
-        );
-    }
-
-    return data;
-}
-
-
-// ============================================================
-// SAFE NUMBERS
-// ============================================================
-
-function safeNumber(value, fallback = null) {
-    if (
-        value === null ||
-        value === undefined ||
-        value === ""
-    ) {
-        return fallback;
-    }
-
-    const number = Number(value);
-
-    return Number.isFinite(number)
-        ? number
-        : fallback;
-}
-
-
-function formatNumber(value) {
-    const number = safeNumber(value);
-
-    if (number === null) {
-        return "";
-    }
-
-    return new Intl.NumberFormat("sk-SK").format(number);
-}
-
-
-function formatPrice(value) {
-    if (value === null || value === undefined) {
-        return "Cena nie je dostupná";
-    }
-
-    if (typeof value === "object") {
-        value = safeDisplayText(value, "");
-    }
-
-    const text = safeDisplayText(value, "");
-
-    if (!text) {
-        return "Cena nie je dostupná";
-    }
-
-    return text;
+  return escapeHTML(value);
 }
 
 
@@ -629,584 +122,103 @@ function formatPrice(value) {
 // ============================================================
 
 function safeHTTPSUrl(value) {
-    const text = safeDisplayText(value, "");
+  const url = safeDisplayText(value, "");
 
-    if (!text) {
-        return "";
+  if (!url) {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(url);
+
+    if (parsed.protocol !== "https:") {
+      return "";
     }
 
-    try {
-        const url = new URL(text);
-
-        if (
-            url.protocol !== "https:" &&
-            url.protocol !== "http:"
-        ) {
-            return "";
-        }
-
-        return url.href;
-    } catch {
-        return "";
-    }
+    return parsed.href;
+  } catch {
+    return "";
+  }
 }
 
 
 // ============================================================
-// IMAGE
+// FORMATTERS
 // ============================================================
 
-function getImageCandidates(car) {
-    if (!car || typeof car !== "object") {
-        return [];
-    }
+function formatPrice(value) {
+  const text = safeDisplayText(value, "");
 
-    const candidates = [];
+  if (!text) {
+    return "Cena nie je dostupná";
+  }
 
-    if (Array.isArray(car.imageCandidates)) {
-        candidates.push(...car.imageCandidates);
-    }
+  if (
+    text.toLowerCase().includes("na vyžiadanie") ||
+    text.toLowerCase().includes("nie je dostupná")
+  ) {
+    return text;
+  }
 
-    if (car.image) {
-        candidates.push(car.image);
-    }
-
-    const result = [];
-
-    for (const item of candidates) {
-        let url = "";
-
-        if (typeof item === "string") {
-            url = safeHTTPSUrl(item);
-        } else if (item && typeof item === "object") {
-            url = safeHTTPSUrl(
-                item.url ||
-                item.image ||
-                item.src ||
-                item.href
-            );
-        }
-
-        if (!url) {
-            continue;
-        }
-
-        if (!result.includes(url)) {
-            result.push(url);
-        }
-    }
-
-    return result;
+  return text;
 }
 
 
-function bestImageForCar(car) {
-    const candidates = getImageCandidates(car);
+function formatText(value) {
+  const text = safeDisplayText(value, "");
 
-    return candidates[0] || "";
-}
+  if (!text) {
+    return "";
+  }
 
-
-function renderImage(car) {
-    const image = bestImageForCar(car);
-
-    if (!image) {
-        return `
-            <div class="car-image no-image">
-                <span>Fotografia nie je dostupná</span>
-            </div>
-        `;
-    }
-
-    return `
-        <div class="car-image">
-            <img
-                src="${escapeAttribute(image)}"
-                alt="${escapeAttribute(
-                    safeDisplayText(car?.name, "Auto")
-                )}"
-                loading="lazy"
-                referrerpolicy="no-referrer"
-                onerror="this.closest('.car-image')?.classList.add('image-error'); this.style.display='none';"
-            >
-        </div>
-    `;
+  return escapeHTML(text)
+    .replace(/\n/g, "<br>");
 }
 
 
 // ============================================================
-// LISTS
+// STATUS
 // ============================================================
 
-function renderList(value) {
-    if (!Array.isArray(value)) {
-        const text = safeDisplayText(value, "");
+function setStatus(message, type = "") {
+  const status = $("status");
 
-        return text
-            ? `<div class="list-item">${escapeHTML(text)}</div>`
-            : "";
-    }
+  if (!status) {
+    return;
+  }
 
-    return value
-        .map(item => {
-            const text = safeDisplayText(item, "");
+  status.className = "status";
 
-            return text
-                ? `<div class="list-item">• ${escapeHTML(text)}</div>`
-                : "";
-        })
-        .filter(Boolean)
-        .join("");
+  if (type) {
+    status.classList.add(type);
+  }
+
+  status.textContent = safeDisplayText(message);
 }
 
 
 // ============================================================
-// CAR CARD
+// BUTTON
 // ============================================================
 
-function renderCarCard(car, index) {
-    if (!car || typeof car !== "object") {
-        return "";
-    }
+function setButtonBusy(busy) {
+  const button = $("searchButton");
 
-    const name = safeDisplayText(
-        car.name,
-        "Neznáme vozidlo"
-    );
+  if (!button) {
+    return;
+  }
 
-    const generation = safeDisplayText(
-        car.generation,
-        ""
-    );
+  button.disabled = busy || !currentSession;
 
-    const year = safeDisplayText(
-        car.year,
-        ""
-    );
+  if (busy) {
+    button.dataset.originalText =
+      button.textContent || "Nájsť auto";
 
-    const score = safeNumber(
-        car.score ?? car.matchScore,
-        null
-    );
-
-    const price = formatPrice(
-        car.price ??
-        car.priceText ??
-        car.officialPrice
-    );
-
-    const power = safeDisplayText(
-        car.power ??
-        car.powerKw ??
-        car.kw,
-        ""
-    );
-
-    const seats = safeDisplayText(
-        car.seats,
-        ""
-    );
-
-    const trunk = safeDisplayText(
-        car.trunk ??
-        car.trunkLiters ??
-        car.boot,
-        ""
-    );
-
-    const drive = safeDisplayText(
-        car.drive,
-        ""
-    );
-
-    const fuel = safeDisplayText(
-        car.fuel,
-        ""
-    );
-
-    const reason = safeDisplayText(
-        car.reason ??
-        car.matchReason ??
-        car.description,
-        ""
-    );
-
-    const maintenance = safeDisplayText(
-        car.maintenance,
-        ""
-    );
-
-    const officialPriceUrl = safeHTTPSUrl(
-        car.officialPriceUrl ??
-        car.priceUrl ??
-        car.officialPriceLink
-    );
-
-    const configuratorUrl = safeHTTPSUrl(
-        car.configuratorUrl ??
-        car.configurator
-    );
-
-    const sources = Array.isArray(car.sources)
-        ? car.sources
-        : [];
-
-    const sourceLinks = sources
-        .map(source => {
-            const url = safeHTTPSUrl(
-                source?.url ??
-                source?.href ??
-                source
-            );
-
-            if (!url) {
-                return "";
-            }
-
-            const label = safeDisplayText(
-                source?.title ??
-                source?.name ??
-                url,
-                "Zdroj"
-            );
-
-            return `
-                <a
-                    class="source-link"
-                    href="${escapeAttribute(url)}"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                >
-                    ${escapeHTML(label)}
-                </a>
-            `;
-        })
-        .filter(Boolean)
-        .join("");
-
-    const imageCandidates = getImageCandidates(car);
-
-    return `
-        <article class="car">
-
-            ${renderImage(car)}
-
-            <div class="car-body">
-
-                <div class="car-top">
-
-                    <div class="rank">
-                        #${index + 1}
-                    </div>
-
-                    ${
-                        score !== null
-                            ? `
-                                <div class="score">
-                                    ${escapeHTML(
-                                        formatNumber(score)
-                                    )} %
-                                </div>
-                            `
-                            : ""
-                    }
-
-                </div>
-
-                <h2 class="car-name">
-                    ${escapeHTML(name)}
-                </h2>
-
-                ${
-                    generation || year
-                        ? `
-                            <div class="generation">
-                                ${escapeHTML(
-                                    [generation, year]
-                                        .filter(Boolean)
-                                        .join(" • ")
-                                )}
-                            </div>
-                        `
-                        : ""
-                }
-
-                <div class="specs">
-
-                    ${
-                        price
-                            ? `
-                                <div class="spec">
-                                    <span>Cena</span>
-                                    <strong>
-                                        ${escapeHTML(price)}
-                                    </strong>
-                                </div>
-                            `
-                            : ""
-                    }
-
-                    ${
-                        power
-                            ? `
-                                <div class="spec">
-                                    <span>Výkon</span>
-                                    <strong>
-                                        ${escapeHTML(power)}
-                                    </strong>
-                                </div>
-                            `
-                            : ""
-                    }
-
-                    ${
-                        seats
-                            ? `
-                                <div class="spec">
-                                    <span>Miesta</span>
-                                    <strong>
-                                        ${escapeHTML(seats)}
-                                    </strong>
-                                </div>
-                            `
-                            : ""
-                    }
-
-                    ${
-                        trunk
-                            ? `
-                                <div class="spec">
-                                    <span>Kufor</span>
-                                    <strong>
-                                        ${escapeHTML(trunk)}
-                                    </strong>
-                                </div>
-                            `
-                            : ""
-                    }
-
-                    ${
-                        drive
-                            ? `
-                                <div class="spec">
-                                    <span>Pohon</span>
-                                    <strong>
-                                        ${escapeHTML(drive)}
-                                    </strong>
-                                </div>
-                            `
-                            : ""
-                    }
-
-                    ${
-                        fuel
-                            ? `
-                                <div class="spec">
-                                    <span>Palivo</span>
-                                    <strong>
-                                        ${escapeHTML(fuel)}
-                                    </strong>
-                                </div>
-                            `
-                            : ""
-                    }
-
-                </div>
-
-                ${
-                    reason
-                        ? `
-                            <section class="section">
-                                <h3>Prečo toto auto?</h3>
-                                <p>
-                                    ${escapeHTML(reason)}
-                                </p>
-                            </section>
-                        `
-                        : ""
-                }
-
-                ${
-                    car.pros
-                        ? `
-                            <section class="section pros">
-                                <h3>Výhody</h3>
-                                ${renderList(car.pros)}
-                            </section>
-                        `
-                        : ""
-                }
-
-                ${
-                    car.cons
-                        ? `
-                            <section class="section cons">
-                                <h3>Nevýhody</h3>
-                                ${renderList(car.cons)}
-                            </section>
-                        `
-                        : ""
-                }
-
-                ${
-                    maintenance
-                        ? `
-                            <section class="section">
-                                <h3>Údržba</h3>
-                                <p>
-                                    ${escapeHTML(maintenance)}
-                                </p>
-                            </section>
-                        `
-                        : ""
-                }
-
-                ${
-                    officialPriceUrl || configuratorUrl
-                        ? `
-                            <div class="actions">
-
-                                ${
-                                    officialPriceUrl
-                                        ? `
-                                            <a
-                                                class="configure"
-                                                href="${escapeAttribute(
-                                                    officialPriceUrl
-                                                )}"
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                            >
-                                                Oficiálna cena
-                                            </a>
-                                        `
-                                        : ""
-                                }
-
-                                ${
-                                    configuratorUrl
-                                        ? `
-                                            <a
-                                                class="configure secondary"
-                                                href="${escapeAttribute(
-                                                    configuratorUrl
-                                                )}"
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                            >
-                                                Konfigurátor
-                                            </a>
-                                        `
-                                        : ""
-                                }
-
-                            </div>
-                        `
-                        : ""
-                }
-
-                ${
-                    imageCandidates.length > 1
-                        ? `
-                            <div class="photo-info">
-                                ${escapeHTML(
-                                    `${imageCandidates.length} overených fotografií`
-                                )}
-                            </div>
-                        `
-                        : ""
-                }
-
-                ${
-                    sourceLinks
-                        ? `
-                            <section class="section sources">
-                                <h3>Zdroje</h3>
-                                <div class="source-list">
-                                    ${sourceLinks}
-                                </div>
-                            </section>
-                        `
-                        : ""
-                }
-
-            </div>
-
-        </article>
-    `;
-}
-
-
-// ============================================================
-// RESULTS
-// ============================================================
-
-function renderResults(cars) {
-    const results = getResultsElement();
-
-    if (!results) {
-        return;
-    }
-
-    if (!Array.isArray(cars) || cars.length !== 3) {
-        results.innerHTML = `
-            <div class="error-box">
-                Server neposlal presne 3 výsledné autá.
-            </div>
-        `;
-        return;
-    }
-
-    results.innerHTML = cars
-        .slice(0, 3)
-        .map((car, index) =>
-            renderCarCard(car, index)
-        )
-        .join("");
-}
-
-
-// ============================================================
-// ERROR
-// ============================================================
-
-function renderError(error) {
-    const results = getResultsElement();
-
-    const message = safeDisplayText(
-        error?.message,
-        "Vyhľadávanie sa nepodarilo dokončiť."
-    );
-
-    if (results) {
-        results.innerHTML = `
-            <div class="error-box">
-                <strong>Vyhľadávanie sa nepodarilo dokončiť.</strong>
-                <p>${escapeHTML(message)}</p>
-            </div>
-        `;
-    }
-
-    if (error?.status === 429) {
-        setStatus(
-            "Dosiahol si denný limit vyhľadávaní.",
-            "error"
-        );
-        return;
-    }
-
-    if (error?.status === 503) {
-        setStatus(
-            "AI vyhľadávanie je momentálne nedostupné. Skús to znova.",
-            "error"
-        );
-        return;
-    }
-
-    setStatus(
-        "Vyhľadávanie sa nepodarilo dokončiť.",
-        "error"
-    );
+    button.textContent = "Vyhľadávam...";
+  } else {
+    button.textContent =
+      button.dataset.originalText || "Nájsť auto";
+  }
 }
 
 
@@ -1215,277 +227,957 @@ function renderError(error) {
 // ============================================================
 
 function updateUsage(remaining) {
-    const text = get("usageText");
-    const dot = get("usageDot");
+  const usageText = $("usageText");
+  const usageDot = $("usageDot");
 
-    const value = safeNumber(remaining, null);
+  if (!usageText) {
+    return;
+  }
 
-    if (value === null) {
-        if (text) {
-            text.textContent =
-                "Vyhľadávania sú dostupné.";
-        }
+  let value = Number(remaining);
 
-        return;
+  if (!Number.isFinite(value)) {
+    value = 5;
+  }
+
+  value = Math.max(0, Math.min(5, value));
+
+  usageText.textContent =
+    `${value} / 5 vyhľadávaní dnes`;
+
+  if (usageDot) {
+    usageDot.className = "usage-dot";
+
+    if (value <= 0) {
+      usageDot.classList.add("empty");
+    } else if (value <= 1) {
+      usageDot.classList.add("low");
+    } else {
+      usageDot.classList.add("available");
     }
-
-    if (text) {
-        text.textContent =
-            `Zostáva ${formatNumber(value)} vyhľadávaní dnes`;
-    }
-
-    if (dot) {
-        dot.classList.toggle(
-            "low",
-            value <= 1
-        );
-    }
+  }
 }
 
 
 // ============================================================
-// FEEDBACK
+// SUPABASE
 // ============================================================
 
-function vibrate() {
-    try {
-        if (
-            navigator.vibrate &&
-            typeof navigator.vibrate === "function"
-        ) {
-            navigator.vibrate([
-                100,
-                60,
-                140
-            ]);
-        }
-    } catch {
-        // Ignore vibration errors.
+async function waitForSupabase() {
+  const maxAttempts = 100;
+
+  for (let i = 0; i < maxAttempts; i++) {
+    if (
+      window.supabase &&
+      typeof window.supabase.createClient === "function"
+    ) {
+      return true;
     }
+
+    await new Promise(resolve =>
+      setTimeout(resolve, 100)
+    );
+  }
+
+  return false;
 }
 
 
-function playReadySound() {
-    try {
-        const AudioContext =
-            window.AudioContext ||
-            window.webkitAudioContext;
+async function initializeSupabase() {
+  if (
+    !CONFIG.supabaseUrl ||
+    !CONFIG.supabaseAnonKey
+  ) {
+    throw new Error(
+      "Supabase konfigurácia nie je nastavená."
+    );
+  }
 
-        if (!AudioContext) {
-            return;
-        }
+  const available = await waitForSupabase();
 
-        const context = new AudioContext();
+  if (!available) {
+    throw new Error(
+      "Supabase sa nepodarilo načítať."
+    );
+  }
 
-        const oscillator =
-            context.createOscillator();
+  if (!supabaseClient) {
+    supabaseClient =
+      window.supabase.createClient(
+        CONFIG.supabaseUrl,
+        CONFIG.supabaseAnonKey
+      );
+  }
 
-        const gain =
-            context.createGain();
-
-        oscillator.type = "sine";
-
-        oscillator.frequency.setValueAtTime(
-            620,
-            context.currentTime
-        );
-
-        oscillator.frequency.linearRampToValueAtTime(
-            880,
-            context.currentTime + 0.12
-        );
-
-        gain.gain.setValueAtTime(
-            0.0001,
-            context.currentTime
-        );
-
-        gain.gain.exponentialRampToValueAtTime(
-            0.08,
-            context.currentTime + 0.02
-        );
-
-        gain.gain.exponentialRampToValueAtTime(
-            0.0001,
-            context.currentTime + 0.18
-        );
-
-        oscillator.connect(gain);
-        gain.connect(context.destination);
-
-        oscillator.start();
-
-        oscillator.stop(
-            context.currentTime + 0.2
-        );
-
-        setTimeout(() => {
-            context.close().catch(() => {});
-        }, 400);
-
-    } catch {
-        // Audio can be blocked by browser.
-    }
+  return supabaseClient;
 }
 
+
+// ============================================================
+// ANONYMOUS AUTH
+// ============================================================
+
+async function initializeAnonymousUser() {
+  const client = await initializeSupabase();
+
+  const sessionResult =
+    await client.auth.getSession();
+
+  if (
+    sessionResult &&
+    sessionResult.data &&
+    sessionResult.data.session
+  ) {
+    currentSession =
+      sessionResult.data.session;
+
+    return currentSession;
+  }
+
+  const authResult =
+    await client.auth.signInAnonymously();
+
+  if (authResult.error) {
+    throw authResult.error;
+  }
+
+  currentSession =
+    authResult.data?.session || null;
+
+  if (!currentSession) {
+    throw new Error(
+      "Nepodarilo sa vytvoriť anonymnú reláciu."
+    );
+  }
+
+  return currentSession;
+}
+
+
+// ============================================================
+// TOKEN
+// ============================================================
+
+async function getAccessToken() {
+  if (!supabaseClient) {
+    return "";
+  }
+
+  const result =
+    await supabaseClient.auth.getSession();
+
+  if (result.error) {
+    return "";
+  }
+
+  return (
+    result.data?.session?.access_token || ""
+  );
+}
+
+
+// ============================================================
+// REQUEST DATA
+// ============================================================
+
+function value(id) {
+  const element = $(id);
+
+  if (!element) {
+    return "";
+  }
+
+  return safeDisplayText(element.value, "");
+}
+
+
+function getNaturalLanguage() {
+  return value("aiRequest");
+}
+
+
+function collectRequest() {
+  return {
+    request: getNaturalLanguage(),
+
+    filters: {
+      budget: value("budget"),
+      seats: value("seats"),
+      power: value("power"),
+      trunk: value("trunk"),
+      drive: value("drive"),
+      fuel: value("fuel"),
+      body: value("body"),
+      style: value("style"),
+      length: value("length"),
+      year: value("year"),
+      avoid: value("avoid")
+    }
+  };
+}
+
+
+// ============================================================
+// RESPONSE NORMALIZATION
+// ============================================================
+
+function normalizeCars(data) {
+  if (!data) {
+    return [];
+  }
+
+  if (Array.isArray(data)) {
+    return data;
+  }
+
+  if (Array.isArray(data.cars)) {
+    return data.cars;
+  }
+
+  if (Array.isArray(data.results)) {
+    return data.results;
+  }
+
+  if (Array.isArray(data.recommendations)) {
+    return data.recommendations;
+  }
+
+  if (data.data) {
+    return normalizeCars(data.data);
+  }
+
+  return [];
+}
+
+
+// ============================================================
+// IMAGE HELPERS
+// ============================================================
+
+function getImageCandidates(car) {
+  const candidates = [];
+
+  const possible = [
+    car?.image,
+    car?.imageUrl,
+    car?.photo,
+    car?.photoUrl
+  ];
+
+  for (const item of possible) {
+    const url = safeHTTPSUrl(item);
+
+    if (url) {
+      candidates.push(url);
+    }
+  }
+
+  const arrays = [
+    car?.images,
+    car?.imageCandidates,
+    car?.photos
+  ];
+
+  for (const array of arrays) {
+    if (!Array.isArray(array)) {
+      continue;
+    }
+
+    for (const item of array) {
+      const url = safeHTTPSUrl(
+        typeof item === "string"
+          ? item
+          : item?.url || item?.image
+      );
+
+      if (url) {
+        candidates.push(url);
+      }
+    }
+  }
+
+  return [...new Set(candidates)];
+}
+
+
+function createImage(car) {
+  const images =
+    getImageCandidates(car);
+
+  if (!images.length) {
+    return `
+      <div class="car-image no-image">
+        Fotografia nie je dostupná
+      </div>
+    `;
+  }
+
+  const first =
+    escapeAttribute(images[0]);
+
+  return `
+    <div class="car-image">
+      <img
+        src="${first}"
+        alt="${escapeAttribute(
+          safeDisplayText(
+            car?.name,
+            "Vozidlo"
+          )
+        )}"
+        loading="lazy"
+        referrerpolicy="no-referrer"
+        onerror="this.parentElement.classList.add('image-error'); this.style.display='none';"
+      >
+    </div>
+  `;
+}
+
+
+// ============================================================
+// CAR CARD
+// ============================================================
+
+function createCard(car, index) {
+  const name =
+    safeDisplayText(
+      car?.name ||
+      car?.model ||
+      car?.title,
+      "Neznáme vozidlo"
+    );
+
+  const generation =
+    safeDisplayText(
+      car?.generation ||
+      car?.modelYear ||
+      car?.year,
+      ""
+    );
+
+  const description =
+    safeDisplayText(
+      car?.description,
+      ""
+    );
+
+  const price =
+    formatPrice(
+      car?.price ||
+      car?.priceText ||
+      car?.officialPrice
+    );
+
+  const power =
+    safeDisplayText(
+      car?.power ||
+      car?.powerKw ||
+      car?.kw,
+      ""
+    );
+
+  const trunk =
+    safeDisplayText(
+      car?.trunk ||
+      car?.trunkLiters ||
+      car?.boot,
+      ""
+    );
+
+  const drive =
+    safeDisplayText(
+      car?.drive ||
+      car?.drivetrain,
+      ""
+    );
+
+  const fuel =
+    safeDisplayText(
+      car?.fuel ||
+      car?.fuelType,
+      ""
+    );
+
+  const score =
+    safeDisplayText(
+      car?.score ||
+      car?.matchScore,
+      ""
+    );
+
+  const pros =
+    Array.isArray(car?.pros)
+      ? car.pros
+      : [];
+
+  const cons =
+    Array.isArray(car?.cons)
+      ? car.cons
+      : [];
+
+  const configurator =
+    safeHTTPSUrl(
+      car?.officialConfigurator ||
+      car?.configurator ||
+      car?.officialConfiguratorUrl
+    );
+
+  const officialPriceUrl =
+    safeHTTPSUrl(
+      car?.officialPriceUrl ||
+      car?.priceSource
+    );
+
+  const sourceUrl =
+    safeHTTPSUrl(
+      car?.source ||
+      car?.sourceUrl
+    );
+
+  return `
+    <article class="car">
+
+      ${createImage(car)}
+
+      <div class="car-body">
+
+        <div class="rank">
+          #${index + 1}
+        </div>
+
+        <h2 class="car-name">
+          ${escapeHTML(name)}
+        </h2>
+
+        ${
+          generation
+            ? `<div class="generation">
+                ${escapeHTML(generation)}
+              </div>`
+            : ""
+        }
+
+        ${
+          score
+            ? `<div class="score">
+                Zhoda: ${escapeHTML(score)}
+              </div>`
+            : ""
+        }
+
+        <div class="specs">
+
+          ${
+            price
+              ? `<div>
+                  <strong>Cena:</strong>
+                  ${escapeHTML(price)}
+                </div>`
+              : ""
+          }
+
+          ${
+            power
+              ? `<div>
+                  <strong>Výkon:</strong>
+                  ${escapeHTML(power)}
+                </div>`
+              : ""
+          }
+
+          ${
+            trunk
+              ? `<div>
+                  <strong>Kufor:</strong>
+                  ${escapeHTML(trunk)}
+                </div>`
+              : ""
+          }
+
+          ${
+            drive
+              ? `<div>
+                  <strong>Pohon:</strong>
+                  ${escapeHTML(drive)}
+                </div>`
+              : ""
+          }
+
+          ${
+            fuel
+              ? `<div>
+                  <strong>Palivo:</strong>
+                  ${escapeHTML(fuel)}
+                </div>`
+              : ""
+          }
+
+        </div>
+
+
+        ${
+          description
+            ? `
+              <div class="section">
+                <h3>Popis</h3>
+                <p>
+                  ${formatText(description)}
+                </p>
+              </div>
+            `
+            : ""
+        }
+
+
+        ${
+          pros.length
+            ? `
+              <div class="section pros">
+                <h3>Výhody</h3>
+                <ul>
+                  ${pros
+                    .map(
+                      item =>
+                        `<li>${escapeHTML(
+                          safeDisplayText(item)
+                        )}</li>`
+                    )
+                    .join("")}
+                </ul>
+              </div>
+            `
+            : ""
+        }
+
+
+        ${
+          cons.length
+            ? `
+              <div class="section cons">
+                <h3>Nevýhody</h3>
+                <ul>
+                  ${cons
+                    .map(
+                      item =>
+                        `<li>${escapeHTML(
+                          safeDisplayText(item)
+                        )}</li>`
+                    )
+                    .join("")}
+                </ul>
+              </div>
+            `
+            : ""
+        }
+
+
+        ${
+          configurator
+            ? `
+              <div class="configure">
+                <a
+                  href="${escapeAttribute(
+                    configurator
+                  )}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Oficiálny konfigurátor
+                </a>
+              </div>
+            `
+            : ""
+        }
+
+
+        ${
+          officialPriceUrl
+            ? `
+              <div class="market-info">
+                <a
+                  class="source-link"
+                  href="${escapeAttribute(
+                    officialPriceUrl
+                  )}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Zdroj ceny
+                </a>
+              </div>
+            `
+            : ""
+        }
+
+
+        ${
+          sourceUrl
+            ? `
+              <div class="market-info">
+                <a
+                  class="source-link"
+                  href="${escapeAttribute(
+                    sourceUrl
+                  )}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Zdroj informácií
+                </a>
+              </div>
+            `
+            : ""
+        }
+
+      </div>
+
+    </article>
+  `;
+}
+
+
+// ============================================================
+// RESULTS
+// ============================================================
+
+function renderResults(cars) {
+  const results = $("results");
+
+  if (!results) {
+    return;
+  }
+
+  if (!Array.isArray(cars) || cars.length !== 3) {
+    results.innerHTML = "";
+
+    setStatus(
+      "Nepodarilo sa získať presne 3 vhodné vozidlá.",
+      "error"
+    );
+
+    return;
+  }
+
+  results.innerHTML = cars
+    .slice(0, 3)
+    .map((car, index) =>
+      createCard(car, index)
+    )
+    .join("");
+}
+
+
+// ============================================================
+// ERROR
+// ============================================================
+
+function getErrorMessage(error, responseData) {
+  const serverMessage =
+    safeDisplayText(
+      responseData?.message ||
+      responseData?.error ||
+      responseData?.details,
+      ""
+    );
+
+  if (serverMessage) {
+    return serverMessage;
+  }
+
+  const errorMessage =
+    safeDisplayText(
+      error?.message,
+      ""
+    );
+
+  if (
+    errorMessage
+      .toLowerCase()
+      .includes("failed to fetch")
+  ) {
+    return (
+      "Server sa nepodarilo kontaktovať. " +
+      "Vyhľadávanie nebolo úspešne dokončené."
+    );
+  }
+
+  return (
+    errorMessage ||
+    "Vyhľadávanie sa nepodarilo dokončiť."
+  );
+}
+
+
+// ============================================================
+// SOUND + VIBRATION
+// ============================================================
 
 function notifySearchFinished() {
-    vibrate();
-    playReadySound();
+  try {
+    if (
+      navigator.vibrate &&
+      typeof navigator.vibrate === "function"
+    ) {
+      navigator.vibrate([
+        80,
+        60,
+        120
+      ]);
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    const AudioContext =
+      window.AudioContext ||
+      window.webkitAudioContext;
+
+    if (!AudioContext) {
+      return;
+    }
+
+    const context =
+      new AudioContext();
+
+    const oscillator =
+      context.createOscillator();
+
+    const gain =
+      context.createGain();
+
+    oscillator.frequency.value = 660;
+    oscillator.type = "sine";
+
+    gain.gain.setValueAtTime(
+      0.0001,
+      context.currentTime
+    );
+
+    gain.gain.exponentialRampToValueAtTime(
+      0.05,
+      context.currentTime + 0.01
+    );
+
+    gain.gain.exponentialRampToValueAtTime(
+      0.0001,
+      context.currentTime + 0.18
+    );
+
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+
+    oscillator.start();
+
+    oscillator.stop(
+      context.currentTime + 0.2
+    );
+  } catch {
+    // Audio may be blocked by browser.
+  }
 }
 
 
 // ============================================================
-// SEARCH
+// API REQUEST
+// ============================================================
+
+async function performSearch(payload) {
+  const token =
+    await getAccessToken();
+
+  const headers = {
+    "Content-Type": "application/json"
+  };
+
+  if (token) {
+    headers.Authorization =
+      `Bearer ${token}`;
+  }
+
+  const response =
+    await fetch(
+      CONFIG.apiEndpoint || "/api/search",
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload)
+      }
+    );
+
+  let data = null;
+
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    const error =
+      new Error(
+        safeDisplayText(
+          data?.message ||
+          data?.error,
+          `Server error ${response.status}`
+        )
+      );
+
+    error.status =
+      response.status;
+
+    error.responseData =
+      data;
+
+    throw error;
+  }
+
+  return data;
+}
+
+
+// ============================================================
+// MAIN SEARCH
 // ============================================================
 
 async function findCars() {
-    if (searching) {
-        return;
+  if (isSearching) {
+    return;
+  }
+
+  const request =
+    collectRequest();
+
+  if (
+    !request.request &&
+    !Object.values(request.filters)
+      .some(Boolean)
+  ) {
+    setStatus(
+      "Najprv zadajte požiadavky na auto.",
+      "error"
+    );
+
+    const input =
+      $("aiRequest");
+
+    if (input) {
+      input.focus();
     }
 
-    const payload = buildRequestPayload();
+    return;
+  }
 
-    if (!hasSearchInput(payload)) {
-        setStatus(
-            "Zadaj požiadavku alebo vyplň aspoň jeden filter.",
-            "error"
-        );
-        return;
+  isSearching = true;
+
+  setButtonBusy(true);
+
+  setStatus(
+    "Vyhľadávam vhodné vozidlá...",
+    "loading"
+  );
+
+  const results =
+    $("results");
+
+  if (results) {
+    results.innerHTML = "";
+  }
+
+  try {
+    const data =
+      await performSearch(request);
+
+    const cars =
+      normalizeCars(data);
+
+    if (cars.length !== 3) {
+      throw new Error(
+        "Server nevrátil presne 3 vozidlá."
+      );
     }
 
-    const results = getResultsElement();
+    renderResults(cars);
 
-    if (results) {
-        results.innerHTML = "";
+    if (
+      data &&
+      data.remaining !== undefined
+    ) {
+      updateUsage(
+        data.remaining
+      );
     }
-
-    clearStatus();
-    setButtonBusy(true);
 
     setStatus(
-        "Vyhľadávam aktuálne informácie o vozidlách..."
+      "Vyhľadávanie dokončené.",
+      "success"
     );
 
-    try {
-        const data = await performSearch(payload);
+    notifySearchFinished();
 
-        renderResults(data.cars);
+  } catch (error) {
+
+    console.error(
+      "CARMATCH AI search error:",
+      error
+    );
+
+    const message =
+      getErrorMessage(
+        error,
+        error?.responseData
+      );
+
+    setStatus(
+      message,
+      "error"
+    );
+
+    if (results) {
+      results.innerHTML = "";
+    }
+
+  } finally {
+    isSearching = false;
+    setButtonBusy(false);
+  }
+}
+
+
+// ============================================================
+// EVENT LISTENERS
+// ============================================================
+
+function setupEvents() {
+  const button =
+    $("searchButton");
+
+  if (button) {
+    button.addEventListener(
+      "click",
+      findCars
+    );
+  }
+
+  const textarea =
+    $("aiRequest");
+
+  if (textarea) {
+    textarea.addEventListener(
+      "keydown",
+      event => {
 
         if (
-            data.remaining !== undefined &&
-            data.remaining !== null
+          event.key === "Enter" &&
+          (event.ctrlKey || event.metaKey)
         ) {
-            updateUsage(data.remaining);
+          event.preventDefault();
+          findCars();
         }
 
-        setStatus(
-            "Vyhľadávanie dokončené.",
-            "success"
-        );
-
-        notifySearchFinished();
-
-    } catch (error) {
-        console.error(
-            "CARMATCH AI search error:",
-            error
-        );
-
-        renderError(error);
-
-    } finally {
-        setButtonBusy(false);
-    }
-}
-
-
-// ============================================================
-// INITIALIZATION
-// ============================================================
-
-async function initializeApp() {
-    if (initialized) {
-        return;
-    }
-
-    const button = getSearchButton();
-
-    if (!button) {
-        console.error(
-            "CARMATCH AI: search button not found."
-        );
-        return;
-    }
-
-    button.addEventListener(
-        "click",
-        findCars
+      }
     );
-
-    try {
-        setStatus(
-            "Pripravujem CARMATCH AI..."
-        );
-
-        await ensureAnonymousSession();
-
-        initialized = true;
-
-        button.disabled = false;
-
-        updateUsage(null);
-
-        setStatus(
-            "CARMATCH AI je pripravené.",
-            "success"
-        );
-
-    } catch (error) {
-        console.error(
-            "CARMATCH AI initialization error:",
-            error
-        );
-
-        button.disabled = true;
-
-        setStatus(
-            "Nepodarilo sa inicializovať vyhľadávanie. Obnov stránku a skús znova.",
-            "error"
-        );
-    }
-}
-
-
-// ============================================================
-// ENTER / CTRL+ENTER
-// ============================================================
-
-function setupKeyboard() {
-    const input = get("aiRequest");
-
-    if (!input) {
-        return;
-    }
-
-    input.addEventListener(
-        "keydown",
-        event => {
-            if (
-                event.key === "Enter" &&
-                (event.ctrlKey || event.metaKey)
-            ) {
-                event.preventDefault();
-
-                if (
-                    initialized &&
-                    !searching
-                ) {
-                    findCars();
-                }
-            }
-        }
-    );
+  }
 }
 
 
@@ -1493,12 +1185,73 @@ function setupKeyboard() {
 // START
 // ============================================================
 
-document.addEventListener(
-    "DOMContentLoaded",
-    () => {
-        setupKeyboard();
-        initializeApp();
-    }
-);
+async function startCarmatch() {
+  try {
 
-window.findCars = findCars;
+    setStatus(
+      "Inicializujem CARMATCH AI...",
+      "loading"
+    );
+
+    updateUsage(5);
+
+    await initializeAnonymousUser();
+
+    updateUsage(5);
+
+    const button =
+      $("searchButton");
+
+    if (button) {
+      button.disabled = false;
+    }
+
+    setStatus(
+      "CARMATCH AI je pripravený.",
+      "success"
+    );
+
+  } catch (error) {
+
+    console.error(
+      "CARMATCH initialization error:",
+      error
+    );
+
+    const button =
+      $("searchButton");
+
+    if (button) {
+      button.disabled = true;
+    }
+
+    setStatus(
+      "CARMATCH AI sa nepodarilo inicializovať. Obnovte stránku.",
+      "error"
+    );
+  }
+}
+
+
+// ============================================================
+// GLOBAL
+// ============================================================
+
+window.findCars =
+  findCars;
+
+
+// ============================================================
+// INIT
+// ============================================================
+
+document.addEventListener(
+  "DOMContentLoaded",
+  () => {
+
+    setupEvents();
+
+    startCarmatch();
+
+  }
+);
