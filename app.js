@@ -1,14 +1,16 @@
 // ============================================================
-// CARMATCH AI - FINAL FRONTEND v11
+// CARMATCH AI - FINAL FRONTEND v12
 // ============================================================
 // - Exactly 3 cars
 // - Supabase anonymous authentication
-// - 5 searches/day
+// - 5 searches/day UI
 // - Search refund support
 // - Robust API error handling
 // - No [object Object]
 // - Slovak UI
-// - Image candidates
+// - Image candidates with model matching
+// - Correct € / kW / HP / l units
+// - Full brand + model name
 // - Vibration + sound
 // - Dark / Light mode
 // - Saved theme preference
@@ -156,18 +158,234 @@ function safeHTTPSUrl(value) {
 
 
 // ============================================================
+// NUMBER HELPERS
+// ============================================================
+
+function numericValue(value) {
+  if (
+    typeof value === "number" &&
+    Number.isFinite(value)
+  ) {
+    return value;
+  }
+
+  if (
+    typeof value !== "string"
+  ) {
+    return null;
+  }
+
+  const cleaned =
+    value
+      .replace(/\s/g, "")
+      .replace(",", ".")
+      .replace(/[^\d.-]/g, "");
+
+  if (!cleaned) {
+    return null;
+  }
+
+  const number =
+    Number(cleaned);
+
+  return Number.isFinite(number)
+    ? number
+    : null;
+}
+
+
+// ============================================================
 // FORMATTERS
 // ============================================================
 
 function formatPrice(value) {
-  const text =
-    safeDisplayText(value, "");
-
-  if (!text) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
     return "Cena nie je dostupná";
   }
 
-  return text;
+  const raw =
+    safeDisplayText(
+      value,
+      ""
+    );
+
+  if (!raw) {
+    return "Cena nie je dostupná";
+  }
+
+  const lowered =
+    raw.toLowerCase();
+
+  if (
+    lowered.includes(
+      "cena na vyžiadanie"
+    ) ||
+    lowered.includes(
+      "cena na vyziadanie"
+    )
+  ) {
+    return "Cena na vyžiadanie";
+  }
+
+  if (
+    lowered.includes(
+      "cena nie je dostupná"
+    ) ||
+    lowered.includes(
+      "cena nie je dostupna"
+    )
+  ) {
+    return "Cena nie je dostupná";
+  }
+
+  // Ak už obsahuje menu, nemeníme ho.
+  if (
+    raw.includes("€") ||
+    /\bEUR\b/i.test(raw) ||
+    /\$/.test(raw) ||
+    /£/.test(raw) ||
+    /CHF/i.test(raw)
+  ) {
+    return raw;
+  }
+
+  const number =
+    numericValue(raw);
+
+  if (number !== null) {
+    return (
+      new Intl.NumberFormat(
+        "sk-SK",
+        {
+          maximumFractionDigits: 0
+        }
+      ).format(number) +
+      " €"
+    );
+  }
+
+  return raw;
+}
+
+
+function formatPower(car) {
+  const kw =
+    numericValue(
+      car?.powerKw ??
+      car?.kw
+    );
+
+  const hp =
+    numericValue(
+      car?.powerHpMechanical ??
+      car?.mechanicalHp ??
+      car?.hp
+    );
+
+  if (
+    kw !== null &&
+    hp !== null
+  ) {
+    return (
+      `${formatNumber(kw)} kW / ` +
+      `${formatNumber(hp)} HP`
+    );
+  }
+
+  if (kw !== null) {
+    return `${formatNumber(kw)} kW`;
+  }
+
+  if (hp !== null) {
+    return `${formatNumber(hp)} HP`;
+  }
+
+  // Fallback pre starší formát backendu.
+  const oldPower =
+    safeDisplayText(
+      car?.power,
+      ""
+    );
+
+  if (!oldPower) {
+    return "";
+  }
+
+  if (
+    /kW/i.test(oldPower) ||
+    /\bHP\b/i.test(oldPower)
+  ) {
+    return oldPower;
+  }
+
+  const oldNumber =
+    numericValue(
+      oldPower
+    );
+
+  if (oldNumber !== null) {
+    return `${formatNumber(oldNumber)} kW`;
+  }
+
+  return oldPower;
+}
+
+
+function formatNumber(value) {
+  const number =
+    numericValue(value);
+
+  if (number === null) {
+    return "";
+  }
+
+  return new Intl.NumberFormat(
+    "sk-SK",
+    {
+      maximumFractionDigits: 0
+    }
+  ).format(number);
+}
+
+
+function formatTrunk(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return "";
+  }
+
+  const raw =
+    safeDisplayText(
+      value,
+      ""
+    );
+
+  if (!raw) {
+    return "";
+  }
+
+  if (
+    /\bl\b/i.test(raw) ||
+    /litrov/i.test(raw)
+  ) {
+    return raw;
+  }
+
+  const number =
+    numericValue(raw);
+
+  if (number !== null) {
+    return `${formatNumber(number)} l`;
+  }
+
+  return raw;
 }
 
 
@@ -665,6 +883,282 @@ function normalizeCars(data) {
 // IMAGE HELPERS
 // ============================================================
 
+function normalizeImageCandidate(
+  item
+) {
+  if (
+    typeof item === "string"
+  ) {
+    const url =
+      safeHTTPSUrl(item);
+
+    if (!url) {
+      return null;
+    }
+
+    return {
+      url,
+      title: "",
+      source: ""
+    };
+  }
+
+  if (
+    !item ||
+    typeof item !== "object"
+  ) {
+    return null;
+  }
+
+  const url =
+    safeHTTPSUrl(
+      item.url ||
+      item.image ||
+      item.imageUrl
+    );
+
+  if (!url) {
+    return null;
+  }
+
+  return {
+    url,
+
+    title:
+      safeDisplayText(
+        item.title ||
+        item.name ||
+        "",
+        ""
+      ),
+
+    source:
+      safeDisplayText(
+        item.source ||
+        "",
+        ""
+      )
+  };
+}
+
+
+function getCarIdentityTokens(car) {
+  const brand =
+    safeDisplayText(
+      car?.brand,
+      ""
+    );
+
+  const model =
+    safeDisplayText(
+      car?.model ||
+      car?.name ||
+      car?.title,
+      ""
+    );
+
+  const generation =
+    safeDisplayText(
+      car?.generation,
+      ""
+    );
+
+  const year =
+    safeDisplayText(
+      car?.modelYear ||
+      car?.year,
+      ""
+    );
+
+  const combined =
+    `${brand} ${model} ${generation} ${year}`
+      .toLowerCase();
+
+  return {
+    brand,
+    model,
+    generation,
+    year,
+    combined
+  };
+}
+
+
+function normalizeSearchText(
+  value
+) {
+  return safeDisplayText(
+    value,
+    ""
+  )
+    .toLowerCase()
+    .replace(
+      /[^a-z0-9áäčďéíĺľňóôŕšťúýž\s-]/gi,
+      " "
+    )
+    .replace(
+      /\s+/g,
+      " "
+    )
+    .trim();
+}
+
+
+function tokenList(value) {
+  return normalizeSearchText(
+    value
+  )
+    .split(/\s+/)
+    .filter(
+      token =>
+        token.length >= 2
+    );
+}
+
+
+function scoreImageCandidate(
+  candidate,
+  car
+) {
+  const identity =
+    getCarIdentityTokens(
+      car
+    );
+
+  const title =
+    normalizeSearchText(
+      candidate?.title
+    );
+
+  const source =
+    normalizeSearchText(
+      candidate?.source
+    );
+
+  if (!title) {
+    // Starší backend môže posielať
+    // iba URL bez metadát.
+    return 0;
+  }
+
+  let score = 0;
+
+  const brandTokens =
+    tokenList(
+      identity.brand
+    );
+
+  const modelTokens =
+    tokenList(
+      identity.model
+    );
+
+  const generationTokens =
+    tokenList(
+      identity.generation
+    );
+
+  const yearTokens =
+    tokenList(
+      identity.year
+    );
+
+  // Značka.
+  for (
+    const token
+    of brandTokens
+  ) {
+    if (
+      title.includes(token)
+    ) {
+      score += 8;
+    }
+  }
+
+  // Model.
+  for (
+    const token
+    of modelTokens
+  ) {
+    if (
+      title.includes(token)
+    ) {
+      score += 15;
+    }
+  }
+
+  // Generácia.
+  for (
+    const token
+    of generationTokens
+  ) {
+    if (
+      title.includes(token)
+    ) {
+      score += 12;
+    }
+  }
+
+  // Modelový rok.
+  for (
+    const token
+    of yearTokens
+  ) {
+    if (
+      title.includes(token)
+    ) {
+      score += 5;
+    }
+  }
+
+  // Ak je v názve zdroja jasne uvedený
+  // iný typ vozidla, znižujeme skóre.
+  const badWords = [
+    "logo",
+    "interior",
+    "dashboard",
+    "engine",
+    "truck",
+    "bus",
+    "motorcycle",
+    "concept",
+    "prototype",
+    "sketch",
+    "render"
+  ];
+
+  for (
+    const word
+    of badWords
+  ) {
+    if (
+      title.includes(word)
+    ) {
+      score -= 100;
+    }
+  }
+
+  // Malý bonus pre Wikimedia/Wikipedia.
+  if (
+    source.includes(
+      "wikimedia"
+    )
+  ) {
+    score += 1;
+  }
+
+  if (
+    source.includes(
+      "wikipedia"
+    )
+  ) {
+    score += 1;
+  }
+
+  return score;
+}
+
+
 function getImageCandidates(car) {
   const candidates = [];
 
@@ -678,11 +1172,15 @@ function getImageCandidates(car) {
   for (
     const item of possible
   ) {
-    const url =
-      safeHTTPSUrl(item);
+    const normalized =
+      normalizeImageCandidate(
+        item
+      );
 
-    if (url) {
-      candidates.push(url);
+    if (normalized) {
+      candidates.push(
+        normalized
+      );
     }
   }
 
@@ -700,55 +1198,169 @@ function getImageCandidates(car) {
     }
 
     for (
-      const item of array
+      const item
+      of array
     ) {
-      const url =
-        safeHTTPSUrl(
-          typeof item === "string"
-            ? item
-            : item?.url ||
-              item?.image
+      const normalized =
+        normalizeImageCandidate(
+          item
         );
 
-      if (url) {
-        candidates.push(url);
+      if (normalized) {
+        candidates.push(
+          normalized
+        );
       }
     }
   }
 
-  return [
-    ...new Set(candidates)
-  ];
+  const unique =
+    [];
+
+  const seen =
+    new Set();
+
+  for (
+    const candidate
+    of candidates
+  ) {
+    if (
+      seen.has(
+        candidate.url
+      )
+    ) {
+      continue;
+    }
+
+    seen.add(
+      candidate.url
+    );
+
+    unique.push(
+      candidate
+    );
+  }
+
+  return unique;
+}
+
+
+function chooseBestImage(
+  car
+) {
+  const candidates =
+    getImageCandidates(
+      car
+    );
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  const scored =
+    candidates.map(
+      (candidate, index) => ({
+        candidate,
+
+        score:
+          scoreImageCandidate(
+            candidate,
+            car
+          ),
+
+        index
+      })
+    );
+
+  scored.sort(
+    (a, b) => {
+      if (
+        b.score !==
+        a.score
+      ) {
+        return (
+          b.score -
+          a.score
+        );
+      }
+
+      return (
+        a.index -
+        b.index
+      );
+    }
+  );
+
+  // Ak backend poslal metadáta
+  // a žiadny obrázok nepasuje
+  // na model, radšej obrázok
+  // nezobrazíme ako nesprávny model.
+  const best =
+    scored[0];
+
+  const hasMetadata =
+    candidates.some(
+      candidate =>
+        Boolean(
+          candidate.title
+        )
+    );
+
+  if (
+    hasMetadata &&
+    best.score <= 0
+  ) {
+    return null;
+  }
+
+  return best.candidate;
 }
 
 
 function createImage(car) {
-  const images =
-    getImageCandidates(car);
+  const best =
+    chooseBestImage(
+      car
+    );
 
-  if (!images.length) {
+  if (!best) {
     return `
       <div class="car-image no-image">
-        Fotografia nie je dostupná
+        Fotografia presného modelu nie je dostupná
       </div>
     `;
   }
 
-  const first =
+  const imageUrl =
     escapeAttribute(
-      images[0]
+      best.url
     );
+
+  const brand =
+    safeDisplayText(
+      car?.brand,
+      ""
+    );
+
+  const model =
+    safeDisplayText(
+      car?.model ||
+      car?.name ||
+      car?.title,
+      "Vozidlo"
+    );
+
+  const altText =
+    `${brand} ${model}`
+      .trim();
 
   return `
     <div class="car-image">
 
       <img
-        src="${first}"
+        src="${imageUrl}"
         alt="${escapeAttribute(
-          safeDisplayText(
-            car?.name,
-            "Vozidlo"
-          )
+          altText
         )}"
         loading="lazy"
         referrerpolicy="no-referrer"
@@ -761,6 +1373,60 @@ function createImage(car) {
 
 
 // ============================================================
+// CAR NAME
+// ============================================================
+
+function getCarName(car) {
+  const brand =
+    safeDisplayText(
+      car?.brand,
+      ""
+    );
+
+  const model =
+    safeDisplayText(
+      car?.model ||
+      car?.name ||
+      car?.title,
+      ""
+    );
+
+  if (
+    brand &&
+    model
+  ) {
+    // Ak model už začína značkou,
+    // nepridávame ju dvakrát.
+    const normalizedBrand =
+      normalizeSearchText(
+        brand
+      );
+
+    const normalizedModel =
+      normalizeSearchText(
+        model
+      );
+
+    if (
+      normalizedModel.startsWith(
+        normalizedBrand + " "
+      )
+    ) {
+      return model;
+    }
+
+    return `${brand} ${model}`;
+  }
+
+  return (
+    model ||
+    brand ||
+    "Neznáme vozidlo"
+  );
+}
+
+
+// ============================================================
 // CAR CARD
 // ============================================================
 
@@ -769,11 +1435,8 @@ function createCard(
   index
 ) {
   const name =
-    safeDisplayText(
-      car?.name ||
-      car?.model ||
-      car?.title,
-      "Neznáme vozidlo"
+    getCarName(
+      car
     );
 
   const generation =
@@ -798,19 +1461,16 @@ function createCard(
     );
 
   const power =
-    safeDisplayText(
-      car?.power ||
-      car?.powerKw ||
-      car?.kw,
-      ""
+    formatPower(
+      car
     );
 
   const trunk =
-    safeDisplayText(
+    formatTrunk(
+      car?.trunkLitres ??
       car?.trunk ||
       car?.trunkLiters ||
-      car?.boot,
-      ""
+      car?.boot
     );
 
   const drive =
@@ -825,6 +1485,11 @@ function createCard(
       car?.fuel ||
       car?.fuelType,
       ""
+    );
+
+  const seats =
+    numericValue(
+      car?.seats
     );
 
   const score =
@@ -860,7 +1525,8 @@ function createCard(
   const sourceUrl =
     safeHTTPSUrl(
       car?.source ||
-      car?.sourceUrl
+      car?.sourceUrl ||
+      car?.officialSourceUrl
     );
 
   return `
@@ -931,6 +1597,21 @@ function createCard(
                 <div>
                   <strong>Kufor:</strong>
                   ${escapeHTML(trunk)}
+                </div>
+              `
+              : ""
+          }
+
+          ${
+            seats !== null
+              ? `
+                <div>
+                  <strong>Miesta:</strong>
+                  ${escapeHTML(
+                    formatNumber(
+                      seats
+                    )
+                  )}
                 </div>
               `
               : ""
