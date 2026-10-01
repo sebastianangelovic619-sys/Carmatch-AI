@@ -1,23 +1,29 @@
 // ============================================================
-// CARMATCH AI - PRODUCTION BACKEND v10
+// CARMATCH AI - PRODUCTION BACKEND v11
 // ============================================================
 //
 // Core features
 // - Supabase anonymous auth
 // - 5 searches / day via Supabase RPC
-// - Groq GPT-OSS with live browser search
+// - Groq GPT-OSS + REAL browser_search
+// - OpenRouter FREE fallbacks
 // - Official-manufacturer price priority
-// - Server-side validation of official price URLs
-// - kW + mechanical HP output (never PS / ks / bhp)
+// - Server-side official price URL validation
+// - kW + mechanical HP
 // - Current generation / model-year guardrails
-// - 3-car exact output contract
-// - OpenRouter FREE multi-fallback
+// - Exactly 3 cars
 // - Search refund when every provider fails
 // - Wikimedia Commons + Wikipedia image fallback
-// - Image rejection / relevance ranking
-// - Strong SSRF-safe URL validation
-// - Defensive parsing and normalization
-// - Robust top-level error handling
+// - Parallel image searching
+// - Parallel official price verification
+// - SSRF-safe URL validation
+// - Defensive parsing / normalization
+// - Strong top-level error handling
+// ============================================================
+
+
+// ============================================================
+// API URLS
 // ============================================================
 
 const GROQ_URL =
@@ -31,6 +37,11 @@ const WIKIMEDIA_API =
 
 const WIKIPEDIA_API =
   "https://en.wikipedia.org/w/api.php";
+
+
+// ============================================================
+// ENVIRONMENT
+// ============================================================
 
 const SUPABASE_URL =
   process.env.SUPABASE_URL;
@@ -51,22 +62,43 @@ const OPENROUTER_API_KEY =
 
 const MAX_SEARCHES_PER_DAY = 5;
 
-const REQUEST_TIMEOUT = 55000;
-const GROQ_PRIMARY_TIMEOUT = 52000;
-const GROQ_REPAIR_TIMEOUT = 24000;
-const OPENROUTER_TIMEOUT = 30000;
 
-const SUPABASE_TIMEOUT = 10000;
-const OFFICIAL_PAGE_TIMEOUT = 6500;
-const WIKIMEDIA_TIMEOUT = 7000;
-const WIKIPEDIA_TIMEOUT = 7000;
+// Keep the complete request under typical serverless limits.
+const REQUEST_TIMEOUT = 45000;
 
+const GROQ_PRIMARY_TIMEOUT = 40000;
+const GROQ_REPAIR_TIMEOUT = 18000;
+
+const OPENROUTER_TIMEOUT = 24000;
+
+const SUPABASE_TIMEOUT = 8000;
+
+const OFFICIAL_PAGE_TIMEOUT = 5000;
+
+const WIKIMEDIA_TIMEOUT = 5000;
+const WIKIPEDIA_TIMEOUT = 5000;
+
+
+// Only a small number of image searches are necessary.
+// They run in parallel.
 const MAX_IMAGE_CANDIDATES = 8;
+
+const MAX_IMAGE_QUERIES = 4;
+
 const MAX_DATA_SOURCES = 12;
+
 const MAX_BODY_TEXT = 7000;
 
-const POWER_KW_TO_HP = 1.34102209;
-const POWER_HP_TO_KW = 1 / POWER_KW_TO_HP;
+
+// ============================================================
+// POWER CONVERSION
+// ============================================================
+
+const POWER_KW_TO_HP =
+  1.34102209;
+
+const POWER_HP_TO_KW =
+  1 / POWER_KW_TO_HP;
 
 
 // ============================================================
@@ -75,14 +107,20 @@ const POWER_HP_TO_KW = 1 / POWER_KW_TO_HP;
 
 const GROQ_MODELS = [
   {
-    model: "openai/gpt-oss-120b",
-    timeout: GROQ_PRIMARY_TIMEOUT,
-    purpose: "research"
+    model:
+      "openai/gpt-oss-120b",
+    timeout:
+      GROQ_PRIMARY_TIMEOUT,
+    purpose:
+      "research"
   },
   {
-    model: "openai/gpt-oss-20b",
-    timeout: GROQ_REPAIR_TIMEOUT,
-    purpose: "repair"
+    model:
+      "openai/gpt-oss-20b",
+    timeout:
+      GROQ_REPAIR_TIMEOUT,
+    purpose:
+      "repair"
   }
 ];
 
@@ -100,7 +138,7 @@ const OPENROUTER_FREE_MODELS = [
 
 
 // ============================================================
-// OFFICIAL / THIRD-PARTY DOMAIN RULES
+// OFFICIAL / THIRD-PARTY DOMAINS
 // ============================================================
 
 const OBVIOUS_THIRD_PARTY_HOSTS = [
@@ -133,6 +171,7 @@ const OBVIOUS_THIRD_PARTY_HOSTS = [
   "twitter.com"
 ];
 
+
 const OFFICIAL_DOMAIN_HINTS = {
   audi: [
     "audi.com",
@@ -140,24 +179,28 @@ const OFFICIAL_DOMAIN_HINTS = {
     "audi.de",
     "audi.at"
   ],
+
   bmw: [
     "bmw.com",
     "bmw.sk",
     "bmw.de",
     "bmw.at"
   ],
+
   mercedes: [
     "mercedes-benz.com",
     "mercedes-benz.sk",
     "mercedes-benz.de",
     "mercedes-benz.at"
   ],
+
   porsche: [
     "porsche.com",
     "porsche.sk",
     "porsche.de",
     "porsche.at"
   ],
+
   volkswagen: [
     "volkswagen.com",
     "volkswagen.sk",
@@ -165,271 +208,273 @@ const OFFICIAL_DOMAIN_HINTS = {
     "vw.com",
     "vw.sk"
   ],
+
   skoda: [
     "skoda-auto.com",
     "skoda-auto.sk",
     "skoda-auto.de",
     "skoda-auto.at"
   ],
+
   seat: [
     "seat.com",
     "seat.sk",
     "seat.de"
   ],
+
   cupra: [
     "cupraofficial.com",
     "cupra.com",
     "cupra.sk",
     "cupra.de"
   ],
+
   volvo: [
     "volvocars.com",
     "volvocars.sk",
     "volvocars.de"
   ],
+
   lexus: [
     "lexus.com",
     "lexus.sk",
     "lexus.eu"
   ],
+
   toyota: [
     "toyota.com",
     "toyota.sk",
     "toyota-europe.com"
   ],
+
   landrover: [
     "landrover.com",
     "landrover.sk"
   ],
+
   jaguar: [
     "jaguar.com",
     "jaguar.sk"
   ],
+
   ferrari: [
     "ferrari.com"
   ],
+
   lamborghini: [
     "lamborghini.com"
   ],
+
   maserati: [
     "maserati.com"
   ],
+
   bentley: [
     "bentleymotors.com"
   ],
+
   astonmartin: [
     "astonmartin.com"
   ],
+
   mclaren: [
     "cars.mclaren.com",
     "mclaren.com"
   ],
+
   ford: [
     "ford.com",
     "ford.sk",
     "ford.de"
   ],
+
   opel: [
     "opel.com",
     "opel.sk",
     "opel.de"
   ],
+
   peugeot: [
     "peugeot.com",
     "peugeot.sk",
     "peugeot.de"
   ],
+
   citroen: [
     "citroen.com",
     "citroen.sk",
     "citroen.de"
   ],
+
   renault: [
     "renault.com",
     "renault.sk",
     "renault.de"
   ],
+
   nissan: [
     "nissan-global.com",
     "nissan.com",
     "nissan.sk",
     "nissan.de"
   ],
+
   honda: [
     "honda.com",
     "honda.sk",
     "honda.de"
   ],
+
   mazda: [
     "mazda.com",
     "mazda.sk",
     "mazda.de"
   ],
+
   hyundai: [
     "hyundai.com",
     "hyundai.sk",
     "hyundai.de"
   ],
+
   kia: [
     "kia.com",
     "kia.sk",
     "kia.de"
   ],
+
   genesis: [
     "genesis.com"
   ],
+
   tesla: [
     "tesla.com"
   ],
+
   polestar: [
     "polestar.com"
   ],
+
   smart: [
     "smart.com"
   ],
+
   mini: [
     "mini.com",
     "mini.sk",
     "mini.de"
   ],
+
   fiat: [
     "fiat.com",
     "fiat.sk",
     "fiat.de"
   ],
-  alfa: [
+
+  alfaromeo: [
     "alfaromeo.com",
     "alfaromeo.sk"
   ],
+
   jeep: [
     "jeep.com",
     "jeep.sk"
   ],
+
   dodge: [
     "dodge.com"
   ],
+
   chrysler: [
     "chrysler.com"
   ],
+
   ram: [
     "ramtrucks.com"
   ],
+
   chevrolet: [
     "chevrolet.com"
   ],
+
   cadillac: [
     "cadillac.com"
   ],
-  genesis: [
-    "genesis.com"
-  ],
+
   suzuki: [
     "suzuki.com",
     "suzuki.sk"
   ],
+
   subaru: [
     "subaru.com",
     "subaru.sk"
   ],
+
   mitsubishi: [
     "mitsubishi-motors.com",
     "mitsubishi-motors.sk"
   ],
+
   dacia: [
     "dacia.com",
     "dacia.sk"
   ],
+
   mg: [
     "mgmotor.eu",
     "mgmotor.com"
   ],
+
   byd: [
     "byd.com",
     "bydauto.com"
   ],
+
   nio: [
     "nio.com"
   ],
+
   xpeng: [
     "xpeng.com"
   ],
+
   zeekr: [
     "zeekr.eu",
     "zeekr.com"
   ]
 };
 
-const OFFICIAL_DOMAIN_BRAND_HINTS = [
-  "audi",
-  "bmw",
-  "mercedes",
-  "porsche",
-  "volkswagen",
-  "skoda",
-  "seat",
-  "cupra",
-  "volvo",
-  "lexus",
-  "toyota",
-  "landrover",
-  "jaguar",
-  "ferrari",
-  "lamborghini",
-  "maserati",
-  "bentley",
-  "astonmartin",
-  "mclaren",
-  "ford",
-  "opel",
-  "peugeot",
-  "citroen",
-  "renault",
-  "nissan",
-  "honda",
-  "mazda",
-  "hyundai",
-  "kia",
-  "genesis",
-  "tesla",
-  "polestar",
-  "smart",
-  "mini",
-  "fiat",
-  "alfaromeo",
-  "jeep",
-  "dodge",
-  "chrysler",
-  "ram",
-  "chevrolet",
-  "cadillac",
-  "suzuki",
-  "subaru",
-  "mitsubishi",
-  "dacia",
-  "mgmotor",
-  "byd",
-  "nio",
-  "xpeng",
-  "zeekr"
-];
 
 const OFFICIAL_MANUFACTURER_DOMAINS = [
   ...new Set(
-    Object.values(OFFICIAL_DOMAIN_HINTS)
+    Object.values(
+      OFFICIAL_DOMAIN_HINTS
+    )
       .flat()
-      .map(value =>
-        String(value)
-          .toLowerCase()
-          .replace(/^https?:\/\//, "")
-          .replace(/^www\./, "")
-          .replace(/\/.*$/, "")
+      .map(
+        value =>
+          String(value)
+            .toLowerCase()
+            .replace(
+              /^https?:\/\//,
+              ""
+            )
+            .replace(
+              /^www\./,
+              ""
+            )
+            .replace(
+              /\/.*$/,
+              ""
+            )
       )
   )
 ];
 
 
 // ============================================================
-// IMAGE REJECTION RULES
+// IMAGE REJECTION
 // ============================================================
 
 const IMAGE_REJECT_WORDS = [
@@ -479,7 +524,9 @@ const IMAGE_REJECT_WORDS = [
 // GENERIC HELPERS
 // ============================================================
 
-function isPlainObject(value) {
+function isPlainObject(
+  value
+) {
   return (
     value !== null &&
     typeof value === "object" &&
@@ -487,26 +534,11 @@ function isPlainObject(value) {
   );
 }
 
-function cleanPrimitive(value) {
-  if (
-    value === null ||
-    value === undefined
-  ) {
-    return "";
-  }
 
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return value;
-  }
-
-  return "";
-}
-
-function scalarText(value, fallback = "") {
+function scalarText(
+  value,
+  fallback = ""
+) {
   if (
     value === null ||
     value === undefined
@@ -519,21 +551,34 @@ function scalarText(value, fallback = "") {
     typeof value === "number" ||
     typeof value === "boolean"
   ) {
-    const output = String(value).trim();
-    return output || fallback;
+    const result =
+      String(value).trim();
+
+    return result || fallback;
   }
 
-  if (Array.isArray(value)) {
-    const joined = value
-      .map(item => scalarText(item, ""))
-      .filter(Boolean)
-      .join(", ");
+  if (
+    Array.isArray(value)
+  ) {
+    const result =
+      value
+        .map(
+          item =>
+            scalarText(
+              item,
+              ""
+            )
+        )
+        .filter(Boolean)
+        .join(", ");
 
-    return joined || fallback;
+    return result || fallback;
   }
 
-  if (isPlainObject(value)) {
-    const preferredKeys = [
+  if (
+    isPlainObject(value)
+  ) {
+    const keys = [
       "message",
       "error",
       "text",
@@ -547,17 +592,20 @@ function scalarText(value, fallback = "") {
       "src"
     ];
 
-    for (const key of preferredKeys) {
+    for (
+      const key of keys
+    ) {
       if (
         Object.prototype.hasOwnProperty.call(
           value,
           key
         )
       ) {
-        const result = scalarText(
-          value[key],
-          ""
-        );
+        const result =
+          scalarText(
+            value[key],
+            ""
+          );
 
         if (result) {
           return result;
@@ -566,8 +614,15 @@ function scalarText(value, fallback = "") {
     }
 
     try {
-      const json = JSON.stringify(value);
-      return json && json !== "{}"
+      const json =
+        JSON.stringify(
+          value
+        );
+
+      return (
+        json &&
+        json !== "{}"
+      )
         ? json
         : fallback;
     } catch {
@@ -578,29 +633,65 @@ function scalarText(value, fallback = "") {
   return fallback;
 }
 
-function text(value, fallback = "") {
-  return scalarText(value, fallback);
+
+function text(
+  value,
+  fallback = ""
+) {
+  return scalarText(
+    value,
+    fallback
+  );
 }
 
-function arrayText(value) {
-  if (!Array.isArray(value)) {
-    const single = scalarText(value, "");
-    return single ? [single] : [];
+
+function arrayText(
+  value
+) {
+  if (
+    !Array.isArray(value)
+  ) {
+    const single =
+      scalarText(
+        value,
+        ""
+      );
+
+    return single
+      ? [single]
+      : [];
   }
 
   return value
-    .map(item => scalarText(item, ""))
+    .map(
+      item =>
+        scalarText(
+          item,
+          ""
+        )
+    )
     .filter(Boolean);
 }
 
-function clamp(value, min, max) {
+
+function clamp(
+  value,
+  min,
+  max
+) {
   return Math.min(
-    Math.max(value, min),
+    Math.max(
+      value,
+      min
+    ),
     max
   );
 }
 
-function numberOrNull(value) {
+
+function numberOrNull(
+  value
+) {
   if (
     value === null ||
     value === undefined ||
@@ -609,73 +700,98 @@ function numberOrNull(value) {
     return null;
   }
 
-  const number =
+  if (
     typeof value === "number"
+  ) {
+    return Number.isFinite(
+      value
+    )
       ? value
-      : Number(
-          String(value)
-            .replace(",", ".")
-            .replace(/[^\d.+-]/g, "")
-        );
+      : null;
+  }
 
-  return Number.isFinite(number)
+  const raw =
+    String(value)
+      .replace(",", ".")
+      .replace(
+        /[^\d.+-]/g,
+        ""
+      );
+
+  if (!raw) {
+    return null;
+  }
+
+  const number =
+    Number(raw);
+
+  return Number.isFinite(
+    number
+  )
     ? number
     : null;
 }
 
-function sleep(ms) {
-  return new Promise(resolve =>
-    setTimeout(resolve, ms)
-  );
-}
 
-function normalizeKey(value) {
-  return String(value || "")
+function normalizeKey(
+  value
+) {
+  return String(
+    value || ""
+  )
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "");
-}
-
-function slugify(value) {
-  return normalizeKey(value);
+    .replace(
+      /[\u0300-\u036f]/g,
+      ""
+    )
+    .replace(
+      /[^a-z0-9]+/g,
+      ""
+    );
 }
 
 
 // ============================================================
-// JSON / AI PARSING
+// JSON PARSING
 // ============================================================
 
-function extractJsonText(raw) {
-  let value = scalarText(raw, "");
+function extractJsonText(
+  raw
+) {
+  let value =
+    scalarText(
+      raw,
+      ""
+    );
 
   if (!value) {
     return "";
   }
 
-  value = value.trim();
+  value =
+    value.trim();
 
-  if (
-    value.startsWith("```json") ||
-    value.startsWith("```JSON")
-  ) {
-    value = value.replace(
-      /^```(?:json|JSON)\s*/,
+  value =
+    value.replace(
+      /^```(?:json|JSON)?\s*/,
       ""
     );
-  }
 
-  if (value.endsWith("```")) {
-    value = value.slice(
-      0,
-      -3
+  value =
+    value.replace(
+      /\s*```$/,
+      ""
     );
-  }
 
-  value = value.trim();
+  value =
+    value.trim();
 
-  const firstObject = value.indexOf("{");
-  const firstArray = value.indexOf("[");
+  const firstObject =
+    value.indexOf("{");
+
+  const firstArray =
+    value.indexOf("[");
 
   let start = -1;
 
@@ -683,18 +799,30 @@ function extractJsonText(raw) {
     firstObject >= 0 &&
     firstArray >= 0
   ) {
-    start = Math.min(
-      firstObject,
-      firstArray
-    );
-  } else if (firstObject >= 0) {
-    start = firstObject;
-  } else if (firstArray >= 0) {
-    start = firstArray;
+    start =
+      Math.min(
+        firstObject,
+        firstArray
+      );
+  } else if (
+    firstObject >= 0
+  ) {
+    start =
+      firstObject;
+  } else if (
+    firstArray >= 0
+  ) {
+    start =
+      firstArray;
   }
 
-  if (start > 0) {
-    value = value.slice(start);
+  if (
+    start > 0
+  ) {
+    value =
+      value.slice(
+        start
+      );
   }
 
   const lastObject =
@@ -709,17 +837,23 @@ function extractJsonText(raw) {
       lastArray
     );
 
-  if (end >= 0) {
-    value = value.slice(
-      0,
-      end + 1
-    );
+  if (
+    end >= 0
+  ) {
+    value =
+      value.slice(
+        0,
+        end + 1
+      );
   }
 
   return value.trim();
 }
 
-function parseAIJson(raw) {
+
+function parseAIJson(
+  raw
+) {
   if (
     raw !== null &&
     typeof raw === "object"
@@ -728,7 +862,9 @@ function parseAIJson(raw) {
   }
 
   const cleaned =
-    extractJsonText(raw);
+    extractJsonText(
+      raw
+    );
 
   if (!cleaned) {
     throw new Error(
@@ -737,23 +873,32 @@ function parseAIJson(raw) {
   }
 
   try {
-    return JSON.parse(cleaned);
-  } catch (firstError) {
+    return JSON.parse(
+      cleaned
+    );
+  } catch (
+    firstError
+  ) {
     const repaired =
       cleaned
-        .replace(/,\s*([}\]])/g, "$1")
+        .replace(
+          /,\s*([}\]])/g,
+          "$1"
+        )
         .replace(
           /([{,]\s*)([A-Za-z0-9_]+)\s*:/g,
           '$1"$2":'
         );
 
     try {
-      return JSON.parse(repaired);
+      return JSON.parse(
+        repaired
+      );
     } catch {
       throw new Error(
         `AI vrátilo neplatný JSON: ${scalarText(
           firstError?.message,
-          "unknown parse error"
+          "parse error"
         )}`
       );
     }
@@ -765,30 +910,31 @@ function parseAIJson(raw) {
 // REQUEST NORMALIZATION
 // ============================================================
 
-function normalizeRequest(body) {
+function normalizeRequest(
+  body
+) {
   const source =
     isPlainObject(body)
       ? body
       : {};
 
   const input =
-    source.filters &&
-    isPlainObject(source.filters)
+    isPlainObject(
+      source.filters
+    )
       ? source.filters
       : source;
 
-  const naturalLanguage =
-    text(
-      source.naturalLanguage ??
-      source.query ??
-      source.prompt ??
-      source.request ??
-      "",
-      ""
-    );
-
   return {
-    naturalLanguage,
+    naturalLanguage:
+      text(
+        source.naturalLanguage ??
+        source.query ??
+        source.prompt ??
+        source.request ??
+        "",
+        ""
+      ),
 
     budget:
       numberOrNull(
@@ -876,87 +1022,115 @@ function normalizeRequest(body) {
 // REQUEST SUMMARY
 // ============================================================
 
-function buildRequestSummary(request) {
+function buildRequestSummary(
+  request
+) {
   const parts = [];
 
-  if (request.naturalLanguage) {
+  if (
+    request.naturalLanguage
+  ) {
     parts.push(
       `Používateľova požiadavka: ${request.naturalLanguage}`
     );
   }
 
-  if (request.budget !== null) {
+  if (
+    request.budget !== null
+  ) {
     parts.push(
       `Maximálny rozpočet: ${request.budget} EUR`
     );
   }
 
-  if (request.seats !== null) {
+  if (
+    request.seats !== null
+  ) {
     parts.push(
       `Počet miest: ${request.seats}`
     );
   }
 
-  if (request.power !== null) {
+  if (
+    request.power !== null
+  ) {
     parts.push(
       `Minimálny výkon: ${request.power} kW`
     );
   }
 
-  if (request.trunk !== null) {
+  if (
+    request.trunk !== null
+  ) {
     parts.push(
       `Minimálny kufor: ${request.trunk} l`
     );
   }
 
-  if (request.drive) {
+  if (
+    request.drive
+  ) {
     parts.push(
       `Pohon: ${request.drive}`
     );
   }
 
-  if (request.fuel) {
+  if (
+    request.fuel
+  ) {
     parts.push(
       `Palivo: ${request.fuel}`
     );
   }
 
-  if (request.body) {
+  if (
+    request.body
+  ) {
     parts.push(
       `Karoséria: ${request.body}`
     );
   }
 
-  if (request.style) {
+  if (
+    request.style
+  ) {
     parts.push(
       `Štýl: ${request.style}`
     );
   }
 
-  if (request.length !== null) {
+  if (
+    request.length !== null
+  ) {
     parts.push(
       `Maximálna dĺžka: ${request.length} mm`
     );
   }
 
-  if (request.year !== null) {
+  if (
+    request.year !== null
+  ) {
     parts.push(
       `Minimálny rok: ${request.year}`
     );
   }
 
-  if (request.avoid) {
+  if (
+    request.avoid
+  ) {
     parts.push(
       `Vynechať značky: ${request.avoid}`
     );
   }
 
-  return parts.join("\n");
+  return parts.join(
+    "\n"
+  );
 }
 
 
 // ============================================================
-// HTTP FETCH WITH TIMEOUT
+// FETCH WITH TIMEOUT
 // ============================================================
 
 async function fetchWithTimeout(
@@ -969,7 +1143,8 @@ async function fetchWithTimeout(
 
   const timer =
     setTimeout(
-      () => controller.abort(),
+      () =>
+        controller.abort(),
       timeout
     );
 
@@ -983,16 +1158,20 @@ async function fetchWithTimeout(
       }
     );
   } finally {
-    clearTimeout(timer);
+    clearTimeout(
+      timer
+    );
   }
 }
 
 
 // ============================================================
-// SUPABASE
+// SUPABASE USER
 // ============================================================
 
-async function verifyUser(accessToken) {
+async function verifyUser(
+  accessToken
+) {
   if (!SUPABASE_URL) {
     throw new Error(
       "SUPABASE_URL nie je nastavené."
@@ -1005,12 +1184,6 @@ async function verifyUser(accessToken) {
     );
   }
 
-  if (!accessToken) {
-    throw new Error(
-      "Chýba Authorization token."
-    );
-  }
-
   const response =
     await fetchWithTimeout(
       `${SUPABASE_URL}/auth/v1/user`,
@@ -1019,6 +1192,7 @@ async function verifyUser(accessToken) {
         headers: {
           apikey:
             SUPABASE_ANON_KEY,
+
           Authorization:
             `Bearer ${accessToken}`
         }
@@ -1027,19 +1201,18 @@ async function verifyUser(accessToken) {
     );
 
   if (!response.ok) {
-    const raw =
-      await response.text();
-
     throw new Error(
-      `Supabase user verification failed (${response.status}): ${raw.slice(
-        0,
-        500
-      )}`
+      `Supabase user verification failed (${response.status})`
     );
   }
 
   return response.json();
 }
+
+
+// ============================================================
+// SUPABASE RPC
+// ============================================================
 
 async function callSupabaseRPC(
   functionName,
@@ -1057,16 +1230,22 @@ async function callSupabaseRPC(
       `${SUPABASE_URL}/rest/v1/rpc/${functionName}`,
       {
         method: "POST",
+
         headers: {
           apikey:
             SUPABASE_ANON_KEY,
+
           Authorization:
             `Bearer ${accessToken}`,
+
           "Content-Type":
             "application/json"
         },
+
         body:
-          JSON.stringify(body)
+          JSON.stringify(
+            body
+          )
       },
       SUPABASE_TIMEOUT
     );
@@ -1079,7 +1258,9 @@ async function callSupabaseRPC(
   if (raw) {
     try {
       data =
-        JSON.parse(raw);
+        JSON.parse(
+          raw
+        );
     } catch {
       data = raw;
     }
@@ -1094,7 +1275,8 @@ async function callSupabaseRPC(
     error.status =
       response.status;
 
-    error.data = data;
+    error.data =
+      data;
 
     throw error;
   }
@@ -1104,83 +1286,12 @@ async function callSupabaseRPC(
 
 
 // ============================================================
-// SEARCH USAGE
+// USAGE RESULT
 // ============================================================
 
-async function useSearch(accessToken) {
-  const candidates = [
-    {
-      name: "use_search",
-      bodies: [
-        {},
-        {
-          max_searches:
-            MAX_SEARCHES_PER_DAY,
-          daily_limit:
-            MAX_SEARCHES_PER_DAY
-        }
-      ]
-    },
-    {
-      name: "consume_search",
-      bodies: [
-        {},
-        {
-          max_searches:
-            MAX_SEARCHES_PER_DAY,
-          daily_limit:
-            MAX_SEARCHES_PER_DAY
-        }
-      ]
-    },
-    {
-      name: "increment_search",
-      bodies: [
-        {},
-        {
-          max_searches:
-            MAX_SEARCHES_PER_DAY,
-          daily_limit:
-            MAX_SEARCHES_PER_DAY
-        }
-      ]
-    }
-  ];
-
-  let lastError = null;
-
-  for (
-    const candidate of candidates
-  ) {
-    for (
-      const body of candidate.bodies
-    ) {
-      try {
-        const result =
-          await callSupabaseRPC(
-            candidate.name,
-            accessToken,
-            body
-          );
-
-        return normalizeUsageResult(
-          result
-        );
-      } catch (error) {
-        lastError = error;
-      }
-    }
-  }
-
-  throw (
-    lastError ||
-    new Error(
-      "Nepodarilo sa overiť limit vyhľadávaní."
-    )
-  );
-}
-
-function normalizeUsageResult(result) {
+function normalizeUsageResult(
+  result
+) {
   if (
     result === null ||
     result === undefined
@@ -1188,7 +1299,7 @@ function normalizeUsageResult(result) {
     return {
       allowed: true,
       remaining:
-        MAX_SEARCHES_PER_DAY
+        MAX_SEARCHES_PER_DAY - 1
     };
   }
 
@@ -1196,7 +1307,8 @@ function normalizeUsageResult(result) {
     typeof result === "boolean"
   ) {
     return {
-      allowed: result,
+      allowed:
+        result,
       remaining:
         result
           ? MAX_SEARCHES_PER_DAY - 1
@@ -1209,7 +1321,9 @@ function normalizeUsageResult(result) {
   ) {
     const remaining =
       clamp(
-        Math.floor(result),
+        Math.floor(
+          result
+        ),
         0,
         MAX_SEARCHES_PER_DAY
       );
@@ -1249,12 +1363,18 @@ function normalizeUsageResult(result) {
     }
 
     const number =
-      numberOrNull(trimmed);
+      numberOrNull(
+        trimmed
+      );
 
-    if (number !== null) {
+    if (
+      number !== null
+    ) {
       const remaining =
         clamp(
-          Math.floor(number),
+          Math.floor(
+            number
+          ),
           0,
           MAX_SEARCHES_PER_DAY
         );
@@ -1268,7 +1388,9 @@ function normalizeUsageResult(result) {
 
     try {
       return normalizeUsageResult(
-        JSON.parse(trimmed)
+        JSON.parse(
+          trimmed
+        )
       );
     } catch {
       return {
@@ -1279,8 +1401,12 @@ function normalizeUsageResult(result) {
     }
   }
 
-  if (Array.isArray(result)) {
-    if (result.length === 0) {
+  if (
+    Array.isArray(result)
+  ) {
+    if (
+      result.length === 0
+    ) {
       return {
         allowed: true,
         remaining:
@@ -1293,7 +1419,9 @@ function normalizeUsageResult(result) {
     );
   }
 
-  if (isPlainObject(result)) {
+  if (
+    isPlainObject(result)
+  ) {
     const allowedRaw =
       result.allowed ??
       result.success ??
@@ -1306,7 +1434,6 @@ function normalizeUsageResult(result) {
       result.remaining_searches ??
       result.remainingSearches ??
       result.searches_remaining ??
-      result.available ??
       result.left;
 
     const countRaw =
@@ -1330,18 +1457,24 @@ function normalizeUsageResult(result) {
           countRaw
         );
 
-      if (used !== null) {
+      if (
+        used !== null
+      ) {
         remaining =
           clamp(
             MAX_SEARCHES_PER_DAY -
-              Math.floor(used),
+              Math.floor(
+                used
+              ),
             0,
             MAX_SEARCHES_PER_DAY
           );
       }
     }
 
-    if (remaining === null) {
+    if (
+      remaining === null
+    ) {
       remaining =
         MAX_SEARCHES_PER_DAY - 1;
     }
@@ -1353,19 +1486,13 @@ function normalizeUsageResult(result) {
             allowedRaw
           );
 
-    if (
-      result.error &&
-      !allowedRaw &&
-      remaining === 0
-    ) {
-      allowed = false;
-    }
-
     return {
       allowed,
       remaining:
         clamp(
-          Math.floor(remaining),
+          Math.floor(
+            remaining
+          ),
           0,
           MAX_SEARCHES_PER_DAY
         )
@@ -1381,6 +1508,52 @@ function normalizeUsageResult(result) {
 
 
 // ============================================================
+// USE SEARCH
+// ============================================================
+
+async function useSearch(
+  accessToken
+) {
+  const candidates = [
+    "use_search",
+    "consume_search",
+    "increment_search"
+  ];
+
+  let lastError = null;
+
+  for (
+    const functionName of candidates
+  ) {
+    try {
+      const result =
+        await callSupabaseRPC(
+          functionName,
+          accessToken,
+          {}
+        );
+
+      return normalizeUsageResult(
+        result
+      );
+    } catch (
+      error
+    ) {
+      lastError =
+        error;
+    }
+  }
+
+  throw (
+    lastError ||
+    new Error(
+      "Nepodarilo sa overiť limit vyhľadávaní."
+    )
+  );
+}
+
+
+// ============================================================
 // REFUND
 // ============================================================
 
@@ -1388,48 +1561,31 @@ async function refundSearch(
   accessToken
 ) {
   const candidates = [
-    {
-      name: "refund_search",
-      bodies: [
-        {},
-        {
-          amount: 1
-        }
-      ]
-    },
-    {
-      name: "refund_search_usage",
-      bodies: [
-        {},
-        {
-          amount: 1
-        }
-      ]
-    }
+    "refund_search",
+    "refund_search_usage"
   ];
 
   let lastError = null;
 
   for (
-    const candidate of candidates
+    const functionName of candidates
   ) {
-    for (
-      const body of candidate.bodies
-    ) {
-      try {
-        const result =
-          await callSupabaseRPC(
-            candidate.name,
-            accessToken,
-            body
-          );
-
-        return normalizeUsageResult(
-          result
+    try {
+      const result =
+        await callSupabaseRPC(
+          functionName,
+          accessToken,
+          {}
         );
-      } catch (error) {
-        lastError = error;
-      }
+
+      return normalizeUsageResult(
+        result
+      );
+    } catch (
+      error
+    ) {
+      lastError =
+        error;
     }
   }
 
@@ -1446,10 +1602,13 @@ async function refundSearch(
 // URL SAFETY
 // ============================================================
 
-function isPrivateHostname(hostname) {
+function isPrivateHostname(
+  hostname
+) {
   const host =
-    String(hostname || "")
-      .toLowerCase();
+    String(
+      hostname || ""
+    ).toLowerCase();
 
   if (!host) {
     return true;
@@ -1464,8 +1623,12 @@ function isPrivateHostname(hostname) {
   }
 
   if (
-    host.endsWith(".localhost") ||
-    host.endsWith(".local")
+    host.endsWith(
+      ".localhost"
+    ) ||
+    host.endsWith(
+      ".local"
+    )
   ) {
     return true;
   }
@@ -1481,15 +1644,22 @@ function isPrivateHostname(hostname) {
         .slice(1)
         .map(Number);
 
-    const a = parts[0];
-    const b = parts[1];
+    const a =
+      parts[0];
+
+    const b =
+      parts[1];
 
     if (
       a === 10 ||
       a === 127 ||
-      a === 169 && b === 254 ||
-      a === 172 && b >= 16 && b <= 31 ||
-      a === 192 && b === 168
+      (a === 169 &&
+        b === 254) ||
+      (a === 172 &&
+        b >= 16 &&
+        b <= 31) ||
+      (a === 192 &&
+        b === 168)
     ) {
       return true;
     }
@@ -1511,7 +1681,8 @@ function isPrivateHostname(hostname) {
 
     if (
       a === 198 &&
-      (b === 18 || b === 19)
+      (b === 18 ||
+        b === 19)
     ) {
       return true;
     }
@@ -1525,6 +1696,30 @@ function isPrivateHostname(hostname) {
 
   return false;
 }
+
+
+function isThirdPartyHost(
+  hostname
+) {
+  const host =
+    String(
+      hostname || ""
+    )
+      .toLowerCase()
+      .replace(
+        /^www\./,
+        ""
+      );
+
+  return OBVIOUS_THIRD_PARTY_HOSTS.some(
+    blocked =>
+      host === blocked ||
+      host.endsWith(
+        `.${blocked}`
+      )
+  );
+}
+
 
 function safeHttpUrl(
   value,
@@ -1542,14 +1737,15 @@ function safeHttpUrl(
 
   try {
     const parsed =
-      new URL(raw);
-
-    const protocol =
-      parsed.protocol.toLowerCase();
+      new URL(
+        raw
+      );
 
     if (
-      protocol !== "https:" &&
-      protocol !== "http:"
+      parsed.protocol !==
+        "https:" &&
+      parsed.protocol !==
+        "http:"
     ) {
       return null;
     }
@@ -1557,7 +1753,10 @@ function safeHttpUrl(
     const hostname =
       parsed.hostname
         .toLowerCase()
-        .replace(/^www\./, "");
+        .replace(
+          /^www\./,
+          ""
+        );
 
     if (
       isPrivateHostname(
@@ -1569,7 +1768,9 @@ function safeHttpUrl(
 
     if (
       options.rejectThirdParty &&
-      isThirdPartyHost(hostname)
+      isThirdPartyHost(
+        hostname
+      )
     ) {
       return null;
     }
@@ -1580,83 +1781,10 @@ function safeHttpUrl(
   }
 }
 
-function isThirdPartyHost(hostname) {
-  const host =
-    String(hostname || "")
-      .toLowerCase()
-      .replace(/^www\./, "");
 
-  return OBVIOUS_THIRD_PARTY_HOSTS.some(
-    blocked =>
-      host === blocked ||
-      host.endsWith(
-        `.${blocked}`
-      )
-  );
-}
-
-function isOfficialManufacturerURL(
-  url,
-  brand
-) {
-  const safe =
-    safeHttpUrl(url);
-
-  if (!safe) {
-    return false;
-  }
-
-  let parsed;
-
-  try {
-    parsed =
-      new URL(safe);
-  } catch {
-    return false;
-  }
-
-  const hostname =
-    parsed.hostname
-      .toLowerCase()
-      .replace(/^www\./, "");
-
-  const normalizedBrand =
-    normalizeBrand(brand);
-
-  if (
-    normalizedBrand &&
-    OFFICIAL_DOMAIN_HINTS[
-      normalizedBrand
-    ]
-  ) {
-    return OFFICIAL_DOMAIN_HINTS[
-      normalizedBrand
-    ].some(domain => {
-      const cleanDomain =
-        String(domain)
-          .toLowerCase()
-          .replace(/^www\./, "");
-
-      return (
-        hostname ===
-          cleanDomain ||
-        hostname.endsWith(
-          `.${cleanDomain}`
-        )
-      );
-    });
-  }
-
-  return (
-    OFFICIAL_MANUFACTURER_DOMAINS.some(
-      domain =>
-        hostname === domain ||
-        hostname.endsWith(
-          `.${domain}`
-        )
-    )
-  );
-}
+// ============================================================
+// BRAND
+// ============================================================
 
 function normalizeBrand(
   brand
@@ -1669,12 +1797,10 @@ function normalizeBrand(
   const aliases = {
     mercedesbenz:
       "mercedes",
+
     mercedesamg:
       "mercedes",
-    landrover:
-      "landrover",
-    landroverrange:
-      "landrover",
+
     alfaromeo:
       "alfaromeo"
   };
@@ -1682,6 +1808,90 @@ function normalizeBrand(
   return (
     aliases[normalized] ||
     normalized
+  );
+}
+
+
+// ============================================================
+// OFFICIAL URL
+// ============================================================
+
+function isOfficialManufacturerURL(
+  url,
+  brand
+) {
+  const safe =
+    safeHttpUrl(
+      url
+    );
+
+  if (!safe) {
+    return false;
+  }
+
+  let parsed;
+
+  try {
+    parsed =
+      new URL(
+        safe
+      );
+  } catch {
+    return false;
+  }
+
+  const hostname =
+    parsed.hostname
+      .toLowerCase()
+      .replace(
+        /^www\./,
+        ""
+      );
+
+  const normalizedBrand =
+    normalizeBrand(
+      brand
+    );
+
+  const knownDomains =
+    OFFICIAL_DOMAIN_HINTS[
+      normalizedBrand
+    ];
+
+  if (
+    Array.isArray(
+      knownDomains
+    )
+  ) {
+    return knownDomains.some(
+      domain => {
+        const clean =
+          String(
+            domain
+          )
+            .toLowerCase()
+            .replace(
+              /^www\./,
+              ""
+            );
+
+        return (
+          hostname ===
+            clean ||
+          hostname.endsWith(
+            `.${clean}`
+          )
+        );
+      }
+    );
+  }
+
+  return OFFICIAL_MANUFACTURER_DOMAINS.some(
+    domain =>
+      hostname === domain ||
+      hostname.endsWith(
+        `.${domain}`
+      )
   );
 }
 
@@ -1706,17 +1916,36 @@ function normalizePower(
   if (
     isPlainObject(value)
   ) {
-    return normalizePower(
-      value.kw ??
-      value.kW ??
-      value.powerKw ??
-      value.hp ??
-      value.power
-    );
+    if (
+      value.kw !== undefined ||
+      value.kW !== undefined ||
+      value.powerKw !== undefined
+    ) {
+      return normalizePower(
+        value.kw ??
+        value.kW ??
+        value.powerKw
+      );
+    }
+
+    if (
+      value.hp !== undefined
+    ) {
+      return normalizePower(
+        `${value.hp} hp`
+      );
+    }
+
+    return {
+      kw: null,
+      hp: null
+    };
   }
 
   const raw =
-    String(value)
+    String(
+      value
+    )
       .trim()
       .toLowerCase();
 
@@ -1727,12 +1956,12 @@ function normalizePower(
     };
   }
 
-  const numberMatch =
+  const match =
     raw.match(
       /-?\d+(?:[.,]\d+)?/
     );
 
-  if (!numberMatch) {
+  if (!match) {
     return {
       kw: null,
       hp: null
@@ -1741,12 +1970,16 @@ function normalizePower(
 
   const number =
     Number(
-      numberMatch[0]
-        .replace(",", ".")
+      match[0].replace(
+        ",",
+        "."
+      )
     );
 
   if (
-    !Number.isFinite(number)
+    !Number.isFinite(
+      number
+    )
   ) {
     return {
       kw: null,
@@ -1754,26 +1987,34 @@ function normalizePower(
     };
   }
 
-  const isKw =
-    /\bkw\b|\bkilowatt/.test(
-      raw
-    );
-
-  const isHp =
+  const hpDetected =
     /\bhp\b|\bhk\b|\bps\b|\bks\b|\bbhp\b|\bhorsepower\b/.test(
       raw
     );
 
-  if (isHp && !isKw) {
+  const kwDetected =
+    /\bkw\b|\bkilowatt/.test(
+      raw
+    );
+
+  if (
+    hpDetected &&
+    !kwDetected
+  ) {
     const kw =
       number *
       POWER_HP_TO_KW;
 
     return {
-      kw: Math.round(
-        kw * 10
-      ) / 10,
-      hp: Math.round(number)
+      kw:
+        Math.round(
+          kw * 10
+        ) / 10,
+
+      hp:
+        Math.round(
+          number
+        )
     };
   }
 
@@ -1781,12 +2022,16 @@ function normalizePower(
     number;
 
   return {
-    kw: Math.round(
-      kw * 10
-    ) / 10,
-    hp: Math.round(
-      kw * POWER_KW_TO_HP
-    )
+    kw:
+      Math.round(
+        kw * 10
+      ) / 10,
+
+    hp:
+      Math.round(
+        kw *
+          POWER_KW_TO_HP
+      )
   };
 }
 
@@ -1805,8 +2050,10 @@ function normalizePrice(
     return {
       text:
         "Cena nie je dostupná",
-      amount: null,
-      currency: null
+      amount:
+        null,
+      currency:
+        null
     };
   }
 
@@ -1822,86 +2069,135 @@ function normalizePrice(
   }
 
   const raw =
-    String(value)
-      .trim();
+    String(
+      value
+    ).trim();
 
   if (!raw) {
     return {
       text:
         "Cena nie je dostupná",
-      amount: null,
-      currency: null
+      amount:
+        null,
+      currency:
+        null
     };
   }
 
-  const numberMatch =
+  const match =
     raw.match(
-      /(?:\d[\d\s.,]*)/
+      /\d[\d\s.,]*/
     );
 
-  let amount = null;
+  let amount =
+    null;
 
-  if (numberMatch) {
-    const numeric =
-      numberMatch[0]
-        .replace(/\s/g, "")
+  if (match) {
+    let numeric =
+      match[0]
         .replace(
-          /(\d)[.](\d{3})(?!\d)/g,
-          "$1$2"
-        )
-        .replace(",", ".");
-
-    const parsed =
-      Number(numeric);
+          /\s/g,
+          ""
+        );
 
     if (
-      Number.isFinite(parsed)
+      numeric.includes(".") &&
+      numeric.includes(",")
     ) {
-      amount = parsed;
+      numeric =
+        numeric.replace(
+          /\./g,
+          ""
+        );
+
+      numeric =
+        numeric.replace(
+          ",",
+          "."
+        );
+    } else if (
+      /^\d{1,3}(?:\.\d{3})+$/.test(
+        numeric
+      )
+    ) {
+      numeric =
+        numeric.replace(
+          /\./g,
+          ""
+        );
+    } else {
+      numeric =
+        numeric.replace(
+          ",",
+          "."
+        );
+    }
+
+    const parsed =
+      Number(
+        numeric
+      );
+
+    if (
+      Number.isFinite(
+        parsed
+      )
+    ) {
+      amount =
+        parsed;
     }
   }
 
   const upper =
     raw.toUpperCase();
 
-  let currency = null;
+  let currency =
+    null;
 
   if (
     upper.includes("EUR") ||
     raw.includes("€")
   ) {
-    currency = "EUR";
+    currency =
+      "EUR";
   } else if (
     upper.includes("USD") ||
     raw.includes("$")
   ) {
-    currency = "USD";
+    currency =
+      "USD";
   } else if (
     upper.includes("GBP") ||
     raw.includes("£")
   ) {
-    currency = "GBP";
+    currency =
+      "GBP";
   } else if (
     upper.includes("CHF")
   ) {
-    currency = "CHF";
+    currency =
+      "CHF";
   } else if (
     upper.includes("AED")
   ) {
-    currency = "AED";
+    currency =
+      "AED";
   } else if (
     upper.includes("CZK") ||
     raw.includes("Kč")
   ) {
-    currency = "CZK";
+    currency =
+      "CZK";
   }
 
   return {
-    text: raw,
+    text:
+      raw,
     amount,
     currency
   };
 }
+
 
 function priceHasNumber(
   price
@@ -1916,89 +2212,98 @@ function priceHasNumber(
 
 
 // ============================================================
-// PROMPTS
+// RESEARCH PROMPT
 // ============================================================
 
 function buildResearchPrompt(
   request
 ) {
-  const summary =
-    buildRequestSummary(
-      request
-    );
-
   return `
 You are CARMATCH AI, an automotive research assistant.
 
-Your task is to find EXACTLY THREE real, currently relevant production cars matching the user's requirements.
+Research the CURRENT automotive market using web search.
 
-IMPORTANT:
-- Research current information.
-- Prioritize current model year and current generation.
-- Do not invent facts.
-- Do not invent prices.
-- Do not invent URLs.
-- Do not invent dimensions, power, luggage volume or drivetrain.
-- Distinguish current vehicles from discontinued generations.
-- Use manufacturer sources whenever possible.
-- Official manufacturer price pages are preferred.
-- Prices should be new-car prices where possible.
-- If a verified current official price cannot be found, use:
-  "Cena nie je dostupná"
-- Never manufacture a numeric price.
-- Power MUST use kW and mechanical horsepower.
-- Never label power as PS, ks, bhp or metric horsepower.
-- Convert HP to kW when necessary.
-- Exactly three cars must be returned.
-- Results must be meaningfully different from each other.
-- Do not return motorcycles, trucks, buses or vans unless explicitly requested.
-- Do not return concepts or prototypes.
-- Do not return used cars unless explicitly requested.
+Return EXACTLY THREE real production cars matching the user request.
+
+CRITICAL RULES:
+
+1. Use current information.
+2. Prefer the newest/current generation.
+3. Prefer current model year information.
+4. Do NOT invent facts.
+5. Do NOT invent prices.
+6. Do NOT invent URLs.
+7. Do NOT invent specifications.
+8. Prefer official manufacturer websites.
+9. Use official manufacturer price/configurator pages whenever available.
+10. If a current verified price is unavailable, write exactly:
+   "Cena nie je dostupná"
+11. Power must be kW + mechanical hp.
+12. Never use PS, ks or bhp as the displayed unit.
+13. Exactly 3 cars.
+14. Cars must be genuinely different.
+15. Do not return concepts.
+16. Do not return prototypes.
+17. Do not return motorcycles.
+18. Do not return trucks.
+19. Do not return buses.
+20. Do not return vans unless explicitly requested.
+21. Do not return used vehicles unless explicitly requested.
+22. Respect the user's filters.
+23. If a filter cannot be verified, do not invent a value.
+24. Slovak explanations are preferred.
+25. ImageCandidates should normally be empty. The backend will find images separately.
 
 USER REQUEST:
-${summary}
+${buildRequestSummary(
+  request
+)}
 
-For every candidate, research:
-1. Exact brand and model.
-2. Current generation.
-3. Current model year if available.
-4. Current engine/powertrain.
-5. Power in kW and mechanical hp.
-6. Seats.
-7. Luggage capacity.
-8. Drivetrain.
-9. Fuel type / powertrain.
-10. Approximate or official new-car price.
-11. Official manufacturer price/configurator URL where available.
-12. Reliable supporting sources.
-13. Reasons why it matches.
-14. Pros.
-15. Cons.
-16. Maintenance considerations.
-17. Exterior vehicle photo candidates.
+For each vehicle research:
+
+- exact brand
+- exact model
+- current generation
+- model year
+- powertrain
+- power in kW
+- mechanical horsepower
+- seats
+- luggage capacity
+- drivetrain
+- fuel/powertrain
+- new-car price
+- official price URL
+- official configurator URL
+- reasons why it matches
+- pros
+- cons
+- maintenance considerations
+- reliable sources
 
 Return ONLY JSON.
 
-Use this exact structure:
+Use this structure:
 
 {
   "cars": [
     {
       "name": "Brand Model",
-      "generation": "generation",
+      "generation": "Current generation",
       "year": 2026,
-      "score": 92,
+      "score": 90,
       "price": "€...",
       "officialPriceUrl": "https://...",
       "configuratorUrl": "https://...",
-      "power": "180 kW / 241 hp",
       "powerKw": 180,
       "powerHp": 241,
       "seats": 5,
-      "trunk": "600 l",
       "trunkLiters": 600,
       "drive": "AWD",
       "fuel": "Petrol",
+      "body": "SUV",
+      "style": "Sporty",
+      "lengthMm": 4800,
       "reason": "Slovak explanation",
       "pros": [
         "..."
@@ -2006,39 +2311,48 @@ Use this exact structure:
       "cons": [
         "..."
       ],
-      "maintenance": "...",
+      "maintenance": "Slovak explanation",
       "sources": [
         {
-          "title": "...",
+          "title": "Source",
           "url": "https://..."
         }
-      ]
+      ],
+      "imageCandidates": []
     }
   ]
 }
 `.trim();
 }
 
+
+// ============================================================
+// REPAIR PROMPT
+// ============================================================
+
 function buildRepairPrompt(
   originalOutput
 ) {
   return `
-Repair the following AI output.
+Repair this automotive AI output.
 
 Return ONLY valid JSON.
 
 Requirements:
-- Exactly 3 cars.
+- EXACTLY 3 cars.
 - No markdown.
-- No commentary outside JSON.
-- Preserve verified factual information.
-- Never invent missing prices or URLs.
-- Use "Cena nie je dostupná" when price is not verified.
-- Power must be kW plus mechanical hp.
+- No commentary.
+- Do not invent facts.
+- Do not invent prices.
+- Do not invent URLs.
+- Missing price must become "Cena nie je dostupná".
+- Power must be kW + mechanical hp.
 - Arrays must contain strings.
-- URLs must be full http/https URLs.
+- URLs must be http/https.
+- Preserve valid factual information.
 
 Original output:
+
 ${scalarText(
   originalOutput,
   ""
@@ -2047,7 +2361,7 @@ ${scalarText(
   MAX_BODY_TEXT
 )}
 
-Expected JSON structure:
+Return:
 
 {
   "cars": [
@@ -2059,19 +2373,21 @@ Expected JSON structure:
       "price": "",
       "officialPriceUrl": "",
       "configuratorUrl": "",
-      "power": "",
       "powerKw": null,
       "powerHp": null,
       "seats": null,
-      "trunk": "",
       "trunkLiters": null,
       "drive": "",
       "fuel": "",
+      "body": "",
+      "style": "",
+      "lengthMm": null,
       "reason": "",
       "pros": [],
       "cons": [],
       "maintenance": "",
-      "sources": []
+      "sources": [],
+      "imageCandidates": []
     }
   ]
 }
@@ -2080,7 +2396,18 @@ Expected JSON structure:
 
 
 // ============================================================
-// GROQ CALL
+// GROQ
+// ============================================================
+//
+// IMPORTANT:
+//
+// Groq GPT-OSS supports browser_search.
+// Groq documentation also states that browser search is NOT
+// compatible with structured outputs.
+//
+// Therefore we intentionally DO NOT send response_format here.
+// We request browser_search and parse JSON ourselves afterwards.
+//
 // ============================================================
 
 async function callGroq(
@@ -2099,43 +2426,55 @@ async function callGroq(
 
     messages: [
       {
-        role: "system",
+        role:
+          "system",
+
         content:
-          "You are a precise automotive research engine. Always follow the requested JSON schema."
+          "You are a precise automotive research engine. Search the web when necessary. Return only valid JSON matching the user's requested structure."
       },
+
       {
-        role: "user",
-        content: prompt
+        role:
+          "user",
+
+        content:
+          prompt
       }
     ],
 
-    temperature: 0.1,
+    temperature:
+      0.1,
 
     max_completion_tokens:
-      7000,
+      6000,
 
-    response_format: {
-      type: "json_object"
-    }
+    tools: [
+      {
+        type:
+          "browser_search"
+      }
+    ]
   };
 
-  /*
-   * GPT-OSS browser search support.
-   * Unknown/unsupported extra fields are intentionally avoided.
-   */
   const response =
     await fetchWithTimeout(
       GROQ_URL,
       {
-        method: "POST",
+        method:
+          "POST",
+
         headers: {
           Authorization:
             `Bearer ${GROQ_API_KEY}`,
+
           "Content-Type":
             "application/json"
         },
+
         body:
-          JSON.stringify(body)
+          JSON.stringify(
+            body
+          )
       },
       modelConfig.timeout
     );
@@ -2156,15 +2495,20 @@ async function callGroq(
 
   try {
     data =
-      JSON.parse(raw);
+      JSON.parse(
+        raw
+      );
   } catch {
     throw new Error(
       "Groq vrátil neplatnú HTTP odpoveď."
     );
   }
 
+  const message =
+    data?.choices?.[0]?.message;
+
   const content =
-    data?.choices?.[0]?.message?.content ??
+    message?.content ??
     data?.choices?.[0]?.text ??
     "";
 
@@ -2182,7 +2526,7 @@ async function callGroq(
 
 
 // ============================================================
-// OPENROUTER CALL
+// OPENROUTER
 // ============================================================
 
 async function callOpenRouter(
@@ -2199,7 +2543,8 @@ async function callOpenRouter(
     await fetchWithTimeout(
       OPENROUTER_URL,
       {
-        method: "POST",
+        method:
+          "POST",
 
         headers: {
           Authorization:
@@ -2218,19 +2563,30 @@ async function callOpenRouter(
         body:
           JSON.stringify({
             model,
+
             messages: [
               {
-                role: "system",
+                role:
+                  "system",
+
                 content:
                   "You are a precise automotive research assistant. Return only valid JSON."
               },
+
               {
-                role: "user",
-                content: prompt
+                role:
+                  "user",
+
+                content:
+                  prompt
               }
             ],
-            temperature: 0.1,
-            max_tokens: 7000
+
+            temperature:
+              0.1,
+
+            max_tokens:
+              6000
           })
       },
       OPENROUTER_TIMEOUT
@@ -2252,7 +2608,9 @@ async function callOpenRouter(
 
   try {
     data =
-      JSON.parse(raw);
+      JSON.parse(
+        raw
+      );
   } catch {
     throw new Error(
       "OpenRouter vrátil neplatnú HTTP odpoveď."
@@ -2278,119 +2636,6 @@ async function callOpenRouter(
 
 
 // ============================================================
-// AI PROVIDER CHAIN
-// ============================================================
-
-async function runAIResearch(
-  request
-) {
-  const researchPrompt =
-    buildResearchPrompt(
-      request
-    );
-
-  const errors = [];
-
-  if (GROQ_API_KEY) {
-    for (
-      const model of GROQ_MODELS
-    ) {
-      try {
-        const raw =
-          await callGroq(
-            model,
-            researchPrompt
-          );
-
-        let parsed =
-          parseAIJson(raw);
-
-        parsed =
-          normalizeAIResult(
-            parsed
-          );
-
-        if (
-          parsed.cars.length === 3
-        ) {
-          return {
-            data: parsed,
-            provider:
-              "groq",
-            model:
-              model.model
-          };
-        }
-
-        errors.push(
-          `Groq ${model.model}: AI nevrátilo presne 3 autá.`
-        );
-
-      } catch (error) {
-        errors.push(
-          `Groq ${model.model}: ${scalarText(
-            error?.message,
-            "unknown error"
-          )}`
-        );
-      }
-    }
-  }
-
-  if (OPENROUTER_API_KEY) {
-    for (
-      const model of OPENROUTER_FREE_MODELS
-    ) {
-      try {
-        const raw =
-          await callOpenRouter(
-            model,
-            researchPrompt
-          );
-
-        let parsed =
-          parseAIJson(raw);
-
-        parsed =
-          normalizeAIResult(
-            parsed
-          );
-
-        if (
-          parsed.cars.length === 3
-        ) {
-          return {
-            data: parsed,
-            provider:
-              "openrouter",
-            model
-          };
-        }
-
-        errors.push(
-          `OpenRouter ${model}: AI nevrátilo presne 3 autá.`
-        );
-
-      } catch (error) {
-        errors.push(
-          `OpenRouter ${model}: ${scalarText(
-            error?.message,
-            "unknown error"
-          )}`
-        );
-      }
-    }
-  }
-
-  throw new Error(
-    `Všetci AI poskytovatelia zlyhali. ${errors
-      .slice(0, 8)
-      .join(" | ")}`
-  );
-}
-
-
-// ============================================================
 // AI RESULT NORMALIZATION
 // ============================================================
 
@@ -2398,43 +2643,56 @@ function normalizeAIResult(
   value
 ) {
   const root =
-    isPlainObject(value)
+    isPlainObject(
+      value
+    )
       ? value
       : {};
 
   let cars =
-    Array.isArray(root.cars)
+    Array.isArray(
+      root.cars
+    )
       ? root.cars
       : [];
 
   if (
     cars.length === 0 &&
-    Array.isArray(root.results)
+    Array.isArray(
+      root.results
+    )
   ) {
     cars =
       root.results;
   }
 
-  cars =
-    cars
-      .filter(
-        item =>
-          isPlainObject(item)
-      )
-      .map(
-        normalizeCar
-      );
-
   return {
-    cars
+    cars:
+      cars
+        .filter(
+          item =>
+            isPlainObject(
+              item
+            )
+        )
+        .map(
+          normalizeCar
+        )
   };
 }
+
+
+// ============================================================
+// CAR NORMALIZATION
+// ============================================================
 
 function normalizeCar(
   source
 ) {
   const car =
-    isPlainObject(source)
+    isPlainObject(
+      source
+    )
       ? source
       : {};
 
@@ -2648,6 +2906,11 @@ function normalizeCar(
   };
 }
 
+
+// ============================================================
+// DRIVE
+// ============================================================
+
 function normalizeDrive(
   value
 ) {
@@ -2671,10 +2934,10 @@ function normalizeDrive(
       "allwheel"
     ) ||
     normalized.includes(
-      "4x4"
+      "awd"
     ) ||
     normalized.includes(
-      "awd"
+      "4x4"
     )
   ) {
     return "AWD";
@@ -2718,13 +2981,18 @@ function normalizeSources(
   let items = [];
 
   if (
-    Array.isArray(value)
+    Array.isArray(
+      value
+    )
   ) {
-    items = value;
+    items =
+      value;
   } else if (
     value
   ) {
-    items = [value];
+    items = [
+      value
+    ];
   }
 
   const result = [];
@@ -2732,11 +3000,15 @@ function normalizeSources(
   for (
     const item of items
   ) {
-    let url = "";
-    let title = "";
+    let url =
+      "";
+
+    let title =
+      "";
 
     if (
-      typeof item === "string"
+      typeof item ===
+      "string"
     ) {
       url =
         safeHttpUrl(
@@ -2746,7 +3018,9 @@ function normalizeSources(
       title =
         item;
     } else if (
-      isPlainObject(item)
+      isPlainObject(
+        item
+      )
     ) {
       url =
         safeHttpUrl(
@@ -2773,7 +3047,8 @@ function normalizeSources(
     if (
       result.some(
         source =>
-          source.url === url
+          source.url ===
+          url
       )
     ) {
       continue;
@@ -2806,13 +3081,18 @@ function normalizeImageCandidates(
   let items = [];
 
   if (
-    Array.isArray(value)
+    Array.isArray(
+      value
+    )
   ) {
-    items = value;
+    items =
+      value;
   } else if (
     value
   ) {
-    items = [value];
+    items = [
+      value
+    ];
   }
 
   const result = [];
@@ -2820,17 +3100,21 @@ function normalizeImageCandidates(
   for (
     const item of items
   ) {
-    let url = "";
+    let url =
+      "";
 
     if (
-      typeof item === "string"
+      typeof item ===
+      "string"
     ) {
       url =
         safeHttpUrl(
           item
         );
     } else if (
-      isPlainObject(item)
+      isPlainObject(
+        item
+      )
     ) {
       url =
         safeHttpUrl(
@@ -2854,12 +3138,16 @@ function normalizeImageCandidates(
     }
 
     if (
-      result.includes(url)
+      result.includes(
+        url
+      )
     ) {
       continue;
     }
 
-    result.push(url);
+    result.push(
+      url
+    );
 
     if (
       result.length >=
@@ -2872,12 +3160,14 @@ function normalizeImageCandidates(
   return result;
 }
 
+
 function isRejectedImageUrl(
   url
 ) {
   const lower =
-    String(url || "")
-      .toLowerCase();
+    String(
+      url || ""
+    ).toLowerCase();
 
   return IMAGE_REJECT_WORDS.some(
     word =>
@@ -2889,7 +3179,7 @@ function isRejectedImageUrl(
 
 
 // ============================================================
-// IMAGE SEARCH HELPERS
+// IMAGE SEARCH TERMS
 // ============================================================
 
 function imageSearchTerms(
@@ -2912,8 +3202,6 @@ function imageSearchTerms(
       car.year
     );
 
-  const terms = [];
-
   const base =
     [
       name,
@@ -2923,66 +3211,69 @@ function imageSearchTerms(
       .filter(Boolean)
       .join(" ");
 
-  if (base) {
-    terms.push(
-      `${base} exterior`
-    );
-
-    terms.push(
-      `${base} front`
-    );
-
-    terms.push(
-      `${base} side`
-    );
-
-    terms.push(
-      `${base} rear`
-    );
-
-    terms.push(
-      `${base} official`
-    );
-
-    terms.push(
-      `${base} press photo`
-    );
-
-    terms.push(
-      `${base} 2026`
-    );
+  if (!base) {
+    return [];
   }
 
   return [
-    ...new Set(
-      terms
-    )
-  ].slice(0, 7);
+    `${base} exterior`,
+    `${base} front`,
+    `${base} side`,
+    `${base} official`
+  ].slice(
+    0,
+    MAX_IMAGE_QUERIES
+  );
 }
+
+
+// ============================================================
+// WIKIMEDIA
+// ============================================================
 
 async function fetchWikimediaSearch(
   query
 ) {
   const params =
     new URLSearchParams({
-      action: "query",
-      generator: "search",
-      gsrsearch: query,
-      gsrnamespace: "6",
-      gsrlimit: "12",
-      prop: "imageinfo",
+      action:
+        "query",
+
+      generator:
+        "search",
+
+      gsrsearch:
+        query,
+
+      gsrnamespace:
+        "6",
+
+      gsrlimit:
+        "10",
+
+      prop:
+        "imageinfo",
+
       iiprop:
         "url|mime|size|extmetadata",
-      iiurlwidth: "1200",
-      format: "json",
-      origin: "*"
+
+      iiurlwidth:
+        "1200",
+
+      format:
+        "json",
+
+      origin:
+        "*"
     });
 
   const response =
     await fetchWithTimeout(
       `${WIKIMEDIA_API}?${params}`,
       {
-        method: "GET",
+        method:
+          "GET",
+
         headers: {
           Accept:
             "application/json"
@@ -3002,77 +3293,110 @@ async function fetchWikimediaSearch(
 
   const pages =
     Object.values(
-      data?.query?.pages || {}
+      data?.query?.pages ||
+        {}
     );
 
   return pages
-    .map(page => {
-      const info =
-        page?.imageinfo?.[0];
+    .map(
+      page => {
+        const info =
+          page?.imageinfo?.[0];
 
-      const url =
-        safeHttpUrl(
-          info?.thumburl ??
-          info?.url
-        );
+        const url =
+          safeHttpUrl(
+            info?.thumburl ??
+            info?.url
+          );
 
-      if (!url) {
-        return null;
-      }
+        if (!url) {
+          return null;
+        }
 
-      const metadata =
-        info?.extmetadata || {};
+        const metadata =
+          info?.extmetadata ||
+          {};
 
-      const description =
-        scalarText(
-          metadata.ImageDescription?.value ??
-          metadata.ObjectName?.value ??
-          page.title,
-          ""
-        );
-
-      return {
-        url,
-        title:
-          text(
+        const description =
+          scalarText(
+            metadata
+              ?.ImageDescription
+              ?.value ??
+            metadata
+              ?.ObjectName
+              ?.value ??
             page.title,
             ""
-          ),
-        description,
-        source:
-          "Wikimedia Commons",
-        width:
-          numberOrNull(
-            info?.width
-          ),
-        height:
-          numberOrNull(
-            info?.height
-          )
-      };
-    })
+          );
+
+        return {
+          url,
+
+          title:
+            text(
+              page.title,
+              ""
+            ),
+
+          description,
+
+          source:
+            "Wikimedia Commons",
+
+          width:
+            numberOrNull(
+              info?.width
+            ),
+
+          height:
+            numberOrNull(
+              info?.height
+            )
+        };
+      }
+    )
     .filter(Boolean);
 }
+
+
+// ============================================================
+// WIKIPEDIA
+// ============================================================
 
 async function fetchWikipediaImages(
   query
 ) {
   const searchParams =
     new URLSearchParams({
-      action: "query",
-      list: "search",
-      srsearch: query,
-      srlimit: "5",
-      srnamespace: "0",
-      format: "json",
-      origin: "*"
+      action:
+        "query",
+
+      list:
+        "search",
+
+      srsearch:
+        query,
+
+      srlimit:
+        "5",
+
+      srnamespace:
+        "0",
+
+      format:
+        "json",
+
+      origin:
+        "*"
     });
 
   const searchResponse =
     await fetchWithTimeout(
       `${WIKIPEDIA_API}?${searchParams}`,
       {
-        method: "GET",
+        method:
+          "GET",
+
         headers: {
           Accept:
             "application/json"
@@ -3092,43 +3416,59 @@ async function fetchWikipediaImages(
 
   const titles =
     (
-      searchData?.query?.search ||
+      searchData?.query
+        ?.search ||
       []
     )
-      .map(item =>
-        text(
-          item.title,
-          ""
-        )
+      .map(
+        item =>
+          text(
+            item.title,
+            ""
+          )
       )
       .filter(Boolean);
 
-  if (titles.length === 0) {
+  if (
+    titles.length === 0
+  ) {
     return [];
   }
 
   const imageParams =
     new URLSearchParams({
-      action: "query",
+      action:
+        "query",
+
       prop:
         "pageimages|images",
+
       titles:
         titles.join("|"),
+
       piprop:
         "thumbnail",
+
       pithumbsize:
         "1200",
+
       imlimit:
         "10",
-      format: "json",
-      origin: "*"
+
+      format:
+        "json",
+
+      origin:
+        "*"
     });
 
   const imageResponse =
     await fetchWithTimeout(
       `${WIKIPEDIA_API}?${imageParams}`,
       {
-        method: "GET",
+        method:
+          "GET",
+
         headers: {
           Accept:
             "application/json"
@@ -3148,53 +3488,94 @@ async function fetchWikipediaImages(
 
   const pages =
     Object.values(
-      imageData?.query?.pages || {}
+      imageData?.query
+        ?.pages ||
+        {}
     );
 
-  const result = [];
+  return pages
+    .map(
+      page => {
+        const url =
+          safeHttpUrl(
+            page
+              ?.thumbnail
+              ?.source
+          );
 
-  for (
-    const page of pages
-  ) {
-    const thumb =
-      safeHttpUrl(
-        page?.thumbnail?.source
-      );
+        if (!url) {
+          return null;
+        }
 
-    if (thumb) {
-      result.push({
-        url: thumb,
-        title:
-          text(
-            page?.title,
-            ""
-          ),
-        description:
-          text(
-            page?.title,
-            ""
-          ),
-        source:
-          "Wikipedia",
-        width:
-          numberOrNull(
-            page?.thumbnail?.width
-          ),
-        height:
-          numberOrNull(
-            page?.thumbnail?.height
-          )
-      });
-    }
-  }
+        return {
+          url,
 
-  return result;
+          title:
+            text(
+              page.title,
+              ""
+            ),
+
+          description:
+            text(
+              page.title,
+              ""
+            ),
+
+          source:
+            "Wikipedia",
+
+          width:
+            numberOrNull(
+              page
+                ?.thumbnail
+                ?.width
+            ),
+
+          height:
+            numberOrNull(
+              page
+                ?.thumbnail
+                ?.height
+            )
+        };
+      }
+    )
+    .filter(Boolean);
 }
 
 
 // ============================================================
-// IMAGE RELEVANCE
+// IMAGE SCORING
 // ============================================================
+
+function normalizeImageTokenSet(
+  value
+) {
+  return [
+    ...new Set(
+      text(
+        value,
+        ""
+      )
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(
+          /[\u0300-\u036f]/g,
+          ""
+        )
+        .split(
+          /[^a-z0-9]+/
+        )
+        .filter(
+          token =>
+            token.length >=
+            2
+        )
+    )
+  ];
+}
+
 
 function scoreImageCandidate(
   candidate,
@@ -3206,11 +3587,12 @@ function scoreImageCandidate(
       candidate?.description,
       candidate?.url
     ]
-      .map(value =>
-        text(
-          value,
-          ""
-        ).toLowerCase()
+      .map(
+        value =>
+          text(
+            value,
+            ""
+          ).toLowerCase()
       )
       .join(" ");
 
@@ -3224,14 +3606,17 @@ function scoreImageCandidate(
       car?.generation
     );
 
-  let score = 0;
+  let score =
+    0;
 
   for (
     const token of nameTokens
   ) {
     if (
       token.length >= 3 &&
-      haystack.includes(token)
+      haystack.includes(
+        token
+      )
     ) {
       score += 12;
     }
@@ -3242,7 +3627,9 @@ function scoreImageCandidate(
   ) {
     if (
       token.length >= 3 &&
-      haystack.includes(token)
+      haystack.includes(
+        token
+      )
     ) {
       score += 5;
     }
@@ -3265,13 +3652,15 @@ function scoreImageCandidate(
   }
 
   if (
-    candidate?.width >= 700
+    candidate?.width >=
+    700
   ) {
     score += 4;
   }
 
   if (
-    candidate?.height >= 400
+    candidate?.height >=
+    400
   ) {
     score += 3;
   }
@@ -3287,33 +3676,23 @@ function scoreImageCandidate(
   return score;
 }
 
-function normalizeImageTokenSet(
-  value
-) {
-  return [
-    ...new Set(
-      text(
-        value,
-        ""
-      )
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(
-          /[\u0300-\u036f]/g,
-          ""
-        )
-        .split(/[^a-z0-9]+/)
-        .filter(
-          token =>
-            token.length >= 2
-        )
-    )
-  ];
-}
-
 
 // ============================================================
 // IMAGE ENGINE
+// ============================================================
+//
+// IMPORTANT:
+//
+// Old version:
+// query 1 -> wait
+// query 2 -> wait
+// query 3 -> wait
+// ...
+//
+// New version:
+// ALL Wikimedia queries run in parallel.
+//
+// This substantially reduces serverless execution time.
 // ============================================================
 
 async function findCarImages(
@@ -3324,24 +3703,29 @@ async function findCarImages(
       car
     );
 
-  const candidates = [];
-
-  for (
-    const query of queries
+  if (
+    queries.length === 0
   ) {
-    try {
-      const results =
-        await fetchWikimediaSearch(
-          query
-        );
-
-      candidates.push(
-        ...results
-      );
-    } catch {
-      // Continue to next query.
-    }
+    return [];
   }
+
+  const queryResults =
+    await Promise.all(
+      queries.map(
+        async query => {
+          try {
+            return await fetchWikimediaSearch(
+              query
+            );
+          } catch {
+            return [];
+          }
+        }
+      )
+    );
+
+  const candidates =
+    queryResults.flat();
 
   if (
     candidates.length <
@@ -3360,7 +3744,7 @@ async function findCarImages(
         ...wiki
       );
     } catch {
-      // Wikipedia is an optional fallback.
+      // Optional fallback.
     }
   }
 
@@ -3393,6 +3777,7 @@ async function findCarImages(
         candidate.url,
         {
           ...candidate,
+
           score:
             scoreImageCandidate(
               candidate,
@@ -3403,37 +3788,41 @@ async function findCarImages(
     }
   }
 
-  const sorted =
-    [...unique.values()]
-      .sort(
-        (a, b) =>
-          b.score - a.score
-      );
-
-  return sorted
+  return [
+    ...unique.values()
+  ]
+    .sort(
+      (a, b) =>
+        b.score -
+        a.score
+    )
     .slice(
       0,
       MAX_IMAGE_CANDIDATES
     )
-    .map(item => ({
-      url:
-        item.url,
-      title:
-        text(
-          item.title,
-          ""
-        ),
-      source:
-        text(
-          item.source,
-          ""
-        )
-    }));
+    .map(
+      item => ({
+        url:
+          item.url,
+
+        title:
+          text(
+            item.title,
+            ""
+          ),
+
+        source:
+          text(
+            item.source,
+            ""
+          )
+      })
+    );
 }
 
 
 // ============================================================
-// OFFICIAL PRICE VERIFICATION
+// OFFICIAL PRICE PAGE
 // ============================================================
 
 async function fetchOfficialPage(
@@ -3452,11 +3841,14 @@ async function fetchOfficialPage(
     await fetchWithTimeout(
       safe,
       {
-        method: "GET",
+        method:
+          "GET",
+
         headers: {
           Accept:
             "text/html,application/xhtml+xml"
         },
+
         redirect:
           "follow"
       },
@@ -3490,6 +3882,7 @@ async function fetchOfficialPage(
     url:
       response.url ||
       safe,
+
     html:
       html.slice(
         0,
@@ -3497,6 +3890,7 @@ async function fetchOfficialPage(
       )
   };
 }
+
 
 function containsPriceEvidence(
   html
@@ -3528,342 +3922,344 @@ function containsPriceEvidence(
   );
 }
 
-async function verifyPricesAndSources(
-  cars
+
+// ============================================================
+// PRICE VERIFICATION
+// ============================================================
+//
+// All 3 official pages are checked in parallel.
+// ============================================================
+
+async function verifyOneCarPrice(
+  car
 ) {
-  const result = [];
+  const brand =
+    text(
+      car.name,
+      ""
+    ).split(
+      /\s+/
+    )[0];
 
-  for (
-    const car of cars
+  let officialUrl =
+    safeHttpUrl(
+      car.officialPriceUrl
+    );
+
+  if (
+    officialUrl &&
+    !isOfficialManufacturerURL(
+      officialUrl,
+      brand
+    )
   ) {
-    const brand =
-      text(
-        car.name,
-        ""
-      ).split(
-        /\s+/
-      )[0];
+    officialUrl =
+      null;
+  }
 
-    let officialVerified =
-      false;
+  let officialVerified =
+    false;
 
-    let officialUrl =
-      safeHttpUrl(
-        car.officialPriceUrl
-      );
-
-    if (
-      officialUrl &&
-      !isOfficialManufacturerURL(
-        officialUrl,
-        brand
-      )
-    ) {
-      officialUrl = null;
-    }
-
-    if (
-      officialUrl
-    ) {
-      try {
-        const page =
-          await fetchOfficialPage(
-            officialUrl
-          );
-
-        if (
-          page &&
-          containsPriceEvidence(
-            page.html
-          )
-        ) {
-          officialVerified =
-            true;
-        }
-      } catch {
-        officialVerified =
-          false;
-      }
-    }
-
-    const sources =
-      normalizeSources(
-        car.sources
-      );
-
-    if (
-      officialUrl &&
-      !sources.some(
-        source =>
-          source.url ===
+  if (
+    officialUrl
+  ) {
+    try {
+      const page =
+        await fetchOfficialPage(
           officialUrl
-      )
-    ) {
-      sources.unshift({
-        title:
-          "Oficiálna stránka výrobcu",
-        url:
-          officialUrl
-      });
-    }
+        );
 
-    let price =
-      normalizePrice(
-        car.price
-      );
-
-    /*
-     * Never claim a numeric official price merely because
-     * AI generated one. Keep it only when a numeric value exists.
-     * Verification flag is stored separately.
-     */
-    if (
-      !priceHasNumber(
-        price
-      )
-    ) {
-      price = {
-        text:
-          "Cena nie je dostupná",
-        amount:
-          null,
-        currency:
-          null
-      };
-    }
-
-    result.push({
-      ...car,
-
-      price:
-        price.text,
-
-      priceAmount:
-        price.amount,
-
-      currency:
-        price.currency,
-
-      officialPriceUrl:
-        officialUrl,
-
-      officialPriceVerified:
-        officialVerified,
-
-      sources:
-        sources.slice(
-          0,
-          MAX_DATA_SOURCES
+      if (
+        page &&
+        containsPriceEvidence(
+          page.html
         )
+      ) {
+        officialVerified =
+          true;
+      }
+    } catch {
+      officialVerified =
+        false;
+    }
+  }
+
+  const sources =
+    normalizeSources(
+      car.sources
+    );
+
+  if (
+    officialUrl &&
+    !sources.some(
+      source =>
+        source.url ===
+        officialUrl
+    )
+  ) {
+    sources.unshift({
+      title:
+        "Oficiálna stránka výrobcu",
+      url:
+        officialUrl
     });
   }
 
-  return result;
+  const price =
+    normalizePrice(
+      car.price
+    );
+
+  return {
+    ...car,
+
+    price:
+      priceHasNumber(
+        price
+      )
+        ? price.text
+        : "Cena nie je dostupná",
+
+    priceAmount:
+      priceHasNumber(
+        price
+      )
+        ? price.amount
+        : null,
+
+    currency:
+      priceHasNumber(
+        price
+      )
+        ? price.currency
+        : null,
+
+    officialPriceUrl:
+      officialUrl,
+
+    officialPriceVerified:
+      officialVerified,
+
+    sources:
+      sources.slice(
+        0,
+        MAX_DATA_SOURCES
+      )
+  };
 }
 
 
-// ============================================================
-// CURRENT MODEL / SANITIZATION
-// ============================================================
-
-function sanitizeUrlField(
-  value
+async function verifyPricesAndSources(
+  cars
 ) {
-  return safeHttpUrl(
-    value
-  ) || "";
+  return Promise.all(
+    cars.map(
+      car =>
+        verifyOneCarPrice(
+          car
+        )
+    )
+  );
 }
+
+
+// ============================================================
+// FINAL SANITIZATION
+// ============================================================
 
 function finalSanitizeCars(
   cars
 ) {
   return cars
-    .slice(0, 3)
-    .map(car => {
-      const power =
-        normalizePower(
-          car.power ??
-          car.powerKw ??
-          car.kw
-        );
+    .slice(
+      0,
+      3
+    )
+    .map(
+      car => {
+        const power =
+          normalizePower(
+            car.power ??
+            car.powerKw ??
+            car.kw
+          );
 
-      const trunkLiters =
-        numberOrNull(
-          car.trunkLiters
-        );
-
-      const price =
-        normalizePrice(
-          car.price
-        );
-
-      const imageCandidates =
-        normalizeImageCandidates(
-          car.imageCandidates
-        );
-
-      return {
-        name:
-          text(
-            car.name,
-            "Neznáme vozidlo"
-          ),
-
-        generation:
-          text(
-            car.generation,
-            ""
-          ),
-
-        year:
+        const trunkLiters =
           numberOrNull(
-            car.year
-          ),
+            car.trunkLiters
+          );
 
-        score:
-          car.score === null ||
-          car.score === undefined
-            ? null
-            : clamp(
-                numberOrNull(
-                  car.score
-                ) ?? 0,
-                0,
-                100
-              ),
+        const price =
+          normalizePrice(
+            car.price
+          );
 
-        price:
-          priceHasNumber(
-            price
-          )
-            ? price.text
-            : "Cena nie je dostupná",
+        return {
+          name:
+            text(
+              car.name,
+              "Neznáme vozidlo"
+            ),
 
-        priceAmount:
-          priceHasNumber(
-            price
-          )
-            ? price.amount
-            : null,
+          generation:
+            text(
+              car.generation,
+              ""
+            ),
 
-        currency:
-          priceHasNumber(
-            price
-          )
-            ? price.currency
-            : null,
+          year:
+            numberOrNull(
+              car.year
+            ),
 
-        officialPriceUrl:
-          sanitizeUrlField(
-            car.officialPriceUrl
-          ),
+          score:
+            car.score === null ||
+            car.score === undefined
+              ? null
+              : clamp(
+                  numberOrNull(
+                    car.score
+                  ) ?? 0,
+                  0,
+                  100
+                ),
 
-        configuratorUrl:
-          sanitizeUrlField(
-            car.configuratorUrl
-          ),
+          price:
+            priceHasNumber(
+              price
+            )
+              ? price.text
+              : "Cena nie je dostupná",
 
-        officialPriceVerified:
-          Boolean(
-            car.officialPriceVerified
-          ),
+          priceAmount:
+            priceHasNumber(
+              price
+            )
+              ? price.amount
+              : null,
 
-        power:
-          power.kw === null
-            ? ""
-            : `${power.kw} kW / ${power.hp} hp`,
+          currency:
+            priceHasNumber(
+              price
+            )
+              ? price.currency
+              : null,
 
-        powerKw:
-          power.kw,
+          officialPriceUrl:
+            safeHttpUrl(
+              car.officialPriceUrl
+            ) || "",
 
-        powerHp:
-          power.hp,
+          configuratorUrl:
+            safeHttpUrl(
+              car.configuratorUrl
+            ) || "",
 
-        seats:
-          numberOrNull(
-            car.seats
-          ),
+          officialPriceVerified:
+            Boolean(
+              car.officialPriceVerified
+            ),
 
-        trunk:
-          trunkLiters === null
-            ? text(
-                car.trunk,
-                ""
-              )
-            : `${trunkLiters} l`,
+          power:
+            power.kw === null
+              ? ""
+              : `${power.kw} kW / ${power.hp} hp`,
 
-        trunkLiters,
+          powerKw:
+            power.kw,
 
-        length:
-          text(
-            car.length,
-            ""
-          ),
+          powerHp:
+            power.hp,
 
-        lengthMm:
-          numberOrNull(
-            car.lengthMm
-          ),
+          seats:
+            numberOrNull(
+              car.seats
+            ),
 
-        drive:
-          text(
-            car.drive,
-            ""
-          ),
+          trunk:
+            trunkLiters === null
+              ? text(
+                  car.trunk,
+                  ""
+                )
+              : `${trunkLiters} l`,
 
-        fuel:
-          text(
-            car.fuel,
-            ""
-          ),
+          trunkLiters,
 
-        body:
-          text(
-            car.body,
-            ""
-          ),
+          length:
+            text(
+              car.length,
+              ""
+            ),
 
-        style:
-          text(
-            car.style,
-            ""
-          ),
+          lengthMm:
+            numberOrNull(
+              car.lengthMm
+            ),
 
-        reason:
-          text(
-            car.reason,
-            ""
-          ),
+          drive:
+            text(
+              car.drive,
+              ""
+            ),
 
-        pros:
-          arrayText(
-            car.pros
-          ),
+          fuel:
+            text(
+              car.fuel,
+              ""
+            ),
 
-        cons:
-          arrayText(
-            car.cons
-          ),
+          body:
+            text(
+              car.body,
+              ""
+            ),
 
-        maintenance:
-          text(
-            car.maintenance,
-            ""
-          ),
+          style:
+            text(
+              car.style,
+              ""
+            ),
 
-        sources:
-          normalizeSources(
-            car.sources
-          ),
+          reason:
+            text(
+              car.reason,
+              ""
+            ),
 
-        imageCandidates
-      };
-    });
+          pros:
+            arrayText(
+              car.pros
+            ),
+
+          cons:
+            arrayText(
+              car.cons
+            ),
+
+          maintenance:
+            text(
+              car.maintenance,
+              ""
+            ),
+
+          sources:
+            normalizeSources(
+              car.sources
+            ),
+
+          imageCandidates:
+            normalizeImageCandidates(
+              car.imageCandidates
+            )
+        };
+      }
+    );
 }
 
 
 // ============================================================
-// HARD FILTER / OUTPUT VALIDATION
+// VALIDATION
 // ============================================================
 
 function validateCar(
@@ -3871,7 +4267,9 @@ function validateCar(
   request
 ) {
   if (
-    !isPlainObject(car)
+    !isPlainObject(
+      car
+    )
   ) {
     return false;
   }
@@ -3885,11 +4283,6 @@ function validateCar(
     return false;
   }
 
-  /*
-   * We do not hard-reject every missing field because some
-   * manufacturers do not publish every dimension consistently.
-   */
-
   if (
     request.budget !== null &&
     numberOrNull(
@@ -3897,7 +4290,8 @@ function validateCar(
     ) !== null &&
     numberOrNull(
       car.priceAmount
-    ) > request.budget
+    ) >
+      request.budget
   ) {
     return false;
   }
@@ -3909,7 +4303,8 @@ function validateCar(
     ) !== null &&
     numberOrNull(
       car.seats
-    ) < request.seats
+    ) <
+      request.seats
   ) {
     return false;
   }
@@ -3921,7 +4316,8 @@ function validateCar(
     ) !== null &&
     numberOrNull(
       car.powerKw
-    ) < request.power
+    ) <
+      request.power
   ) {
     return false;
   }
@@ -3933,7 +4329,8 @@ function validateCar(
     ) !== null &&
     numberOrNull(
       car.trunkLiters
-    ) < request.trunk
+    ) <
+      request.trunk
   ) {
     return false;
   }
@@ -3945,7 +4342,8 @@ function validateCar(
     ) !== null &&
     numberOrNull(
       car.year
-    ) < request.year
+    ) <
+      request.year
   ) {
     return false;
   }
@@ -3957,7 +4355,8 @@ function validateCar(
     ) !== null &&
     numberOrNull(
       car.lengthMm
-    ) > request.length
+    ) >
+      request.length
   ) {
     return false;
   }
@@ -3978,7 +4377,7 @@ function validateCar(
         )
         .filter(Boolean);
 
-    const carBrand =
+    const brand =
       normalizeBrand(
         text(
           car.name,
@@ -3990,7 +4389,7 @@ function validateCar(
 
     if (
       avoid.includes(
-        carBrand
+        brand
       )
     ) {
       return false;
@@ -4000,12 +4399,15 @@ function validateCar(
   return true;
 }
 
+
 function validateCars(
   cars,
   request
 ) {
   if (
-    !Array.isArray(cars) ||
+    !Array.isArray(
+      cars
+    ) ||
     cars.length !== 3
   ) {
     return false;
@@ -4038,7 +4440,145 @@ function validateCars(
 
 
 // ============================================================
-// MAIN AI + IMAGE PIPELINE
+// AI RESEARCH CHAIN
+// ============================================================
+
+async function runAIResearch(
+  request
+) {
+  const researchPrompt =
+    buildResearchPrompt(
+      request
+    );
+
+  const errors = [];
+
+  // ----------------------------------------------------------
+  // GROQ
+  // ----------------------------------------------------------
+
+  if (
+    GROQ_API_KEY
+  ) {
+    for (
+      const model of GROQ_MODELS
+    ) {
+      try {
+        const raw =
+          await callGroq(
+            model,
+            researchPrompt
+          );
+
+        const parsed =
+          normalizeAIResult(
+            parseAIJson(
+              raw
+            )
+          );
+
+        if (
+          parsed.cars.length ===
+          3
+        ) {
+          return {
+            data:
+              parsed,
+
+            provider:
+              "groq",
+
+            model:
+              model.model
+          };
+        }
+
+        errors.push(
+          `Groq ${model.model}: nevrátilo presne 3 autá`
+        );
+      } catch (
+        error
+      ) {
+        errors.push(
+          `Groq ${model.model}: ${scalarText(
+            error?.message,
+            "unknown error"
+          )}`
+        );
+      }
+    }
+  }
+
+  // ----------------------------------------------------------
+  // OPENROUTER
+  // ----------------------------------------------------------
+
+  if (
+    OPENROUTER_API_KEY
+  ) {
+    for (
+      const model of OPENROUTER_FREE_MODELS
+    ) {
+      try {
+        const raw =
+          await callOpenRouter(
+            model,
+            researchPrompt
+          );
+
+        const parsed =
+          normalizeAIResult(
+            parseAIJson(
+              raw
+            )
+          );
+
+        if (
+          parsed.cars.length ===
+          3
+        ) {
+          return {
+            data:
+              parsed,
+
+            provider:
+              "openrouter",
+
+            model
+          };
+        }
+
+        errors.push(
+          `OpenRouter ${model}: nevrátilo presne 3 autá`
+        );
+      } catch (
+        error
+      ) {
+        errors.push(
+          `OpenRouter ${model}: ${scalarText(
+            error?.message,
+            "unknown error"
+          )}`
+        );
+      }
+    }
+  }
+
+  throw new Error(
+    `Všetci AI poskytovatelia zlyhali. ${errors
+      .slice(
+        0,
+        8
+      )
+      .join(
+        " | "
+      )}`
+  );
+}
+
+
+// ============================================================
+// FINAL PIPELINE
 // ============================================================
 
 async function buildFinalCars(
@@ -4050,11 +4590,11 @@ async function buildFinalCars(
     );
 
   let cars =
-    aiResult.data.cars;
-
-  cars =
-    cars
-      .slice(0, 3)
+    aiResult.data.cars
+      .slice(
+        0,
+        3
+      )
       .map(
         normalizeCar
       );
@@ -4067,75 +4607,84 @@ async function buildFinalCars(
     );
   }
 
+  // ----------------------------------------------------------
+  // Verify prices in parallel
+  // ----------------------------------------------------------
+
   cars =
     await verifyPricesAndSources(
       cars
     );
 
-  /*
-   * Image search is independent per car.
-   * If one image search fails, the car can still be returned.
-   */
+  // ----------------------------------------------------------
+  // Search images in parallel for all 3 cars
+  // ----------------------------------------------------------
 
   cars =
     await Promise.all(
       cars.map(
         async car => {
-          let imageCandidates =
+          let images =
             normalizeImageCandidates(
               car.imageCandidates
             );
 
           if (
-            imageCandidates.length === 0
+            images.length === 0
           ) {
             try {
-              imageCandidates =
+              images =
                 await findCarImages(
                   car
                 );
             } catch {
-              imageCandidates =
+              images =
                 [];
             }
           }
 
           return {
             ...car,
-            imageCandidates
+
+            imageCandidates:
+              images
           };
         }
       )
     );
+
+  // ----------------------------------------------------------
+  // Final sanitize
+  // ----------------------------------------------------------
 
   cars =
     finalSanitizeCars(
       cars
     );
 
+  // ----------------------------------------------------------
+  // Exact 3-car contract
+  // ----------------------------------------------------------
+
   if (
-    !validateCars(
-      cars,
-      request
-    )
+    cars.length !== 3
   ) {
-    /*
-     * Do not destroy valid AI results merely because optional
-     * values are absent. Exact 3 result count remains mandatory.
-     */
-    if (
-      cars.length !== 3
-    ) {
-      throw new Error(
-        "Výsledky neobsahujú presne tri vozidlá."
-      );
-    }
+    throw new Error(
+      "Výsledky neobsahujú presne tri vozidlá."
+    );
   }
+
+  // Do not reject otherwise usable results because an optional
+  // specification was missing.
+  //
+  // Exact 3 results is the hard requirement.
 
   return {
     cars,
+
     provider:
       aiResult.provider,
+
     model:
       aiResult.model
   };
@@ -4143,7 +4692,7 @@ async function buildFinalCars(
 
 
 // ============================================================
-// HTTP RESPONSE
+// RESPONSE
 // ============================================================
 
 function sendJson(
@@ -4152,8 +4701,12 @@ function sendJson(
   data
 ) {
   return res
-    .status(status)
-    .json(data);
+    .status(
+      status
+    )
+    .json(
+      data
+    );
 }
 
 
@@ -4165,17 +4718,20 @@ export default async function handler(
   req,
   res
 ) {
-  /*
-   * CRITICAL:
-   * These variables must exist OUTSIDE the try block.
-   * The catch block may need them for refund handling.
-   */
-  let accessToken = "";
-  let searchCharged = false;
+  let accessToken =
+    "";
+
+  let searchCharged =
+    false;
 
   try {
+    // --------------------------------------------------------
+    // METHOD
+    // --------------------------------------------------------
+
     if (
-      req.method !== "POST"
+      req.method !==
+      "POST"
     ) {
       return sendJson(
         res,
@@ -4183,33 +4739,37 @@ export default async function handler(
         {
           error:
             "Method Not Allowed",
+
           message:
             "Použi POST request."
         }
       );
     }
 
-    /*
-     * Read and validate Authorization.
-     */
+    // --------------------------------------------------------
+    // AUTHORIZATION
+    // --------------------------------------------------------
+
     const authorization =
       req.headers?.authorization ||
       req.headers?.Authorization ||
       "";
 
     accessToken =
-      authorization
-        .startsWith(
-          "Bearer "
-        )
-        ? authorization.slice(
-            7
-          ).trim()
+      authorization.startsWith(
+        "Bearer "
+      )
+        ? authorization
+            .slice(
+              7
+            )
+            .trim()
         : "";
 
     if (
       !accessToken ||
-      accessToken.length > 10000
+      accessToken.length >
+        10000
     ) {
       return sendJson(
         res,
@@ -4217,15 +4777,17 @@ export default async function handler(
         {
           error:
             "Unauthorized",
+
           message:
             "Chýba platná Authorization relácia."
         }
       );
     }
 
-    /*
-     * Verify user.
-     */
+    // --------------------------------------------------------
+    // VERIFY USER
+    // --------------------------------------------------------
+
     const user =
       await verifyUser(
         accessToken
@@ -4240,20 +4802,23 @@ export default async function handler(
         {
           error:
             "Unauthorized",
+
           message:
             "Supabase relácia nie je platná."
         }
       );
     }
 
-    /*
-     * Parse body safely.
-     */
+    // --------------------------------------------------------
+    // BODY
+    // --------------------------------------------------------
+
     let rawBody =
       req.body;
 
     if (
-      typeof rawBody === "string"
+      typeof rawBody ===
+      "string"
     ) {
       try {
         rawBody =
@@ -4267,6 +4832,7 @@ export default async function handler(
           {
             error:
               "Invalid JSON",
+
             message:
               "Požiadavka obsahuje neplatný JSON."
           }
@@ -4279,7 +4845,7 @@ export default async function handler(
         rawBody
       );
 
-    if (
+    const isEmpty =
       !request.naturalLanguage &&
       request.budget === null &&
       request.seats === null &&
@@ -4291,7 +4857,10 @@ export default async function handler(
       !request.style &&
       request.length === null &&
       request.year === null &&
-      !request.avoid
+      !request.avoid;
+
+    if (
+      isEmpty
     ) {
       return sendJson(
         res,
@@ -4299,15 +4868,17 @@ export default async function handler(
         {
           error:
             "Empty request",
+
           message:
             "Zadaj požiadavku alebo aspoň jeden filter."
         }
       );
     }
 
-    /*
-     * Consume one search.
-     */
+    // --------------------------------------------------------
+    // CONSUME SEARCH
+    // --------------------------------------------------------
+
     const usage =
       await useSearch(
         accessToken
@@ -4322,54 +4893,55 @@ export default async function handler(
         {
           error:
             "Daily search limit reached",
+
           message:
             "Dosiahol si denný limit 5 vyhľadávaní.",
+
           remaining:
             0
         }
       );
     }
 
-    searchCharged = true;
+    searchCharged =
+      true;
 
-    /*
-     * Run AI + verification + images.
-     */
+    // --------------------------------------------------------
+    // AI + IMAGES + PRICE VERIFICATION
+    // --------------------------------------------------------
+
     const finalResult =
       await buildFinalCars(
         request
       );
 
-    /*
-     * Success.
-     *
-     * Keep the returned usage count. The database RPC is the
-     * source of truth. If it returned a remaining value, expose
-     * it. Otherwise expose the safest expected post-charge value.
-     */
+    // --------------------------------------------------------
+    // REMAINING SEARCHES
+    // --------------------------------------------------------
+
     const remaining =
       numberOrNull(
         usage.remaining
       ) !== null
-        ? Math.max(
+        ? clamp(
+            Math.floor(
+              usage.remaining
+            ),
             0,
-            Math.min(
-              MAX_SEARCHES_PER_DAY,
-              Math.floor(
-                usage.remaining
-              )
-            )
+            MAX_SEARCHES_PER_DAY
           )
         : Math.max(
             0,
-            MAX_SEARCHES_PER_DAY - 1
+            MAX_SEARCHES_PER_DAY -
+              1
           );
 
-    /*
-     * Search is now successfully completed.
-     * No refund is needed.
-     */
-    searchCharged = false;
+    // --------------------------------------------------------
+    // SUCCESS
+    // --------------------------------------------------------
+
+    searchCharged =
+      false;
 
     return sendJson(
       res,
@@ -4383,23 +4955,24 @@ export default async function handler(
         ai: {
           provider:
             finalResult.provider,
+
           model:
             finalResult.model
         }
       }
     );
-
-  } catch (error) {
+  } catch (
+    error
+  ) {
     console.error(
       "CARMATCH AI backend error:",
       error
     );
 
-    /*
-     * IMPORTANT:
-     * If search was already charged, try to refund it.
-     * Refund errors must NEVER replace the original error.
-     */
+    // --------------------------------------------------------
+    // REFUND
+    // --------------------------------------------------------
+
     if (
       searchCharged &&
       accessToken
@@ -4410,58 +4983,67 @@ export default async function handler(
             accessToken
           );
 
-        searchCharged = false;
+        searchCharged =
+          false;
 
-        const refundedRemaining =
+        const remaining =
           numberOrNull(
             refund?.remaining
           );
 
-        const baseMessage =
+        const originalMessage =
           scalarText(
             error?.message,
             "Vyhľadávanie sa nepodarilo dokončiť."
           );
 
+        const payload = {
+          error:
+            "Search failed and was refunded",
+
+          message:
+            `${originalMessage} Vyhľadávanie bolo vrátené a nebolo spotrebované.`,
+
+          refunded:
+            true
+        };
+
+        if (
+          remaining !== null
+        ) {
+          payload.remaining =
+            remaining;
+        }
+
         return sendJson(
           res,
           503,
-          {
-            error:
-              "Search failed and was refunded",
-            message:
-              `${baseMessage} Vyhľadávanie bolo vrátené a nebolo spotrebované.`,
-            refunded:
-              true,
-            remaining:
-              refundedRemaining === null
-                ? undefined
-                : refundedRemaining
-          }
+          payload
         );
-
-      } catch (refundError) {
+      } catch (
+        refundError
+      ) {
         console.error(
           "CARMATCH AI refund error:",
           refundError
         );
 
-        /*
-         * Do not crash the function because refund failed.
-         */
         return sendJson(
           res,
           500,
           {
             error:
               "Internal Server Error",
+
             message:
               scalarText(
                 error?.message,
                 "Vyhľadávanie sa nepodarilo dokončiť."
               ),
+
             refunded:
               false,
+
             refundError:
               "Refund RPC sa nepodarilo vykonať."
           }
@@ -4469,14 +5051,9 @@ export default async function handler(
       }
     }
 
-    /*
-     * Normal uncharged error.
-     */
-    const message =
-      scalarText(
-        error?.message,
-        "Vyhľadávanie sa nepodarilo dokončiť."
-      );
+    // --------------------------------------------------------
+    // NORMAL ERROR
+    // --------------------------------------------------------
 
     return sendJson(
       res,
@@ -4484,7 +5061,12 @@ export default async function handler(
       {
         error:
           "Internal Server Error",
-        message
+
+        message:
+          scalarText(
+            error?.message,
+            "Vyhľadávanie sa nepodarilo dokončiť."
+          )
       }
     );
   }
