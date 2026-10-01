@@ -1,28 +1,31 @@
 // ============================================================
-// CARMATCH AI - PRODUCTION BACKEND v13.1 TEST
+// CARMATCH AI - PRODUCTION BACKEND v13.2 TEST
 // ============================================================
 //
 // TEST MODE
-// - 5 searches/day LIMIT TEMPORARILY DISABLED
+// - 5 searches/day LIMIT DISABLED
 // - Supabase authentication remains enabled
 // - No search is consumed
-// - No refund is needed because nothing is consumed
+// - No refund is needed
 //
 // AI
 // - Groq GPT-OSS 120B + Browser Search
 // - Groq GPT-OSS 20B + Browser Search fallback
 // - OpenRouter FREE fallbacks
 //
-// SAFETY / PERFORMANCE
-// - Hard request deadline
-// - Per-request timeouts
-// - Parallel OpenRouter fallbacks
-// - Parallel image lookup
-// - Parallel official URL verification
+// FEATURES
 // - Exactly 3 cars
+// - Current/new vehicles
+// - Slovak output
 // - kW + mechanical HP
-// - No invented price/URL
-// - HTTPS URL validation
+// - Official URL validation
+// - Wikimedia + Wikipedia images
+// - Parallel image lookup
+// - Parallel URL verification
+// - Hard request timeout
+// - Per-request timeout
+// - Defensive JSON parsing
+// - Vercel-compatible req.body handling
 // ============================================================
 
 const SEARCH_LIMIT_ENABLED = false;
@@ -34,12 +37,17 @@ const SEARCH_LIMIT_ENABLED = false;
 const REQUEST_HARD_TIMEOUT = 110000;
 
 const SUPABASE_TIMEOUT = 7000;
+
 const GROQ_PRIMARY_TIMEOUT = 32000;
 const GROQ_FALLBACK_TIMEOUT = 22000;
+
 const OPENROUTER_TIMEOUT = 19000;
+
 const OFFICIAL_PAGE_TIMEOUT = 4500;
+
 const WIKIMEDIA_TIMEOUT = 4500;
 const WIKIPEDIA_TIMEOUT = 4500;
+
 const RESPONSE_BODY_TIMEOUT = 5000;
 
 const MAX_IMAGE_CANDIDATES = 8;
@@ -50,8 +58,11 @@ const MAX_TEXT_LENGTH = 16000;
 // ENVIRONMENT
 // ============================================================
 
-const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
+const GROQ_API_KEY =
+  process.env.GROQ_API_KEY || "";
+
+const OPENROUTER_API_KEY =
+  process.env.OPENROUTER_API_KEY || "";
 
 const SUPABASE_URL =
   process.env.SUPABASE_URL ||
@@ -68,8 +79,11 @@ const SUPABASE_ANON_KEY =
 // AI MODELS
 // ============================================================
 
-const GROQ_PRIMARY_MODEL = "openai/gpt-oss-120b";
-const GROQ_FALLBACK_MODEL = "openai/gpt-oss-20b";
+const GROQ_PRIMARY_MODEL =
+  "openai/gpt-oss-120b";
+
+const GROQ_FALLBACK_MODEL =
+  "openai/gpt-oss-20b";
 
 const OPENROUTER_MODELS = [
   "openrouter/free",
@@ -83,17 +97,33 @@ const OPENROUTER_MODELS = [
 
 function json(res, status, payload) {
   res.status(status);
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.setHeader("Cache-Control", "no-store");
-  return res.end(JSON.stringify(payload));
+
+  res.setHeader(
+    "Content-Type",
+    "application/json; charset=utf-8"
+  );
+
+  res.setHeader(
+    "Cache-Control",
+    "no-store"
+  );
+
+  return res.end(
+    JSON.stringify(payload)
+  );
 }
 
 function cors(res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Access-Control-Allow-Origin",
+    "*"
+  );
+
   res.setHeader(
     "Access-Control-Allow-Headers",
     "Content-Type, Authorization"
   );
+
   res.setHeader(
     "Access-Control-Allow-Methods",
     "POST, OPTIONS"
@@ -105,11 +135,20 @@ function now() {
 }
 
 function remainingTime(deadline) {
-  return Math.max(100, deadline - now());
+  return Math.max(
+    100,
+    deadline - now()
+  );
 }
 
-function cleanText(value, max = MAX_TEXT_LENGTH) {
-  if (value === null || value === undefined) {
+function cleanText(
+  value,
+  max = MAX_TEXT_LENGTH
+) {
+  if (
+    value === null ||
+    value === undefined
+  ) {
     return "";
   }
 
@@ -120,13 +159,17 @@ function cleanText(value, max = MAX_TEXT_LENGTH) {
 }
 
 function safeArray(value) {
-  return Array.isArray(value) ? value : [];
+  return Array.isArray(value)
+    ? value
+    : [];
 }
 
 function safeObject(value) {
-  return value &&
+  return (
+    value &&
     typeof value === "object" &&
     !Array.isArray(value)
+  )
     ? value
     : {};
 }
@@ -149,15 +192,19 @@ function toNumber(value) {
     return value;
   }
 
-  if (typeof value !== "string") {
+  if (
+    typeof value !== "string"
+  ) {
     return null;
   }
 
-  const cleaned = value
-    .replace(",", ".")
-    .replace(/[^\d.-]/g, "");
+  const cleaned =
+    value
+      .replace(",", ".")
+      .replace(/[^\d.-]/g, "");
 
-  const result = Number(cleaned);
+  const result =
+    Number(cleaned);
 
   return Number.isFinite(result)
     ? result
@@ -165,11 +212,14 @@ function toNumber(value) {
 }
 
 function toInteger(value) {
-  const n = toNumber(value);
+  const n =
+    toNumber(value);
 
-  return n === null
-    ? null
-    : Math.round(n);
+  if (n === null) {
+    return null;
+  }
+
+  return Math.round(n);
 }
 
 // ============================================================
@@ -177,7 +227,8 @@ function toInteger(value) {
 // ============================================================
 
 function createDeadlineController(ms) {
-  const controller = new AbortController();
+  const controller =
+    new AbortController();
 
   const deadline =
     now() + ms;
@@ -186,7 +237,9 @@ function createDeadlineController(ms) {
     setTimeout(() => {
       try {
         controller.abort(
-          new Error("REQUEST_HARD_TIMEOUT")
+          new Error(
+            "REQUEST_HARD_TIMEOUT"
+          )
         );
       } catch {
         controller.abort();
@@ -215,14 +268,19 @@ async function fetchWithTimeout(
   const safeTimeout =
     Math.max(
       100,
-      Math.min(timeoutMs, 120000)
+      Math.min(
+        timeoutMs,
+        120000
+      )
     );
 
   const timer =
     setTimeout(() => {
       try {
         controller.abort(
-          new Error("REQUEST_TIMEOUT")
+          new Error(
+            "REQUEST_TIMEOUT"
+          )
         );
       } catch {
         controller.abort();
@@ -235,13 +293,17 @@ async function fetchWithTimeout(
     if (rootSignal) {
       if (rootSignal.aborted) {
         controller.abort(
-          new Error("REQUEST_HARD_TIMEOUT")
+          new Error(
+            "REQUEST_HARD_TIMEOUT"
+          )
         );
       } else {
         abortListener = () => {
           try {
             controller.abort(
-              new Error("REQUEST_HARD_TIMEOUT")
+              new Error(
+                "REQUEST_HARD_TIMEOUT"
+              )
             );
           } catch {
             controller.abort();
@@ -251,7 +313,9 @@ async function fetchWithTimeout(
         rootSignal.addEventListener(
           "abort",
           abortListener,
-          { once: true }
+          {
+            once: true
+          }
         );
       }
     }
@@ -260,7 +324,8 @@ async function fetchWithTimeout(
       url,
       {
         ...options,
-        signal: controller.signal
+        signal:
+          controller.signal
       }
     );
   } finally {
@@ -279,81 +344,17 @@ async function fetchWithTimeout(
 }
 
 async function readResponseBody(
-  response,
-  rootSignal = null
+  response
 ) {
-  const bodyPromise =
-    response.text();
-
-  const timeoutPromise =
-    new Promise((_, reject) => {
-      const timer =
-        setTimeout(() => {
-          reject(
-            new Error(
-              "RESPONSE_BODY_TIMEOUT"
-            )
-          );
-        }, RESPONSE_BODY_TIMEOUT);
-
-      bodyPromise
-        .finally(() => {
-          clearTimeout(timer);
-        })
-        .catch(() => {});
-    });
-
-  if (!rootSignal) {
-    return Promise.race([
-      bodyPromise,
-      timeoutPromise
-    ]);
+  try {
+    return await response.text();
+  } catch {
+    return "";
   }
-
-  const rootAbortPromise =
-    new Promise((_, reject) => {
-      if (rootSignal.aborted) {
-        reject(
-          new Error(
-            "REQUEST_HARD_TIMEOUT"
-          )
-        );
-        return;
-      }
-
-      const listener = () => {
-        reject(
-          new Error(
-            "REQUEST_HARD_TIMEOUT"
-          )
-        );
-      };
-
-      rootSignal.addEventListener(
-        "abort",
-        listener,
-        { once: true }
-      );
-
-      bodyPromise
-        .finally(() => {
-          rootSignal.removeEventListener(
-            "abort",
-            listener
-          );
-        })
-        .catch(() => {});
-    });
-
-  return Promise.race([
-    bodyPromise,
-    timeoutPromise,
-    rootAbortPromise
-  ]);
 }
 
 // ============================================================
-// URL HELPERS
+// URL SAFETY
 // ============================================================
 
 function safeHttpsUrl(value) {
@@ -367,24 +368,32 @@ function safeHttpsUrl(value) {
         String(value).trim()
       );
 
-    if (url.protocol !== "https:") {
-      return null;
-    }
-
     if (
-      [
-        "localhost",
-        "127.0.0.1",
-        "0.0.0.0",
-        "::1"
-      ].includes(url.hostname)
+      url.protocol !== "https:"
     ) {
       return null;
     }
 
     if (
-      url.hostname.endsWith(".local") ||
-      url.hostname.endsWith(".internal")
+      url.hostname ===
+        "localhost" ||
+      url.hostname ===
+        "127.0.0.1" ||
+      url.hostname ===
+        "0.0.0.0" ||
+      url.hostname ===
+        "::1"
+    ) {
+      return null;
+    }
+
+    if (
+      url.hostname.endsWith(
+        ".local"
+      ) ||
+      url.hostname.endsWith(
+        ".internal"
+      )
     ) {
       return null;
     }
@@ -404,24 +413,81 @@ function getErrorMessage(error) {
     return "Unknown error";
   }
 
-  if (typeof error === "string") {
-    return error.slice(0, 500);
+  if (
+    typeof error ===
+    "string"
+  ) {
+    return error.slice(
+      0,
+      500
+    );
   }
 
   if (error.message) {
     return String(
       error.message
-    ).slice(0, 500);
+    ).slice(
+      0,
+      500
+    );
   }
 
   return "Unknown error";
 }
 
 // ============================================================
+// REQUEST BODY PARSING
+// ============================================================
+
+function parseRequestBody(req) {
+  // Vercel Node.js functions normally
+  // provide the parsed body through req.body.
+
+  if (
+    req.body &&
+    typeof req.body ===
+      "object"
+  ) {
+    return safeObject(
+      req.body
+    );
+  }
+
+  // Sometimes body can arrive as
+  // a JSON string.
+
+  if (
+    typeof req.body ===
+    "string"
+  ) {
+    const raw =
+      req.body.trim();
+
+    if (!raw) {
+      return {};
+    }
+
+    try {
+      return safeObject(
+        JSON.parse(raw)
+      );
+    } catch {
+      throw new Error(
+        "INVALID_JSON_BODY"
+      );
+    }
+  }
+
+  return {};
+}
+
+// ============================================================
 // REQUEST PARSING
 // ============================================================
 
-function extractNaturalLanguage(body) {
+function extractNaturalLanguage(
+  body
+) {
   const candidates = [
     body?.aiRequest,
     body?.naturalLanguage,
@@ -431,7 +497,10 @@ function extractNaturalLanguage(body) {
     body?.text
   ];
 
-  for (const candidate of candidates) {
+  for (
+    const candidate
+    of candidates
+  ) {
     const text =
       normalizeWhitespace(
         candidate
@@ -445,7 +514,9 @@ function extractNaturalLanguage(body) {
   return "";
 }
 
-function extractFilters(body) {
+function extractFilters(
+  body
+) {
   const bodyObject =
     safeObject(body);
 
@@ -466,42 +537,64 @@ function extractFilters(body) {
 
   return {
     budget:
-      cleanText(source.budget),
+      cleanText(
+        source.budget
+      ),
 
     seats:
-      cleanText(source.seats),
+      cleanText(
+        source.seats
+      ),
 
     power:
-      cleanText(source.power),
+      cleanText(
+        source.power
+      ),
 
     trunk:
-      cleanText(source.trunk),
+      cleanText(
+        source.trunk
+      ),
 
     drive:
-      cleanText(source.drive),
+      cleanText(
+        source.drive
+      ),
 
     fuel:
-      cleanText(source.fuel),
+      cleanText(
+        source.fuel
+      ),
 
     body:
-      cleanText(source.body),
+      cleanText(
+        source.body
+      ),
 
     style:
-      cleanText(source.style),
+      cleanText(
+        source.style
+      ),
 
     length:
-      cleanText(source.length),
+      cleanText(
+        source.length
+      ),
 
     year:
-      cleanText(source.year),
+      cleanText(
+        source.year
+      ),
 
     avoid:
-      cleanText(source.avoid)
+      cleanText(
+        source.avoid
+      )
   };
 }
 
 // ============================================================
-// PROMPTS
+// PROMPT
 // ============================================================
 
 function buildResearchPrompt(
@@ -509,8 +602,13 @@ function buildResearchPrompt(
   filters
 ) {
   const filterLines =
-    Object.entries(filters)
-      .filter(([, value]) => value)
+    Object.entries(
+      filters
+    )
+      .filter(
+        ([, value]) =>
+          value
+      )
       .map(
         ([key, value]) =>
           `- ${key}: ${value}`
@@ -530,12 +628,12 @@ ${filterLines || "(none)"}
 
 RESEARCH RULES:
 1. Recommend REAL production vehicles only.
-2. Prefer the newest/current generation available in the relevant market.
+2. Prefer the newest/current generation available.
 3. Consider Slovakia/EU market information when relevant.
 4. Use browser web research whenever available.
 5. Never invent a price.
 6. Never invent a URL.
-7. If a current exact official price cannot be verified, use "Cena na vyžiadanie".
+7. If an exact current official price cannot be verified, use "Cena na vyžiadanie".
 8. If no reliable price information exists, use "Cena nie je dostupná".
 9. Prefer official manufacturer sources.
 10. Power must be in kW and mechanical horsepower.
@@ -570,16 +668,19 @@ For each car return:
 - imageSearchName
 
 IMAGE RULE:
-Do not invent image URLs. The backend finds images separately.
+Do NOT invent image URLs.
+The backend will find images separately.
 
 URL RULE:
-Only include real HTTPS URLs found during research. Use null when unavailable.
+Only include real HTTPS URLs found during research.
+Use null when unavailable.
 
 Return ONLY valid JSON.
 No markdown.
 No explanation outside JSON.
 
 Expected structure:
+
 {
   "cars": [
     {
@@ -617,8 +718,13 @@ function buildRepairPrompt(
   filters
 ) {
   const filterLines =
-    Object.entries(filters)
-      .filter(([, value]) => value)
+    Object.entries(
+      filters
+    )
+      .filter(
+        ([, value]) =>
+          value
+      )
       .map(
         ([key, value]) =>
           `- ${key}: ${value}`
@@ -652,6 +758,7 @@ Requirements:
 - output JSON only
 
 Use this exact structure:
+
 {
   "cars": [
     {
@@ -687,8 +794,12 @@ Use this exact structure:
 // JSON EXTRACTION
 // ============================================================
 
-function stripCodeFence(text) {
-  return String(text || "")
+function stripCodeFence(
+  text
+) {
+  return String(
+    text || ""
+  )
     .replace(
       /^```json\s*/i,
       ""
@@ -704,23 +815,33 @@ function stripCodeFence(text) {
     .trim();
 }
 
-function extractJsonObject(text) {
+function extractJsonObject(
+  text
+) {
   if (!text) {
     return null;
   }
 
   const cleaned =
-    stripCodeFence(text);
+    stripCodeFence(
+      text
+    );
 
   try {
-    return JSON.parse(cleaned);
+    return JSON.parse(
+      cleaned
+    );
   } catch {}
 
   const firstBrace =
-    cleaned.indexOf("{");
+    cleaned.indexOf(
+      "{"
+    );
 
   const lastBrace =
-    cleaned.lastIndexOf("}");
+    cleaned.lastIndexOf(
+      "}"
+    );
 
   if (
     firstBrace >= 0 &&
@@ -733,7 +854,9 @@ function extractJsonObject(text) {
       );
 
     try {
-      return JSON.parse(candidate);
+      return JSON.parse(
+        candidate
+      );
     } catch {}
   }
 
@@ -741,10 +864,12 @@ function extractJsonObject(text) {
 }
 
 // ============================================================
-// OPENAI-COMPATIBLE RESPONSE EXTRACTION
+// AI RESPONSE EXTRACTION
 // ============================================================
 
-function extractAssistantContent(data) {
+function extractAssistantContent(
+  data
+) {
   const choice =
     data?.choices?.[0];
 
@@ -755,14 +880,22 @@ function extractAssistantContent(data) {
   const content =
     choice?.message?.content;
 
-  if (typeof content === "string") {
+  if (
+    typeof content ===
+    "string"
+  ) {
     return content;
   }
 
-  if (Array.isArray(content)) {
+  if (
+    Array.isArray(content)
+  ) {
     return content
       .map(item => {
-        if (typeof item === "string") {
+        if (
+          typeof item ===
+          "string"
+        ) {
           return item;
         }
 
@@ -779,7 +912,7 @@ function extractAssistantContent(data) {
 }
 
 // ============================================================
-// GROQ CALL
+// GROQ
 // ============================================================
 
 async function callGroq(
@@ -809,12 +942,14 @@ async function callGroq(
   const response =
     await fetchWithTimeout(
       "https://api.groq.com/openai/v1/chat/completions",
+
       {
         method: "POST",
 
         headers: {
           Authorization:
             `Bearer ${GROQ_API_KEY}`,
+
           "Content-Type":
             "application/json"
         },
@@ -846,15 +981,15 @@ async function callGroq(
 
             stream: false,
 
-            tool_choice:
-              "required",
-
             tools: [
               {
                 type:
                   "browser_search"
               }
-            ]
+            ],
+
+            tool_choice:
+              "required"
           })
       },
 
@@ -871,8 +1006,7 @@ async function callGroq(
 
   const rawText =
     await readResponseBody(
-      response,
-      rootSignal
+      response
     );
 
   let data = null;
@@ -880,7 +1014,9 @@ async function callGroq(
   try {
     data =
       rawText
-        ? JSON.parse(rawText)
+        ? JSON.parse(
+            rawText
+          )
         : null;
   } catch {
     data = null;
@@ -889,9 +1025,10 @@ async function callGroq(
   if (!response.ok) {
     const detail =
       data?.error?.message ||
-      String(
-        rawText || ""
-      ).slice(0, 700) ||
+      rawText.slice(
+        0,
+        700
+      ) ||
       `HTTP ${response.status}`;
 
     throw new Error(
@@ -914,7 +1051,7 @@ async function callGroq(
 }
 
 // ============================================================
-// OPENROUTER CALL
+// OPENROUTER
 // ============================================================
 
 async function callOpenRouter(
@@ -944,6 +1081,7 @@ async function callOpenRouter(
   const response =
     await fetchWithTimeout(
       "https://openrouter.ai/api/v1/chat/completions",
+
       {
         method: "POST",
 
@@ -1000,8 +1138,7 @@ async function callOpenRouter(
 
   const rawText =
     await readResponseBody(
-      response,
-      rootSignal
+      response
     );
 
   let data = null;
@@ -1009,7 +1146,9 @@ async function callOpenRouter(
   try {
     data =
       rawText
-        ? JSON.parse(rawText)
+        ? JSON.parse(
+            rawText
+          )
         : null;
   } catch {
     data = null;
@@ -1018,9 +1157,10 @@ async function callOpenRouter(
   if (!response.ok) {
     const detail =
       data?.error?.message ||
-      String(
-        rawText || ""
-      ).slice(0, 700) ||
+      rawText.slice(
+        0,
+        700
+      ) ||
       `HTTP ${response.status}`;
 
     throw new Error(
@@ -1064,7 +1204,7 @@ async function runAIResearch(
   const errors = [];
 
   // ----------------------------------------------------------
-  // 1. GROQ GPT-OSS 120B
+  // GROQ 120B
   // ----------------------------------------------------------
 
   try {
@@ -1090,8 +1230,9 @@ async function runAIResearch(
       };
     }
 
-    // Repair invalid JSON
-    // through Groq 20B
+    // --------------------------------------------------------
+    // GROQ 20B REPAIR
+    // --------------------------------------------------------
 
     try {
       const repairedOutput =
@@ -1121,7 +1262,9 @@ async function runAIResearch(
             "groq-20b-repair"
         };
       }
-    } catch (repairError) {
+    } catch (
+      repairError
+    ) {
       errors.push(
         `Groq repair: ${getErrorMessage(
           repairError
@@ -1141,7 +1284,7 @@ async function runAIResearch(
   }
 
   // ----------------------------------------------------------
-  // 2. GROQ GPT-OSS 20B
+  // GROQ 20B FALLBACK
   // ----------------------------------------------------------
 
   try {
@@ -1179,7 +1322,7 @@ async function runAIResearch(
   }
 
   // ----------------------------------------------------------
-  // 3. PARALLEL OPENROUTER FREE
+  // OPENROUTER FREE
   // ----------------------------------------------------------
 
   const openRouterTasks =
@@ -1208,6 +1351,7 @@ async function runAIResearch(
 
           return {
             data: parsed,
+
             provider:
               `openrouter:${model}`
           };
@@ -1225,10 +1369,16 @@ async function runAIResearch(
     return await Promise.any(
       openRouterTasks
     );
-  } catch (aggregateError) {
+  } catch (
+    aggregateError
+  ) {
+    const reasons =
+      aggregateError?.errors ||
+      [];
+
     for (
       const reason
-      of aggregateError?.errors || []
+      of reasons
     ) {
       errors.push(
         getErrorMessage(
@@ -1249,8 +1399,14 @@ async function runAIResearch(
 // CAR NORMALIZATION
 // ============================================================
 
-function mechanicalHpFromKw(kw) {
-  if (!Number.isFinite(kw)) {
+function mechanicalHpFromKw(
+  kw
+) {
+  if (
+    !Number.isFinite(
+      kw
+    )
+  ) {
     return null;
   }
 
@@ -1259,16 +1415,22 @@ function mechanicalHpFromKw(kw) {
   );
 }
 
-function normalizeProsCons(value) {
+function normalizeProsCons(
+  value
+) {
   return safeArray(value)
     .map(item =>
-      normalizeWhitespace(item)
+      normalizeWhitespace(
+        item
+      )
     )
     .filter(Boolean)
     .slice(0, 5);
 }
 
-function normalizeCar(car) {
+function normalizeCar(
+  car
+) {
   const source =
     safeObject(car);
 
@@ -1287,7 +1449,8 @@ function normalizeCar(car) {
     );
 
   if (
-    powerHpMechanical === null &&
+    powerHpMechanical ===
+      null &&
     powerKw !== null
   ) {
     powerHpMechanical =
@@ -1295,23 +1458,6 @@ function normalizeCar(car) {
         powerKw
       );
   }
-
-  const seats =
-    toInteger(
-      source.seats
-    );
-
-  const trunkLitres =
-    toInteger(
-      source.trunkLitres ??
-      source.trunk
-    );
-
-  const lengthMm =
-    toInteger(
-      source.lengthMm ??
-      source.length
-    );
 
   let modelYear =
     toInteger(
@@ -1375,11 +1521,22 @@ function normalizeCar(car) {
         source.body
       ),
 
-    seats,
+    seats:
+      toInteger(
+        source.seats
+      ),
 
-    trunkLitres,
+    trunkLitres:
+      toInteger(
+        source.trunkLitres ??
+        source.trunk
+      ),
 
-    lengthMm,
+    lengthMm:
+      toInteger(
+        source.lengthMm ??
+        source.length
+      ),
 
     officialSourceUrl:
       safeHttpsUrl(
@@ -1425,7 +1582,7 @@ function normalizeCar(car) {
 }
 
 // ============================================================
-// IMAGE FILTERS
+// IMAGE FILTER
 // ============================================================
 
 const REJECT_IMAGE_WORDS = [
@@ -1453,7 +1610,9 @@ const REJECT_IMAGE_WORDS = [
   "van interior"
 ];
 
-function isBadImageText(value) {
+function isBadImageText(
+  value
+) {
   const text =
     String(
       value || ""
@@ -1466,7 +1625,7 @@ function isBadImageText(value) {
 }
 
 // ============================================================
-// WIKIMEDIA COMMONS
+// WIKIMEDIA
 // ============================================================
 
 async function searchWikimedia(
@@ -1486,7 +1645,8 @@ async function searchWikimedia(
     new URLSearchParams({
       action: "query",
       generator: "search",
-      gsrsearch: `${query} car`,
+      gsrsearch:
+        `${query} car`,
       gsrnamespace: "6",
       gsrlimit:
         String(
@@ -1495,8 +1655,7 @@ async function searchWikimedia(
       prop: "imageinfo",
       iiprop:
         "url|mime|size",
-      iiurlwidth:
-        "1000",
+      iiurlwidth: "1000",
       format: "json",
       origin: "*"
     }).toString();
@@ -1507,7 +1666,9 @@ async function searchWikimedia(
         deadline
       );
 
-    if (available <= 100) {
+    if (
+      available <= 100
+    ) {
       return [];
     }
 
@@ -1539,13 +1700,14 @@ async function searchWikimedia(
 
     const rawText =
       await readResponseBody(
-        response,
-        rootSignal
+        response
       );
 
     const data =
       rawText
-        ? JSON.parse(rawText)
+        ? JSON.parse(
+            rawText
+          )
         : null;
 
     const pages =
@@ -1556,7 +1718,9 @@ async function searchWikimedia(
 
     for (
       const page
-      of Object.values(pages)
+      of Object.values(
+        pages
+      )
     ) {
       const title =
         cleanText(
@@ -1564,7 +1728,9 @@ async function searchWikimedia(
         );
 
       if (
-        isBadImageText(title)
+        isBadImageText(
+          title
+        )
       ) {
         continue;
       }
@@ -1690,7 +1856,9 @@ async function searchWikipedia(
         deadline
       );
 
-    if (available <= 100) {
+    if (
+      available <= 100
+    ) {
       return [];
     }
 
@@ -1722,13 +1890,14 @@ async function searchWikipedia(
 
     const rawText =
       await readResponseBody(
-        response,
-        rootSignal
+        response
       );
 
     const data =
       rawText
-        ? JSON.parse(rawText)
+        ? JSON.parse(
+            rawText
+          )
         : null;
 
     const pages =
@@ -1739,7 +1908,9 @@ async function searchWikipedia(
 
     for (
       const page
-      of Object.values(pages)
+      of Object.values(
+        pages
+      )
     ) {
       const title =
         cleanText(
@@ -1747,7 +1918,9 @@ async function searchWikipedia(
         );
 
       if (
-        isBadImageText(title)
+        isBadImageText(
+          title
+        )
       ) {
         continue;
       }
@@ -1798,7 +1971,9 @@ async function findCarImages(
 
   if (
     !query ||
-    isBadImageText(query)
+    isBadImageText(
+      query
+    )
   ) {
     return [];
   }
@@ -1899,7 +2074,9 @@ async function verifyUrl(
         deadline
       );
 
-    if (available <= 100) {
+    if (
+      available <= 100
+    ) {
       return null;
     }
 
@@ -1937,7 +2114,9 @@ async function verifyUrl(
         deadline
       );
 
-    if (available <= 100) {
+    if (
+      available <= 100
+    ) {
       return null;
     }
 
@@ -2032,10 +2211,12 @@ async function verifyCarOfficialUrls(
 }
 
 // ============================================================
-// PRICE NORMALIZATION
+// PRICE
 // ============================================================
 
-function normalizePrice(car) {
+function normalizePrice(
+  car
+) {
   const priceText =
     normalizeWhitespace(
       car.price
@@ -2105,10 +2286,12 @@ function normalizePrice(car) {
 }
 
 // ============================================================
-// FINAL VALIDATION
+// CAR VALIDATION
 // ============================================================
 
-function hasUsableCar(car) {
+function hasUsableCar(
+  car
+) {
   return Boolean(
     car &&
     car.brand &&
@@ -2116,7 +2299,9 @@ function hasUsableCar(car) {
   );
 }
 
-function deduplicateCars(cars) {
+function deduplicateCars(
+  cars
+) {
   const seen =
     new Set();
 
@@ -2137,14 +2322,17 @@ function deduplicateCars(cars) {
     }
 
     seen.add(key);
-    result.push(car);
+
+    result.push(
+      car
+    );
   }
 
   return result;
 }
 
 // ============================================================
-// FINAL RESULT
+// FINAL CAR
 // ============================================================
 
 function buildFinalCar(
@@ -2157,19 +2345,16 @@ function buildFinalCar(
       car
     );
 
-  let powerKw =
-    car.powerKw;
-
   let powerHpMechanical =
     car.powerHpMechanical;
 
   if (
-    powerKw !== null &&
+    car.powerKw !== null &&
     powerHpMechanical === null
   ) {
     powerHpMechanical =
       mechanicalHpFromKw(
-        powerKw
+        car.powerKw
       );
   }
 
@@ -2192,7 +2377,8 @@ function buildFinalCar(
     currency:
       normalizedPrice.currency,
 
-    powerKw,
+    powerKw:
+      car.powerKw,
 
     powerHpMechanical,
 
@@ -2215,13 +2401,16 @@ function buildFinalCar(
       car.lengthMm,
 
     officialSourceUrl:
-      verifiedUrls.officialSourceUrl,
+      verifiedUrls
+        .officialSourceUrl,
 
     officialPriceUrl:
-      verifiedUrls.officialPriceUrl,
+      verifiedUrls
+        .officialPriceUrl,
 
     officialConfiguratorUrl:
-      verifiedUrls.officialConfiguratorUrl,
+      verifiedUrls
+        .officialConfiguratorUrl,
 
     description:
       car.description,
@@ -2236,32 +2425,36 @@ function buildFinalCar(
       car.maintenance,
 
     images:
-      safeArray(imageData)
+      safeArray(
+        imageData
+      )
         .slice(
           0,
           MAX_IMAGE_CANDIDATES
         )
-        .map(item => ({
-          url:
-            safeHttpsUrl(
-              item?.url
-            ),
+        .map(
+          item => ({
+            url:
+              safeHttpsUrl(
+                item?.url
+              ),
 
-          originalUrl:
-            safeHttpsUrl(
-              item?.originalUrl
-            ),
+            originalUrl:
+              safeHttpsUrl(
+                item?.originalUrl
+              ),
 
-          source:
-            cleanText(
-              item?.source
-            ),
+            source:
+              cleanText(
+                item?.source
+              ),
 
-          title:
-            cleanText(
-              item?.title
-            )
-        }))
+            title:
+              cleanText(
+                item?.title
+              )
+          })
+        )
         .filter(
           item => item.url
         )
@@ -2269,10 +2462,12 @@ function buildFinalCar(
 }
 
 // ============================================================
-// AUTHENTICATION
+// SUPABASE AUTH
 // ============================================================
 
-function extractBearerToken(req) {
+function extractBearerToken(
+  req
+) {
   const auth =
     req.headers?.authorization ||
     req.headers?.Authorization ||
@@ -2289,7 +2484,8 @@ function extractBearerToken(req) {
   return (
     auth
       .slice(7)
-      .trim() || null
+      .trim() ||
+    null
   );
 }
 
@@ -2312,7 +2508,9 @@ async function verifySupabaseUser(
       deadline
     );
 
-  if (available <= 100) {
+  if (
+    available <= 100
+  ) {
     throw new Error(
       "REQUEST_HARD_TIMEOUT"
     );
@@ -2347,8 +2545,7 @@ async function verifySupabaseUser(
 
   const body =
     await readResponseBody(
-      response,
-      rootSignal
+      response
     );
 
   let data = null;
@@ -2356,7 +2553,9 @@ async function verifySupabaseUser(
   try {
     data =
       body
-        ? JSON.parse(body)
+        ? JSON.parse(
+            body
+          )
         : null;
   } catch {
     data = null;
@@ -2385,7 +2584,8 @@ export default async function handler(
   cors(res);
 
   if (
-    req.method === "OPTIONS"
+    req.method ===
+    "OPTIONS"
   ) {
     return res
       .status(204)
@@ -2393,7 +2593,8 @@ export default async function handler(
   }
 
   if (
-    req.method !== "POST"
+    req.method !==
+    "POST"
   ) {
     return json(
       res,
@@ -2424,7 +2625,7 @@ export default async function handler(
 
   try {
     // ========================================================
-    // AUTH
+    // AUTHENTICATION
     // ========================================================
 
     const accessToken =
@@ -2442,18 +2643,37 @@ export default async function handler(
     // ========================================================
     // REQUEST BODY
     // ========================================================
+    //
+    // IMPORTANT:
+    // Vercel Node.js API functions provide
+    // the POST body through req.body.
+    //
+    // We DO NOT use:
+    // await req.json()
+    //
+    // ========================================================
 
     let body;
 
     try {
       body =
-        await req.json();
-    } catch {
+        parseRequestBody(
+          req
+        );
+    } catch (error) {
+      console.error(
+        "CARMATCH AI BODY ERROR:",
+        getErrorMessage(
+          error
+        )
+      );
+
       return json(
         res,
         400,
         {
           ok: false,
+
           error:
             "Neplatné údaje požiadavky."
         }
@@ -2481,6 +2701,7 @@ export default async function handler(
         400,
         {
           ok: false,
+
           error:
             "Zadajte požiadavku alebo aspoň jeden filter."
         }
@@ -2494,9 +2715,9 @@ export default async function handler(
     // TEST MODE:
     // SEARCH_LIMIT_ENABLED = false
     //
-    // No usage RPC is called.
-    // Nothing is consumed.
-    // No refund is needed.
+    // No Supabase usage RPC.
+    // No search consumed.
+    // No refund required.
     // ========================================================
 
     const remaining = 5;
@@ -2576,7 +2797,7 @@ export default async function handler(
       );
 
     // ========================================================
-    // FINAL RESPONSE
+    // SUCCESS
     // ========================================================
 
     return json(
