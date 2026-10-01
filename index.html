@@ -4,23 +4,30 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <meta name="theme-color" content="#ffffff">
+  <title>CARMATCH AI</title>
+
   <meta
     name="description"
     content="CARMATCH AI – nájdite auto podľa svojich požiadaviek."
   >
 
-  <title>CARMATCH AI</title>
+  <meta name="theme-color" content="#ffffff">
 
   <link rel="stylesheet" href="style.css?v=11">
 
-  <!-- Supabase -->
+  <!-- =========================================================
+       SUPABASE
+  ========================================================== -->
+
   <script
     src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"
     defer
   ></script>
 
-  <!-- CARMATCH AI konfigurácia -->
+  <!-- =========================================================
+       CARMATCH AI CONFIG
+  ========================================================== -->
+
   <script>
     window.CARMATCH_CONFIG = {
       supabaseUrl: "https://ltqjgvrphjinsjvyaxrb.supabase.co",
@@ -29,37 +36,23 @@
     };
   </script>
 
-  <!--
-    POISTKA:
-    Tlačidlo nesmie zostať zamknuté len preto,
-    že sa JS alebo Supabase načíta neskôr.
-  -->
-  <script>
-    document.addEventListener("DOMContentLoaded", function () {
-      const button = document.getElementById("searchButton");
-
-      if (button) {
-        button.disabled = false;
-      }
-
-      const status = document.getElementById("statusText");
-
-      if (status && status.textContent.includes("Inicializujem")) {
-        status.textContent = "CARMATCH AI je pripravený.";
-      }
-    });
-  </script>
 </head>
 
 <body>
 
   <div class="app-shell">
 
-    <!-- HEADER -->
+    <!-- =======================================================
+         HEADER
+    ======================================================== -->
+
     <header class="topbar">
 
       <div class="brand">
-        <div class="brand-title">CARMATCH AI</div>
+        <div class="brand-title">
+          CARMATCH AI
+        </div>
+
         <div class="brand-subtitle">
           Nájdite auto podľa svojich požiadaviek
         </div>
@@ -71,22 +64,31 @@
           id="themeToggle"
           class="theme-toggle"
           type="button"
-          aria-label="Prepnúť režim"
+          aria-label="Prepnúť svetlý alebo tmavý režim"
         >
           ◐
         </button>
 
       </div>
+
     </header>
 
 
-    <!-- MAIN -->
+    <!-- =======================================================
+         MAIN
+    ======================================================== -->
+
     <main class="main-content">
 
-      <!-- SEARCH CARD -->
+      <!-- =====================================================
+           SEARCH CARD
+      ====================================================== -->
+
       <section class="search-card">
 
-        <h1>Aké auto hľadáte?</h1>
+        <h1>
+          Aké auto hľadáte?
+        </h1>
 
         <p class="description">
           Napíšte prirodzene, čo od auta očakávate.
@@ -94,7 +96,10 @@
         </p>
 
 
-        <!-- SEARCH TEXTAREA -->
+        <!-- ===================================================
+             NATURAL LANGUAGE SEARCH
+        ==================================================== -->
+
         <div class="input-group">
 
           <textarea
@@ -117,7 +122,331 @@
         </div>
 
 
-        <!-- SEARCH BUTTON -->
+        <!-- ===================================================
+             FILTERS
+        ==================================================== -->
+
+        <div class="filters">
+
+          <div class="filters-header">
+            <h2>Filtre</h2>
+          </div>
+
+
+          <div class="filter-grid">
+
+
+            <!-- ROZPOČET -->
+
+            <div class="filter-item">
+
+              <label
+                class="filter-label"
+                for="budgetFilter"
+              >
+                Maximálna cena
+              </label>
+
+              <select
+                id="budgetFilter"
+                class="filter-control"
+              >
+                <option value="">Ľubovoľná</option>
+                <option value="15000">15 000 €</option>
+                <option value="20000">20 000 €</option>
+                <option value="25000">25 000 €</option>
+                <option value="30000">30 000 €</option>
+                <option value="40000">40 000 €</option>
+                <option value="50000">50 000 €</option>
+                <option value="60000">60 000 €</option>
+                <option value="70000">70 000 €</option>
+                <option value="80000">80 000 €</option>
+                <option value="100000">100 000 €</option>
+              </select>
+
+            </div>
+
+
+            <!-- POČET MIEST -->
+
+            <div class="filter-item">
+
+              <label
+                class="filter-label"
+                for="seatsFilter"
+              >
+                Počet miest
+              </label>
+
+              <select
+                id="seatsFilter"
+                class="filter-control"
+              >
+                <option value="">Ľubovoľný</option>
+                <option value="2">2</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7+</option>
+              </select>
+
+            </div>
+
+
+            <!-- VÝKON -->
+
+            <div class="filter-item">
+
+              <label
+                class="filter-label"
+                for="powerFilter"
+              >
+                Minimálny výkon
+              </label>
+
+              <select
+                id="powerFilter"
+                class="filter-control"
+              >
+                <option value="">Ľubovoľný</option>
+                <option value="75">75 kW</option>
+                <option value="100">100 kW</option>
+                <option value="120">120 kW</option>
+                <option value="150">150 kW</option>
+                <option value="180">180 kW</option>
+                <option value="200">200 kW</option>
+                <option value="250">250 kW</option>
+                <option value="300">300 kW</option>
+                <option value="400">400 kW</option>
+              </select>
+
+            </div>
+
+
+            <!-- KUFR -->
+
+            <div class="filter-item">
+
+              <label
+                class="filter-label"
+                for="trunkFilter"
+              >
+                Minimálny kufor
+              </label>
+
+              <select
+                id="trunkFilter"
+                class="filter-control"
+              >
+                <option value="">Ľubovoľný</option>
+                <option value="300">300 l</option>
+                <option value="400">400 l</option>
+                <option value="500">500 l</option>
+                <option value="600">600 l</option>
+                <option value="700">700 l</option>
+                <option value="800">800 l</option>
+                <option value="1000">1000 l</option>
+              </select>
+
+            </div>
+
+
+            <!-- POHON -->
+
+            <div class="filter-item">
+
+              <label
+                class="filter-label"
+                for="driveFilter"
+              >
+                Pohon
+              </label>
+
+              <select
+                id="driveFilter"
+                class="filter-control"
+              >
+                <option value="">Ľubovoľný</option>
+                <option value="FWD">Predný náhon</option>
+                <option value="RWD">Zadný náhon</option>
+                <option value="AWD">4×4 / AWD</option>
+              </select>
+
+            </div>
+
+
+            <!-- PALIVO -->
+
+            <div class="filter-item">
+
+              <label
+                class="filter-label"
+                for="fuelFilter"
+              >
+                Palivo
+              </label>
+
+              <select
+                id="fuelFilter"
+                class="filter-control"
+              >
+                <option value="">Ľubovoľné</option>
+                <option value="petrol">Benzín</option>
+                <option value="diesel">Nafta</option>
+                <option value="hybrid">Hybrid</option>
+                <option value="plug-in hybrid">Plug-in hybrid</option>
+                <option value="electric">Elektromobil</option>
+                <option value="hydrogen">Vodík</option>
+              </select>
+
+            </div>
+
+
+            <!-- KAROSÉRIA -->
+
+            <div class="filter-item">
+
+              <label
+                class="filter-label"
+                for="bodyFilter"
+              >
+                Karoséria
+              </label>
+
+              <select
+                id="bodyFilter"
+                class="filter-control"
+              >
+                <option value="">Ľubovoľná</option>
+                <option value="SUV">SUV</option>
+                <option value="estate">Kombi</option>
+                <option value="sedan">Sedan</option>
+                <option value="hatchback">Hatchback</option>
+                <option value="coupe">Kupé</option>
+                <option value="convertible">Kabriolet</option>
+                <option value="wagon">Liftback</option>
+                <option value="mpv">MPV</option>
+                <option value="pickup">Pickup</option>
+              </select>
+
+            </div>
+
+
+            <!-- ŠTÝL -->
+
+            <div class="filter-item">
+
+              <label
+                class="filter-label"
+                for="styleFilter"
+              >
+                Štýl
+              </label>
+
+              <select
+                id="styleFilter"
+                class="filter-control"
+              >
+                <option value="">Ľubovoľný</option>
+                <option value="sporty">Športový</option>
+                <option value="luxury">Luxusný</option>
+                <option value="sport-luxury">Športovo-luxusný</option>
+                <option value="family">Rodinný</option>
+                <option value="premium">Prémiový</option>
+                <option value="offroad">Off-road</option>
+                <option value="economical">Úsporný</option>
+              </select>
+
+            </div>
+
+
+            <!-- DĹŽKA -->
+
+            <div class="filter-item">
+
+              <label
+                class="filter-label"
+                for="lengthFilter"
+              >
+                Maximálna dĺžka
+              </label>
+
+              <select
+                id="lengthFilter"
+                class="filter-control"
+              >
+                <option value="">Ľubovoľná</option>
+                <option value="400">4,00 m</option>
+                <option value="425">4,25 m</option>
+                <option value="450">4,50 m</option>
+                <option value="475">4,75 m</option>
+                <option value="500">5,00 m</option>
+                <option value="525">5,25 m</option>
+              </select>
+
+            </div>
+
+
+            <!-- ROK -->
+
+            <div class="filter-item">
+
+              <label
+                class="filter-label"
+                for="yearFilter"
+              >
+                Minimálny modelový rok
+              </label>
+
+              <select
+                id="yearFilter"
+                class="filter-control"
+              >
+                <option value="">Ľubovoľný</option>
+                <option value="2020">2020+</option>
+                <option value="2021">2021+</option>
+                <option value="2022">2022+</option>
+                <option value="2023">2023+</option>
+                <option value="2024">2024+</option>
+                <option value="2025">2025+</option>
+                <option value="2026">2026+</option>
+                <option value="2027">2027+</option>
+              </select>
+
+            </div>
+
+
+            <!-- ZNAČKY, KTORÝM SA VYHNÚŤ -->
+
+            <div class="filter-item filter-item-wide">
+
+              <label
+                class="filter-label"
+                for="avoidBrands"
+              >
+                Značky, ktorým sa chcete vyhnúť
+              </label>
+
+              <input
+                id="avoidBrands"
+                class="filter-control"
+                type="text"
+                maxlength="500"
+                placeholder="Napríklad: Dacia, Fiat"
+                autocomplete="off"
+              >
+
+            </div>
+
+          </div>
+
+        </div>
+
+
+        <!-- ===================================================
+             SEARCH BUTTON
+        ==================================================== -->
+
         <button
           id="searchButton"
           class="find"
@@ -127,7 +456,10 @@
         </button>
 
 
-        <!-- HELPER -->
+        <!-- ===================================================
+             HELPER
+        ==================================================== -->
+
         <div
           id="helperText"
           class="helper-text"
@@ -136,17 +468,23 @@
         </div>
 
 
-        <!-- STATUS -->
+        <!-- ===================================================
+             STATUS
+        ==================================================== -->
+
         <div
           id="statusText"
           class="status"
           aria-live="polite"
         >
-          Inicializujem CARMATCH AI...
+          CARMATCH AI je pripravený.
         </div>
 
 
-        <!-- USAGE -->
+        <!-- ===================================================
+             DAILY USAGE
+        ==================================================== -->
+
         <div
           id="usageText"
           class="usage"
@@ -157,7 +495,10 @@
       </section>
 
 
-      <!-- RESULTS -->
+      <!-- =====================================================
+           RESULTS
+      ====================================================== -->
+
       <section
         id="resultsSection"
         class="results-section"
@@ -166,7 +507,9 @@
 
         <div class="results-header">
 
-          <h2>Odporúčané autá</h2>
+          <h2>
+            Odporúčané autá
+          </h2>
 
           <div
             id="resultsCount"
@@ -178,7 +521,6 @@
         </div>
 
 
-        <!-- RESULTS CONTAINER -->
         <div
           id="results"
           class="results"
@@ -187,7 +529,10 @@
       </section>
 
 
-      <!-- EMPTY / ERROR MESSAGE -->
+      <!-- =====================================================
+           MESSAGE / ERROR
+      ====================================================== -->
+
       <section
         id="messageSection"
         class="message-section"
@@ -204,7 +549,10 @@
     </main>
 
 
-    <!-- FOOTER -->
+    <!-- =======================================================
+         FOOTER
+    ======================================================== -->
+
     <footer class="footer">
 
       <div>
@@ -220,40 +568,46 @@
   </div>
 
 
-  <!--
-    FALLBACK:
-    Ak by app.js nebol načítaný, stránka sa nebude tváriť,
-    že je stále v procese inicializácie.
-  -->
+  <!-- =========================================================
+       FRONTEND
+  ========================================================== -->
+
+  <script
+    src="app.js?v=14"
+    defer
+  ></script>
+
+
+  <!-- =========================================================
+       SAFETY FALLBACK
+       Nikdy nenechá tlačidlo zostať disabled iba kvôli HTML.
+  ========================================================== -->
+
   <script>
-    window.addEventListener("load", function () {
+    window.addEventListener("DOMContentLoaded", function () {
 
       const button = document.getElementById("searchButton");
-      const status = document.getElementById("statusText");
 
       if (button) {
         button.disabled = false;
       }
 
-      if (status && status.textContent.includes("Inicializujem")) {
-        status.textContent = "CARMATCH AI je pripravený.";
+      const input = document.getElementById("searchInput");
+      const counter = document.getElementById("charCount");
+
+      if (input && counter) {
+
+        const updateCounter = () => {
+          counter.textContent = `${input.value.length} / 3000`;
+        };
+
+        updateCounter();
+
+        input.addEventListener("input", updateCounter);
       }
 
     });
   </script>
 
-
-  <!-- CARMATCH AI JS -->
-  <script
-    src="app.js?v=13"
-    defer
-  ></script>
-
 </body>
 </html>
-
-::: 񟿿
-
-Teraz sprav toto: v GitHube úplne vymaž starý obsah "index.html", vlož tento celý kód, klikni Commit changes a potom otvor CARMATCH AI znova s tvrdým obnovením stránky.
-
-Dôležité: v tomto súbore som zatiaľ ponechal tvoju aktuálnu Supabase URL "ltqjgvrphjinsjvyaxrb.supabase.co". V ďalšom kroku by sme mali skontrolovať, či je to naozaj ten istý Supabase projekt, ktorý si práve nastavoval.
