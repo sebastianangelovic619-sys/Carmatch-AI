@@ -1,11 +1,13 @@
 // ============================================================
-// CARMATCH AI - FINAL FRONTEND v12
+// CARMATCH AI - FINAL FRONTEND v12.1
 // ============================================================
 // - Exactly 3 cars
 // - Supabase anonymous authentication
 // - 5 searches/day UI
 // - Search refund support
 // - Robust API error handling
+// - API timeout protection
+// - Failed fetch protection
 // - No [object Object]
 // - Slovak UI
 // - Image candidates with model matching
@@ -85,11 +87,10 @@ function safeDisplayText(value, fallback = "") {
           key
         )
       ) {
-        const result =
-          safeDisplayText(
-            value[key],
-            ""
-          );
+        const result = safeDisplayText(
+          value[key],
+          ""
+        );
 
         if (result) {
           return result;
@@ -132,25 +133,20 @@ function escapeAttribute(value) {
 // ============================================================
 
 function safeHTTPSUrl(value) {
-  const url =
-    safeDisplayText(value, "");
+  const url = safeDisplayText(value, "");
 
   if (!url) {
     return "";
   }
 
   try {
-    const parsed =
-      new URL(url);
+    const parsed = new URL(url);
 
-    if (
-      parsed.protocol !== "https:"
-    ) {
+    if (parsed.protocol !== "https:") {
       return "";
     }
 
     return parsed.href;
-
   } catch {
     return "";
   }
@@ -169,24 +165,20 @@ function numericValue(value) {
     return value;
   }
 
-  if (
-    typeof value !== "string"
-  ) {
+  if (typeof value !== "string") {
     return null;
   }
 
-  const cleaned =
-    value
-      .replace(/\s/g, "")
-      .replace(",", ".")
-      .replace(/[^\d.-]/g, "");
+  const cleaned = value
+    .replace(/\s/g, "")
+    .replace(",", ".")
+    .replace(/[^\d.-]/g, "");
 
   if (!cleaned) {
     return null;
   }
 
-  const number =
-    Number(cleaned);
+  const number = Number(cleaned);
 
   return Number.isFinite(number)
     ? number
@@ -207,42 +199,28 @@ function formatPrice(value) {
     return "Cena nie je dostupná";
   }
 
-  const raw =
-    safeDisplayText(
-      value,
-      ""
-    );
+  const raw = safeDisplayText(value, "");
 
   if (!raw) {
     return "Cena nie je dostupná";
   }
 
-  const lowered =
-    raw.toLowerCase();
+  const lowered = raw.toLowerCase();
 
   if (
-    lowered.includes(
-      "cena na vyžiadanie"
-    ) ||
-    lowered.includes(
-      "cena na vyziadanie"
-    )
+    lowered.includes("cena na vyžiadanie") ||
+    lowered.includes("cena na vyziadanie")
   ) {
     return "Cena na vyžiadanie";
   }
 
   if (
-    lowered.includes(
-      "cena nie je dostupná"
-    ) ||
-    lowered.includes(
-      "cena nie je dostupna"
-    )
+    lowered.includes("cena nie je dostupná") ||
+    lowered.includes("cena nie je dostupna")
   ) {
     return "Cena nie je dostupná";
   }
 
-  // Ak už obsahuje menu, nemeníme ho.
   if (
     raw.includes("€") ||
     /\bEUR\b/i.test(raw) ||
@@ -253,18 +231,13 @@ function formatPrice(value) {
     return raw;
   }
 
-  const number =
-    numericValue(raw);
+  const number = numericValue(raw);
 
   if (number !== null) {
     return (
-      new Intl.NumberFormat(
-        "sk-SK",
-        {
-          maximumFractionDigits: 0
-        }
-      ).format(number) +
-      " €"
+      new Intl.NumberFormat("sk-SK", {
+        maximumFractionDigits: 0
+      }).format(number) + " €"
     );
   }
 
@@ -273,23 +246,18 @@ function formatPrice(value) {
 
 
 function formatPower(car) {
-  const kw =
-    numericValue(
-      car?.powerKw ??
-      car?.kw
-    );
+  const kw = numericValue(
+    car?.powerKw ??
+    car?.kw
+  );
 
-  const hp =
-    numericValue(
-      car?.powerHpMechanical ??
-      car?.mechanicalHp ??
-      car?.hp
-    );
+  const hp = numericValue(
+    car?.powerHpMechanical ??
+    car?.mechanicalHp ??
+    car?.hp
+  );
 
-  if (
-    kw !== null &&
-    hp !== null
-  ) {
+  if (kw !== null && hp !== null) {
     return (
       `${formatNumber(kw)} kW / ` +
       `${formatNumber(hp)} HP`
@@ -304,12 +272,10 @@ function formatPower(car) {
     return `${formatNumber(hp)} HP`;
   }
 
-  // Fallback pre starší formát backendu.
-  const oldPower =
-    safeDisplayText(
-      car?.power,
-      ""
-    );
+  const oldPower = safeDisplayText(
+    car?.power,
+    ""
+  );
 
   if (!oldPower) {
     return "";
@@ -322,10 +288,7 @@ function formatPower(car) {
     return oldPower;
   }
 
-  const oldNumber =
-    numericValue(
-      oldPower
-    );
+  const oldNumber = numericValue(oldPower);
 
   if (oldNumber !== null) {
     return `${formatNumber(oldNumber)} kW`;
@@ -336,19 +299,15 @@ function formatPower(car) {
 
 
 function formatNumber(value) {
-  const number =
-    numericValue(value);
+  const number = numericValue(value);
 
   if (number === null) {
     return "";
   }
 
-  return new Intl.NumberFormat(
-    "sk-SK",
-    {
-      maximumFractionDigits: 0
-    }
-  ).format(number);
+  return new Intl.NumberFormat("sk-SK", {
+    maximumFractionDigits: 0
+  }).format(number);
 }
 
 
@@ -361,11 +320,7 @@ function formatTrunk(value) {
     return "";
   }
 
-  const raw =
-    safeDisplayText(
-      value,
-      ""
-    );
+  const raw = safeDisplayText(value, "");
 
   if (!raw) {
     return "";
@@ -378,8 +333,7 @@ function formatTrunk(value) {
     return raw;
   }
 
-  const number =
-    numericValue(raw);
+  const number = numericValue(raw);
 
   if (number !== null) {
     return `${formatNumber(number)} l`;
@@ -390,8 +344,7 @@ function formatTrunk(value) {
 
 
 function formatText(value) {
-  const text =
-    safeDisplayText(value, "");
+  const text = safeDisplayText(value, "");
 
   if (!text) {
     return "";
@@ -406,26 +359,20 @@ function formatText(value) {
 // STATUS
 // ============================================================
 
-function setStatus(
-  message,
-  type = ""
-) {
-  const status =
-    $("status");
+function setStatus(message, type = "") {
+  const status = $("status");
 
   if (!status) {
     return;
   }
 
-  status.className =
-    "status";
+  status.className = "status";
 
   if (type) {
     status.classList.add(type);
   }
 
-  status.textContent =
-    safeDisplayText(message);
+  status.textContent = safeDisplayText(message);
 }
 
 
@@ -434,23 +381,19 @@ function setStatus(
 // ============================================================
 
 function setButtonBusy(busy) {
-  const button =
-    $("searchButton");
+  const button = $("searchButton");
 
   if (!button) {
     return;
   }
 
-  button.disabled =
-    busy || !currentSession;
+  button.disabled = busy || !currentSession;
 
   if (busy) {
     button.dataset.originalText =
-      button.textContent ||
-      "Nájsť auto";
+      button.textContent || "Nájsť auto";
 
-    button.textContent =
-      "Vyhľadávam...";
+    button.textContent = "Vyhľadávam...";
   } else {
     button.textContent =
       button.dataset.originalText ||
@@ -463,51 +406,37 @@ function setButtonBusy(busy) {
 // USAGE
 // ============================================================
 
-function updateUsage(
-  remaining
-) {
-  const usageText =
-    $("usageText");
-
-  const usageDot =
-    $("usageDot");
+function updateUsage(remaining) {
+  const usageText = $("usageText");
+  const usageDot = $("usageDot");
 
   if (!usageText) {
     return;
   }
 
-  let value =
-    Number(remaining);
+  let value = Number(remaining);
 
   if (!Number.isFinite(value)) {
     value = 5;
   }
 
-  value =
-    Math.max(
-      0,
-      Math.min(5, value)
-    );
+  value = Math.max(
+    0,
+    Math.min(5, value)
+  );
 
   usageText.textContent =
     `${value} / 5 vyhľadávaní dnes`;
 
   if (usageDot) {
-    usageDot.className =
-      "usage-dot";
+    usageDot.className = "usage-dot";
 
     if (value <= 0) {
-      usageDot.classList.add(
-        "empty"
-      );
+      usageDot.classList.add("empty");
     } else if (value <= 1) {
-      usageDot.classList.add(
-        "low"
-      );
+      usageDot.classList.add("low");
     } else {
-      usageDot.classList.add(
-        "available"
-      );
+      usageDot.classList.add("available");
     }
   }
 }
@@ -517,19 +446,15 @@ function updateUsage(
 // THEME
 // ============================================================
 
-function updateThemeButton(
-  theme
-) {
-  const button =
-    $("themeToggle");
+function updateThemeButton(theme) {
+  const button = $("themeToggle");
 
   if (!button) {
     return;
   }
 
   if (theme === "dark") {
-    button.textContent =
-      "☀️";
+    button.textContent = "☀️";
 
     button.setAttribute(
       "aria-label",
@@ -540,10 +465,8 @@ function updateThemeButton(
       "title",
       "Svetlý režim"
     );
-
   } else {
-    button.textContent =
-      "🌙";
+    button.textContent = "🌙";
 
     button.setAttribute(
       "aria-label",
@@ -562,10 +485,9 @@ function initializeTheme() {
   let savedTheme = null;
 
   try {
-    savedTheme =
-      localStorage.getItem(
-        "carmatch-theme"
-      );
+    savedTheme = localStorage.getItem(
+      "carmatch-theme"
+    );
   } catch {
     savedTheme = null;
   }
@@ -576,8 +498,7 @@ function initializeTheme() {
     savedTheme === "dark" ||
     savedTheme === "light"
   ) {
-    theme =
-      savedTheme;
+    theme = savedTheme;
   } else {
     theme =
       window.matchMedia &&
@@ -588,35 +509,30 @@ function initializeTheme() {
         : "light";
   }
 
-  document.documentElement
-    .setAttribute(
-      "data-theme",
-      theme
-    );
-
-  updateThemeButton(
+  document.documentElement.setAttribute(
+    "data-theme",
     theme
   );
+
+  updateThemeButton(theme);
 }
 
 
 function toggleTheme() {
   const currentTheme =
-    document.documentElement
-      .getAttribute(
-        "data-theme"
-      ) || "light";
+    document.documentElement.getAttribute(
+      "data-theme"
+    ) || "light";
 
   const newTheme =
     currentTheme === "dark"
       ? "light"
       : "dark";
 
-  document.documentElement
-    .setAttribute(
-      "data-theme",
-      newTheme
-    );
+  document.documentElement.setAttribute(
+    "data-theme",
+    newTheme
+  );
 
   try {
     localStorage.setItem(
@@ -627,9 +543,7 @@ function toggleTheme() {
     // Ignorujeme prípadný problém localStorage.
   }
 
-  updateThemeButton(
-    newTheme
-  );
+  updateThemeButton(newTheme);
 }
 
 
@@ -638,8 +552,7 @@ function toggleTheme() {
 // ============================================================
 
 async function waitForSupabase() {
-  const maxAttempts =
-    100;
+  const maxAttempts = 100;
 
   for (
     let i = 0;
@@ -648,19 +561,14 @@ async function waitForSupabase() {
   ) {
     if (
       window.supabase &&
-      typeof window.supabase
-        .createClient ===
+      typeof window.supabase.createClient ===
         "function"
     ) {
       return true;
     }
 
-    await new Promise(
-      resolve =>
-        setTimeout(
-          resolve,
-          100
-        )
+    await new Promise(resolve =>
+      setTimeout(resolve, 100)
     );
   }
 
@@ -722,16 +630,14 @@ async function initializeAnonymousUser() {
   }
 
   const authResult =
-    await client.auth
-      .signInAnonymously();
+    await client.auth.signInAnonymously();
 
   if (authResult.error) {
     throw authResult.error;
   }
 
   currentSession =
-    authResult.data?.session ||
-    null;
+    authResult.data?.session || null;
 
   if (!currentSession) {
     throw new Error(
@@ -753,16 +659,15 @@ async function getAccessToken() {
   }
 
   const result =
-    await supabaseClient.auth
-      .getSession();
+    await supabaseClient.auth.getSession();
 
   if (result.error) {
     return "";
   }
 
   return (
-    result.data?.session
-      ?.access_token || ""
+    result.data?.session?.access_token ||
+    ""
   );
 }
 
@@ -772,8 +677,7 @@ async function getAccessToken() {
 // ============================================================
 
 function value(id) {
-  const element =
-    $(id);
+  const element = $(id);
 
   if (!element) {
     return "";
@@ -787,50 +691,26 @@ function value(id) {
 
 
 function getNaturalLanguage() {
-  return value(
-    "aiRequest"
-  );
+  return value("aiRequest");
 }
 
 
 function collectRequest() {
   return {
-    request:
-      getNaturalLanguage(),
+    request: getNaturalLanguage(),
 
     filters: {
-      budget:
-        value("budget"),
-
-      seats:
-        value("seats"),
-
-      power:
-        value("power"),
-
-      trunk:
-        value("trunk"),
-
-      drive:
-        value("drive"),
-
-      fuel:
-        value("fuel"),
-
-      body:
-        value("body"),
-
-      style:
-        value("style"),
-
-      length:
-        value("length"),
-
-      year:
-        value("year"),
-
-      avoid:
-        value("avoid")
+      budget: value("budget"),
+      seats: value("seats"),
+      power: value("power"),
+      trunk: value("trunk"),
+      drive: value("drive"),
+      fuel: value("fuel"),
+      body: value("body"),
+      style: value("style"),
+      length: value("length"),
+      year: value("year"),
+      avoid: value("avoid")
     }
   };
 }
@@ -849,30 +729,20 @@ function normalizeCars(data) {
     return data;
   }
 
-  if (
-    Array.isArray(data.cars)
-  ) {
+  if (Array.isArray(data.cars)) {
     return data.cars;
   }
 
-  if (
-    Array.isArray(data.results)
-  ) {
+  if (Array.isArray(data.results)) {
     return data.results;
   }
 
-  if (
-    Array.isArray(
-      data.recommendations
-    )
-  ) {
+  if (Array.isArray(data.recommendations)) {
     return data.recommendations;
   }
 
   if (data.data) {
-    return normalizeCars(
-      data.data
-    );
+    return normalizeCars(data.data);
   }
 
   return [];
@@ -883,14 +753,9 @@ function normalizeCars(data) {
 // IMAGE HELPERS
 // ============================================================
 
-function normalizeImageCandidate(
-  item
-) {
-  if (
-    typeof item === "string"
-  ) {
-    const url =
-      safeHTTPSUrl(item);
+function normalizeImageCandidate(item) {
+  if (typeof item === "string") {
+    const url = safeHTTPSUrl(item);
 
     if (!url) {
       return null;
@@ -910,12 +775,11 @@ function normalizeImageCandidate(
     return null;
   }
 
-  const url =
-    safeHTTPSUrl(
-      item.url ||
-      item.image ||
-      item.imageUrl
-    );
+  const url = safeHTTPSUrl(
+    item.url ||
+    item.image ||
+    item.imageUrl
+  );
 
   if (!url) {
     return null;
@@ -924,51 +788,45 @@ function normalizeImageCandidate(
   return {
     url,
 
-    title:
-      safeDisplayText(
-        item.title ||
-        item.name ||
-        "",
-        ""
-      ),
+    title: safeDisplayText(
+      item.title ||
+      item.name ||
+      "",
+      ""
+    ),
 
-    source:
-      safeDisplayText(
-        item.source ||
-        "",
-        ""
-      )
+    source: safeDisplayText(
+      item.source ||
+      "",
+      ""
+    )
   };
 }
 
 
 function getCarIdentityTokens(car) {
-  const brand =
-    safeDisplayText(
-      car?.brand,
-      ""
-    );
+  const brand = safeDisplayText(
+    car?.brand,
+    ""
+  );
 
-  const model =
-    safeDisplayText(
-      car?.model ||
-      car?.name ||
-      car?.title,
-      ""
-    );
+  const model = safeDisplayText(
+    car?.model ||
+    car?.name ||
+    car?.title,
+    ""
+  );
 
-  const generation =
-    safeDisplayText(
-      car?.generation,
-      ""
-    );
+  const generation = safeDisplayText(
+    car?.generation,
+    ""
+  );
 
-  const year =
-    safeDisplayText(
-      car?.modelYear ||
-      car?.year,
-      ""
-    );
+  const year = safeDisplayText(
+    car?.modelYear ||
+    car?.year,
+    ""
+  );
 
   const combined =
     `${brand} ${model} ${generation} ${year}`
@@ -984,46 +842,30 @@ function getCarIdentityTokens(car) {
 }
 
 
-function normalizeSearchText(
-  value
-) {
-  return safeDisplayText(
-    value,
-    ""
-  )
+function normalizeSearchText(value) {
+  return safeDisplayText(value, "")
     .toLowerCase()
     .replace(
       /[^a-z0-9áäčďéíĺľňóôŕšťúýž\s-]/gi,
       " "
     )
-    .replace(
-      /\s+/g,
-      " "
-    )
+    .replace(/\s+/g, " ")
     .trim();
 }
 
 
 function tokenList(value) {
-  return normalizeSearchText(
-    value
-  )
+  return normalizeSearchText(value)
     .split(/\s+/)
     .filter(
-      token =>
-        token.length >= 2
+      token => token.length >= 2
     );
 }
 
 
-function scoreImageCandidate(
-  candidate,
-  car
-) {
+function scoreImageCandidate(candidate, car) {
   const identity =
-    getCarIdentityTokens(
-      car
-    );
+    getCarIdentityTokens(car);
 
   const title =
     normalizeSearchText(
@@ -1036,83 +878,47 @@ function scoreImageCandidate(
     );
 
   if (!title) {
-    // Starší backend môže posielať
-    // iba URL bez metadát.
     return 0;
   }
 
   let score = 0;
 
   const brandTokens =
-    tokenList(
-      identity.brand
-    );
+    tokenList(identity.brand);
 
   const modelTokens =
-    tokenList(
-      identity.model
-    );
+    tokenList(identity.model);
 
   const generationTokens =
-    tokenList(
-      identity.generation
-    );
+    tokenList(identity.generation);
 
   const yearTokens =
-    tokenList(
-      identity.year
-    );
+    tokenList(identity.year);
 
-  // Značka.
-  for (
-    const token
-    of brandTokens
-  ) {
-    if (
-      title.includes(token)
-    ) {
+  for (const token of brandTokens) {
+    if (title.includes(token)) {
       score += 8;
     }
   }
 
-  // Model.
-  for (
-    const token
-    of modelTokens
-  ) {
-    if (
-      title.includes(token)
-    ) {
+  for (const token of modelTokens) {
+    if (title.includes(token)) {
       score += 15;
     }
   }
 
-  // Generácia.
-  for (
-    const token
-    of generationTokens
-  ) {
-    if (
-      title.includes(token)
-    ) {
+  for (const token of generationTokens) {
+    if (title.includes(token)) {
       score += 12;
     }
   }
 
-  // Modelový rok.
-  for (
-    const token
-    of yearTokens
-  ) {
-    if (
-      title.includes(token)
-    ) {
+  for (const token of yearTokens) {
+    if (title.includes(token)) {
       score += 5;
     }
   }
 
-  // Ak je v názve zdroja jasne uvedený
-  // iný typ vozidla, znižujeme skóre.
   const badWords = [
     "logo",
     "interior",
@@ -1127,31 +933,17 @@ function scoreImageCandidate(
     "render"
   ];
 
-  for (
-    const word
-    of badWords
-  ) {
-    if (
-      title.includes(word)
-    ) {
+  for (const word of badWords) {
+    if (title.includes(word)) {
       score -= 100;
     }
   }
 
-  // Malý bonus pre Wikimedia/Wikipedia.
-  if (
-    source.includes(
-      "wikimedia"
-    )
-  ) {
+  if (source.includes("wikimedia")) {
     score += 1;
   }
 
-  if (
-    source.includes(
-      "wikipedia"
-    )
-  ) {
+  if (source.includes("wikipedia")) {
     score += 1;
   }
 
@@ -1169,18 +961,12 @@ function getImageCandidates(car) {
     car?.photoUrl
   ];
 
-  for (
-    const item of possible
-  ) {
+  for (const item of possible) {
     const normalized =
-      normalizeImageCandidate(
-        item
-      );
+      normalizeImageCandidate(item);
 
     if (normalized) {
-      candidates.push(
-        normalized
-      );
+      candidates.push(normalized);
     }
   }
 
@@ -1190,120 +976,73 @@ function getImageCandidates(car) {
     car?.photos
   ];
 
-  for (
-    const array of arrays
-  ) {
+  for (const array of arrays) {
     if (!Array.isArray(array)) {
       continue;
     }
 
-    for (
-      const item
-      of array
-    ) {
+    for (const item of array) {
       const normalized =
-        normalizeImageCandidate(
-          item
-        );
+        normalizeImageCandidate(item);
 
       if (normalized) {
-        candidates.push(
-          normalized
-        );
+        candidates.push(normalized);
       }
     }
   }
 
-  const unique =
-    [];
+  const unique = [];
+  const seen = new Set();
 
-  const seen =
-    new Set();
-
-  for (
-    const candidate
-    of candidates
-  ) {
-    if (
-      seen.has(
-        candidate.url
-      )
-    ) {
+  for (const candidate of candidates) {
+    if (seen.has(candidate.url)) {
       continue;
     }
 
-    seen.add(
-      candidate.url
-    );
-
-    unique.push(
-      candidate
-    );
+    seen.add(candidate.url);
+    unique.push(candidate);
   }
 
   return unique;
 }
 
 
-function chooseBestImage(
-  car
-) {
+function chooseBestImage(car) {
   const candidates =
-    getImageCandidates(
-      car
-    );
+    getImageCandidates(car);
 
   if (!candidates.length) {
     return null;
   }
 
-  const scored =
-    candidates.map(
-      (candidate, index) => ({
-        candidate,
+  const scored = candidates.map(
+    (candidate, index) => ({
+      candidate,
 
-        score:
-          scoreImageCandidate(
-            candidate,
-            car
-          ),
+      score:
+        scoreImageCandidate(
+          candidate,
+          car
+        ),
 
-        index
-      })
-    );
-
-  scored.sort(
-    (a, b) => {
-      if (
-        b.score !==
-        a.score
-      ) {
-        return (
-          b.score -
-          a.score
-        );
-      }
-
-      return (
-        a.index -
-        b.index
-      );
-    }
+      index
+    })
   );
 
-  // Ak backend poslal metadáta
-  // a žiadny obrázok nepasuje
-  // na model, radšej obrázok
-  // nezobrazíme ako nesprávny model.
-  const best =
-    scored[0];
+  scored.sort((a, b) => {
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+
+    return a.index - b.index;
+  });
+
+  const best = scored[0];
 
   const hasMetadata =
     candidates.some(
       candidate =>
-        Boolean(
-          candidate.title
-        )
+        Boolean(candidate.title)
     );
 
   if (
@@ -1318,10 +1057,7 @@ function chooseBestImage(
 
 
 function createImage(car) {
-  const best =
-    chooseBestImage(
-      car
-    );
+  const best = chooseBestImage(car);
 
   if (!best) {
     return `
@@ -1332,9 +1068,7 @@ function createImage(car) {
   }
 
   const imageUrl =
-    escapeAttribute(
-      best.url
-    );
+    escapeAttribute(best.url);
 
   const brand =
     safeDisplayText(
@@ -1351,17 +1085,14 @@ function createImage(car) {
     );
 
   const altText =
-    `${brand} ${model}`
-      .trim();
+    `${brand} ${model}`.trim();
 
   return `
     <div class="car-image">
 
       <img
         src="${imageUrl}"
-        alt="${escapeAttribute(
-          altText
-        )}"
+        alt="${escapeAttribute(altText)}"
         loading="lazy"
         referrerpolicy="no-referrer"
         onerror="this.parentElement.classList.add('image-error'); this.style.display='none';"
@@ -1391,21 +1122,12 @@ function getCarName(car) {
       ""
     );
 
-  if (
-    brand &&
-    model
-  ) {
-    // Ak model už začína značkou,
-    // nepridávame ju dvakrát.
+  if (brand && model) {
     const normalizedBrand =
-      normalizeSearchText(
-        brand
-      );
+      normalizeSearchText(brand);
 
     const normalizedModel =
-      normalizeSearchText(
-        model
-      );
+      normalizeSearchText(model);
 
     if (
       normalizedModel.startsWith(
@@ -1430,14 +1152,8 @@ function getCarName(car) {
 // CAR CARD
 // ============================================================
 
-function createCard(
-  car,
-  index
-) {
-  const name =
-    getCarName(
-      car
-    );
+function createCard(car, index) {
+  const name = getCarName(car);
 
   const generation =
     safeDisplayText(
@@ -1461,9 +1177,7 @@ function createCard(
     );
 
   const power =
-    formatPower(
-      car
-    );
+    formatPower(car);
 
   const trunk =
     formatTrunk(
@@ -1488,9 +1202,7 @@ function createCard(
     );
 
   const seats =
-    numericValue(
-      car?.seats
-    );
+    numericValue(car?.seats);
 
   const score =
     safeDisplayText(
@@ -1548,9 +1260,7 @@ function createCard(
           generation
             ? `
               <div class="generation">
-                ${escapeHTML(
-                  generation
-                )}
+                ${escapeHTML(generation)}
               </div>
             `
             : ""
@@ -1608,9 +1318,7 @@ function createCard(
                 <div>
                   <strong>Miesta:</strong>
                   ${escapeHTML(
-                    formatNumber(
-                      seats
-                    )
+                    formatNumber(seats)
                   )}
                 </div>
               `
@@ -1641,7 +1349,6 @@ function createCard(
 
         </div>
 
-
         ${
           description
             ? `
@@ -1649,15 +1356,12 @@ function createCard(
                 <h3>Popis</h3>
 
                 <p>
-                  ${formatText(
-                    description
-                  )}
+                  ${formatText(description)}
                 </p>
               </div>
             `
             : ""
         }
-
 
         ${
           pros.length
@@ -1688,7 +1392,6 @@ function createCard(
             : ""
         }
 
-
         ${
           cons.length
             ? `
@@ -1718,16 +1421,13 @@ function createCard(
             : ""
         }
 
-
         ${
           configurator
             ? `
               <div class="configure">
 
                 <a
-                  href="${escapeAttribute(
-                    configurator
-                  )}"
+                  href="${escapeAttribute(configurator)}"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -1738,7 +1438,6 @@ function createCard(
             `
             : ""
         }
-
 
         ${
           officialPriceUrl
@@ -1760,7 +1459,6 @@ function createCard(
             `
             : ""
         }
-
 
         ${
           sourceUrl
@@ -1795,8 +1493,7 @@ function createCard(
 // ============================================================
 
 function renderResults(cars) {
-  const results =
-    $("results");
+  const results = $("results");
 
   if (!results) {
     return;
@@ -1806,8 +1503,7 @@ function renderResults(cars) {
     !Array.isArray(cars) ||
     cars.length !== 3
   ) {
-    results.innerHTML =
-      "";
+    results.innerHTML = "";
 
     setStatus(
       "Nepodarilo sa získať presne 3 vhodné vozidlá.",
@@ -1822,10 +1518,7 @@ function renderResults(cars) {
       .slice(0, 3)
       .map(
         (car, index) =>
-          createCard(
-            car,
-            index
-          )
+          createCard(car, index)
       )
       .join("");
 }
@@ -1851,6 +1544,26 @@ function getErrorMessage(
     return serverMessage;
   }
 
+  if (
+    error?.code ===
+    "SEARCH_TIMEOUT"
+  ) {
+    return (
+      "Vyhľadávanie trvá príliš dlho. " +
+      "Server neodpovedal do 70 sekúnd."
+    );
+  }
+
+  if (
+    error?.code ===
+    "FETCH_FAILED"
+  ) {
+    return (
+      "Server sa nepodarilo kontaktovať. " +
+      "Vyhľadávanie nebolo úspešne dokončené."
+    );
+  }
+
   const errorMessage =
     safeDisplayText(
       error?.message,
@@ -1860,9 +1573,7 @@ function getErrorMessage(
   if (
     errorMessage
       .toLowerCase()
-      .includes(
-        "failed to fetch"
-      )
+      .includes("failed to fetch")
   ) {
     return (
       "Server sa nepodarilo kontaktovať. " +
@@ -1882,9 +1593,7 @@ function getErrorMessage(
 // ============================================================
 
 function notifySearchFinished() {
-
   try {
-
     if (
       navigator.vibrate &&
       typeof navigator.vibrate ===
@@ -1896,14 +1605,11 @@ function notifySearchFinished() {
         120
       ]);
     }
-
   } catch {
     // Ignore vibration errors.
   }
 
-
   try {
-
     const AudioContext =
       window.AudioContext ||
       window.webkitAudioContext;
@@ -1921,11 +1627,8 @@ function notifySearchFinished() {
     const gain =
       context.createGain();
 
-    oscillator.frequency.value =
-      660;
-
-    oscillator.type =
-      "sine";
+    oscillator.frequency.value = 660;
+    oscillator.type = "sine";
 
     gain.gain.setValueAtTime(
       0.0001,
@@ -1943,17 +1646,13 @@ function notifySearchFinished() {
     );
 
     oscillator.connect(gain);
-
-    gain.connect(
-      context.destination
-    );
+    gain.connect(context.destination);
 
     oscillator.start();
 
     oscillator.stop(
       context.currentTime + 0.2
     );
-
   } catch {
     // Ignore audio errors.
   }
@@ -1961,12 +1660,10 @@ function notifySearchFinished() {
 
 
 // ============================================================
-// API REQUEST
+// API REQUEST - TIMEOUT PROTECTION
 // ============================================================
 
-async function performSearch(
-  payload
-) {
+async function performSearch(payload) {
   const token =
     await getAccessToken();
 
@@ -1980,10 +1677,18 @@ async function performSearch(
       `Bearer ${token}`;
   }
 
+  const controller =
+    new AbortController();
+
+  // Maximálny čas čakania frontendu.
+  const timeoutId =
+    setTimeout(() => {
+      controller.abort();
+    }, 70000);
+
   let response;
 
   try {
-
     response =
       await fetch(
         CONFIG.apiEndpoint ||
@@ -1991,13 +1696,27 @@ async function performSearch(
         {
           method: "POST",
           headers,
-          body: JSON.stringify(
-            payload
-          )
+          body: JSON.stringify(payload),
+          signal: controller.signal
         }
       );
-
   } catch (error) {
+    clearTimeout(timeoutId);
+
+    if (
+      error?.name ===
+      "AbortError"
+    ) {
+      const timeoutError =
+        new Error(
+          "Vyhľadávanie trvá príliš dlho. Server neodpovedal do 70 sekúnd."
+        );
+
+      timeoutError.code =
+        "SEARCH_TIMEOUT";
+
+      throw timeoutError;
+    }
 
     const fetchError =
       new Error(
@@ -2007,27 +1726,53 @@ async function performSearch(
     fetchError.originalError =
       error;
 
+    fetchError.code =
+      "FETCH_FAILED";
+
     throw fetchError;
   }
 
+  clearTimeout(timeoutId);
 
   let data = null;
 
-  try {
-    data =
-      await response.json();
-  } catch {
-    data = null;
+  const contentType =
+    response.headers.get(
+      "content-type"
+    ) || "";
+
+  if (
+    contentType.includes(
+      "application/json"
+    )
+  ) {
+    try {
+      data =
+        await response.json();
+    } catch {
+      data = null;
+    }
+  } else {
+    try {
+      const text =
+        await response.text();
+
+      data =
+        text
+          ? { message: text }
+          : null;
+    } catch {
+      data = null;
+    }
   }
 
-
   if (!response.ok) {
-
     const error =
       new Error(
         safeDisplayText(
           data?.message ||
-          data?.error,
+          data?.error ||
+          data?.details,
           `Server error ${response.status}`
         )
       );
@@ -2041,7 +1786,6 @@ async function performSearch(
     throw error;
   }
 
-
   return data;
 }
 
@@ -2051,15 +1795,12 @@ async function performSearch(
 // ============================================================
 
 async function findCars() {
-
   if (isSearching) {
     return;
   }
 
-
   const request =
     collectRequest();
-
 
   if (
     !request.request &&
@@ -2067,7 +1808,6 @@ async function findCars() {
       request.filters
     ).some(Boolean)
   ) {
-
     setStatus(
       "Najprv zadajte požiadavky na auto.",
       "error"
@@ -2083,47 +1823,61 @@ async function findCars() {
     return;
   }
 
+  if (!currentSession) {
+    setStatus(
+      "CARMATCH AI ešte nie je pripravený. Skúste obnoviť stránku.",
+      "error"
+    );
+
+    return;
+  }
 
   isSearching = true;
 
   setButtonBusy(true);
 
   setStatus(
-    "Vyhľadávam vhodné vozidlá...",
+    "Pripravujem vyhľadávanie...",
     "loading"
   );
-
 
   const results =
     $("results");
 
   if (results) {
-    results.innerHTML =
-      "";
+    results.innerHTML = "";
   }
 
-
   try {
+    // Dôležité:
+    // tento stav potvrdzuje, že frontend
+    // už začal posielať požiadavku na API.
+    setStatus(
+      "Vyhľadávanie prebieha...",
+      "loading"
+    );
 
     const data =
       await performSearch(
         request
       );
 
-
     const cars =
       normalizeCars(data);
 
-
     if (cars.length !== 3) {
-      throw new Error(
-        "Server nevrátil presne 3 vozidlá."
-      );
+      const error =
+        new Error(
+          "Server nevrátil presne 3 vozidlá."
+        );
+
+      error.responseData =
+        data;
+
+      throw error;
     }
 
-
     renderResults(cars);
-
 
     if (
       data &&
@@ -2135,23 +1889,18 @@ async function findCars() {
       );
     }
 
-
     setStatus(
       "Vyhľadávanie dokončené.",
       "success"
     );
 
-
     notifySearchFinished();
 
-
   } catch (error) {
-
     console.error(
       "CARMATCH AI search error:",
       error
     );
-
 
     const message =
       getErrorMessage(
@@ -2159,27 +1908,19 @@ async function findCars() {
         error?.responseData
       );
 
-
     setStatus(
       message,
       "error"
     );
 
-
     if (results) {
-      results.innerHTML =
-        "";
+      results.innerHTML = "";
     }
 
-
   } finally {
+    isSearching = false;
 
-    isSearching =
-      false;
-
-    setButtonBusy(
-      false
-    );
+    setButtonBusy(false);
   }
 }
 
@@ -2189,58 +1930,44 @@ async function findCars() {
 // ============================================================
 
 function setupEvents() {
-
   const button =
     $("searchButton");
 
   if (button) {
-
     button.addEventListener(
       "click",
       findCars
     );
-
   }
-
 
   const themeButton =
     $("themeToggle");
 
   if (themeButton) {
-
     themeButton.addEventListener(
       "click",
       toggleTheme
     );
-
   }
-
 
   const textarea =
     $("aiRequest");
 
   if (textarea) {
-
     textarea.addEventListener(
       "keydown",
       event => {
-
         if (
-          event.key ===
-            "Enter" &&
+          event.key === "Enter" &&
           (event.ctrlKey ||
             event.metaKey)
         ) {
-
           event.preventDefault();
 
           findCars();
-
         }
-
       }
     );
-
   }
 }
 
@@ -2250,9 +1977,7 @@ function setupEvents() {
 // ============================================================
 
 async function startCarmatch() {
-
   try {
-
     setStatus(
       "Inicializujem CARMATCH AI...",
       "loading"
@@ -2260,44 +1985,34 @@ async function startCarmatch() {
 
     updateUsage(5);
 
-
     await initializeAnonymousUser();
 
-
     updateUsage(5);
-
 
     const button =
       $("searchButton");
 
     if (button) {
-      button.disabled =
-        false;
+      button.disabled = false;
     }
-
 
     setStatus(
       "CARMATCH AI je pripravený.",
       "success"
     );
 
-
   } catch (error) {
-
     console.error(
       "CARMATCH initialization error:",
       error
     );
 
-
     const button =
       $("searchButton");
 
     if (button) {
-      button.disabled =
-        true;
+      button.disabled = true;
     }
-
 
     setStatus(
       "CARMATCH AI sa nepodarilo inicializovať. Obnovte stránku.",
@@ -2322,12 +2037,10 @@ window.findCars =
 document.addEventListener(
   "DOMContentLoaded",
   () => {
-
     initializeTheme();
 
     setupEvents();
 
     startCarmatch();
-
   }
 );
