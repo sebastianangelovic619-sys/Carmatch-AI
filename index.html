@@ -5,44 +5,32 @@
 
   <meta
     name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  >
-
-  <meta
-    name="theme-color"
-    content="#ffffff"
+    content="width=device-width, initial-scale=1.0, viewport-fit=cover"
   >
 
   <meta
     name="description"
-    content="CARMATCH AI – nájdite auto podľa svojich požiadaviek."
+    content="CARMATCH AI – nájdite svoje ideálne auto podľa vašich požiadaviek."
   >
 
-  <title>CARMATCH AI</title>
+  <meta name="theme-color" content="#f5f6f8">
 
-  <!-- ========================================================
-       EXISTUJÚCI DIZAJN
-  ========================================================= -->
+  <title>CARMATCH AI — Nájdi svoje ideálne auto</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 
   <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
     rel="stylesheet"
-    href="style.css?v=11"
   >
 
-
-  <!-- ========================================================
-       SUPABASE
-  ========================================================= -->
+  <link rel="stylesheet" href="style.css?v=14">
 
   <script
     src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"
     defer
   ></script>
-
-
-  <!-- ========================================================
-       CARMATCH AI CONFIG
-  ========================================================= -->
 
   <script>
     window.CARMATCH_CONFIG = {
@@ -50,109 +38,111 @@
         "https://ltqjgvrphjinsjvyaxrb.supabase.co",
 
       supabaseAnonKey:
-        "sb_publishable_Tl9JJu6B_A1tQ_si2Wb25Q_f8A3e5uw",
+        "sb_publishable_Tl9JuJu6B_A1tQ_si2Wb25Q_f8A3e5uw",
 
       apiEndpoint:
         "/api/search"
     };
   </script>
-
 </head>
-
 
 <body>
 
-  <!-- ========================================================
-       APP
-  ========================================================= -->
+  <!-- ======================================================
+       PAGE
+       ====================================================== -->
 
-  <div class="app-shell">
+  <div class="page">
 
+    <!-- ====================================================
+         HERO
+         ==================================================== -->
 
-    <!-- ======================================================
-         HEADER
-    ======================================================= -->
+    <header class="hero">
 
-    <header class="topbar">
+      <div class="hero-glow hero-glow-one"></div>
+      <div class="hero-glow hero-glow-two"></div>
 
-      <div class="brand">
+      <div class="hero-inner">
 
-        <div class="brand-title">
-          CARMATCH AI
+        <div class="brand-mark">
+          <span class="brand-main">CARMATCH</span>
+          <span class="brand-ai">AI</span>
         </div>
 
-        <div class="brand-subtitle">
-          Nájdite auto podľa svojich požiadaviek
-        </div>
+        <div class="brand-line"></div>
 
-      </div>
+        <h1>
+          Nájdi svoje<br>
+          <span>ideálne auto.</span>
+        </h1>
 
-
-      <div class="topbar-actions">
-
-        <button
-          id="themeToggle"
-          class="theme-toggle"
-          type="button"
-          aria-label="Prepnúť režim"
-          title="Tmavý režim"
-        >
-          🌙
-        </button>
+        <p class="hero-subtitle">
+          Opíš nám, čo od auta očakávaš.
+          CARMATCH AI nájde vozidlá, ktoré najlepšie
+          zodpovedajú tvojim požiadavkám.
+        </p>
 
       </div>
 
     </header>
 
 
-
-    <!-- ======================================================
+    <!-- ====================================================
          MAIN
-    ======================================================= -->
+         ==================================================== -->
 
     <main class="main-content">
 
-
-      <!-- ====================================================
+      <!-- ==================================================
            SEARCH CARD
-      ===================================================== -->
+           ================================================== -->
 
       <section class="search-card">
 
+        <div class="search-card-header">
 
-        <h1>
-          Aké auto hľadáte?
-        </h1>
+          <div>
+            <div class="eyebrow">
+              AI VYHĽADÁVANIE
+            </div>
+
+            <h2>
+              Aké auto hľadáš?
+            </h2>
+
+            <p>
+              Napíš to prirodzene. Nemusíš poznať presné parametre.
+            </p>
+          </div>
+
+        </div>
 
 
-        <p class="description">
-          Napíšte prirodzene, čo od auta očakávate.
-          CARMATCH AI vám nájde najvhodnejšie možnosti.
-        </p>
-
-
-
-        <!-- ==================================================
+        <!-- =================================================
              NATURAL LANGUAGE INPUT
-        =================================================== -->
+             ================================================= -->
 
-        <div class="input-group">
+        <div class="search-box">
 
           <textarea
             id="aiRequest"
             name="aiRequest"
-            rows="6"
+            rows="4"
             maxlength="3000"
             autocomplete="off"
             spellcheck="true"
-            placeholder="Napríklad: Hľadám nové SUV do 50 000 €, 5 miest, 4x4, aspoň 250 koní, veľký kufor a nízke náklady na údržbu."
+            placeholder="Napríklad: Chcem nové SUV do 50 000 €, 4x4, aspoň 250 koní, veľký kufor a nech je pohodlné na dlhé cesty."
           ></textarea>
 
-
-          <div class="input-footer">
+          <div class="search-box-bottom">
 
             <span id="charCount">
               0 / 3000
+            </span>
+
+            <span class="input-hint">
+              Ctrl + Enter = vyhľadať
             </span>
 
           </div>
@@ -160,646 +150,268 @@
         </div>
 
 
-
-        <!-- ==================================================
-             FILTERS
-        =================================================== -->
-
-        <div class="filters">
-
-
-          <div class="filters-header">
-
-            <h2>
-              Filtre
-            </h2>
-
-          </div>
-
-
-
-          <div class="filter-grid">
-
-
-            <!-- ==============================================
-                 BUDGET
-            =============================================== -->
-
-            <div class="filter-item">
-
-              <label
-                class="filter-label"
-                for="budget"
-              >
-                Maximálna cena
-              </label>
-
-              <select
-                id="budget"
-                name="budget"
-                class="filter-control"
-              >
-
-                <option value="">
-                  Ľubovoľná
-                </option>
-
-                <option value="15000">
-                  15 000 €
-                </option>
-
-                <option value="20000">
-                  20 000 €
-                </option>
-
-                <option value="25000">
-                  25 000 €
-                </option>
-
-                <option value="30000">
-                  30 000 €
-                </option>
-
-                <option value="40000">
-                  40 000 €
-                </option>
-
-                <option value="50000">
-                  50 000 €
-                </option>
-
-                <option value="60000">
-                  60 000 €
-                </option>
-
-                <option value="70000">
-                  70 000 €
-                </option>
-
-                <option value="80000">
-                  80 000 €
-                </option>
-
-                <option value="100000">
-                  100 000 €
-                </option>
-
-              </select>
-
-            </div>
-
-
-
-            <!-- ==============================================
-                 SEATS
-            =============================================== -->
-
-            <div class="filter-item">
-
-              <label
-                class="filter-label"
-                for="seats"
-              >
-                Počet miest
-              </label>
-
-              <select
-                id="seats"
-                name="seats"
-                class="filter-control"
-              >
-
-                <option value="">
-                  Ľubovoľný
-                </option>
-
-                <option value="2">
-                  2
-                </option>
-
-                <option value="4">
-                  4
-                </option>
-
-                <option value="5">
-                  5
-                </option>
-
-                <option value="6">
-                  6
-                </option>
-
-                <option value="7">
-                  7+
-                </option>
-
-              </select>
-
-            </div>
-
-
-
-            <!-- ==============================================
-                 POWER
-            =============================================== -->
-
-            <div class="filter-item">
-
-              <label
-                class="filter-label"
-                for="power"
-              >
-                Minimálny výkon
-              </label>
-
-              <select
-                id="power"
-                name="power"
-                class="filter-control"
-              >
-
-                <option value="">
-                  Ľubovoľný
-                </option>
-
-                <option value="75">
-                  75 kW
-                </option>
-
-                <option value="100">
-                  100 kW
-                </option>
-
-                <option value="120">
-                  120 kW
-                </option>
-
-                <option value="150">
-                  150 kW
-                </option>
-
-                <option value="180">
-                  180 kW
-                </option>
-
-                <option value="200">
-                  200 kW
-                </option>
-
-                <option value="250">
-                  250 kW
-                </option>
-
-                <option value="300">
-                  300 kW
-                </option>
-
-                <option value="400">
-                  400 kW
-                </option>
-
-              </select>
-
-            </div>
-
-
-
-            <!-- ==============================================
-                 TRUNK
-            =============================================== -->
-
-            <div class="filter-item">
-
-              <label
-                class="filter-label"
-                for="trunk"
-              >
-                Minimálny kufor
-              </label>
-
-              <select
-                id="trunk"
-                name="trunk"
-                class="filter-control"
-              >
-
-                <option value="">
-                  Ľubovoľný
-                </option>
-
-                <option value="300">
-                  300 l
-                </option>
-
-                <option value="400">
-                  400 l
-                </option>
-
-                <option value="500">
-                  500 l
-                </option>
-
-                <option value="600">
-                  600 l
-                </option>
-
-                <option value="700">
-                  700 l
-                </option>
-
-                <option value="800">
-                  800 l
-                </option>
-
-                <option value="1000">
-                  1000 l
-                </option>
-
-              </select>
-
-            </div>
-
-
-
-            <!-- ==============================================
-                 DRIVE
-            =============================================== -->
-
-            <div class="filter-item">
-
-              <label
-                class="filter-label"
-                for="drive"
-              >
-                Pohon
-              </label>
-
-              <select
-                id="drive"
-                name="drive"
-                class="filter-control"
-              >
-
-                <option value="">
-                  Ľubovoľný
-                </option>
-
-                <option value="FWD">
-                  Predný náhon
-                </option>
-
-                <option value="RWD">
-                  Zadný náhon
-                </option>
-
-                <option value="AWD">
-                  4×4 / AWD
-                </option>
-
-              </select>
-
-            </div>
-
-
-
-            <!-- ==============================================
-                 FUEL
-            =============================================== -->
-
-            <div class="filter-item">
-
-              <label
-                class="filter-label"
-                for="fuel"
-              >
-                Palivo
-              </label>
-
-              <select
-                id="fuel"
-                name="fuel"
-                class="filter-control"
-              >
-
-                <option value="">
-                  Ľubovoľné
-                </option>
-
-                <option value="petrol">
-                  Benzín
-                </option>
-
-                <option value="diesel">
-                  Nafta
-                </option>
-
-                <option value="hybrid">
-                  Hybrid
-                </option>
-
-                <option value="plug-in hybrid">
-                  Plug-in hybrid
-                </option>
-
-                <option value="electric">
-                  Elektromobil
-                </option>
-
-                <option value="hydrogen">
-                  Vodík
-                </option>
-
-              </select>
-
-            </div>
-
-
-
-            <!-- ==============================================
-                 BODY
-            =============================================== -->
-
-            <div class="filter-item">
-
-              <label
-                class="filter-label"
-                for="body"
-              >
-                Karoséria
-              </label>
-
-              <select
-                id="body"
-                name="body"
-                class="filter-control"
-              >
-
-                <option value="">
-                  Ľubovoľná
-                </option>
-
-                <option value="SUV">
-                  SUV
-                </option>
-
-                <option value="estate">
-                  Kombi
-                </option>
-
-                <option value="sedan">
-                  Sedan
-                </option>
-
-                <option value="hatchback">
-                  Hatchback
-                </option>
-
-                <option value="coupe">
-                  Kupé
-                </option>
-
-                <option value="convertible">
-                  Kabriolet
-                </option>
-
-                <option value="liftback">
-                  Liftback
-                </option>
-
-                <option value="mpv">
-                  MPV
-                </option>
-
-                <option value="pickup">
-                  Pickup
-                </option>
-
-              </select>
-
-            </div>
-
-
-
-            <!-- ==============================================
-                 STYLE
-            =============================================== -->
-
-            <div class="filter-item">
-
-              <label
-                class="filter-label"
-                for="style"
-              >
-                Štýl
-              </label>
-
-              <select
-                id="style"
-                name="style"
-                class="filter-control"
-              >
-
-                <option value="">
-                  Ľubovoľný
-                </option>
-
-                <option value="sporty">
-                  Športový
-                </option>
-
-                <option value="luxury">
-                  Luxusný
-                </option>
-
-                <option value="sport-luxury">
-                  Športovo-luxusný
-                </option>
-
-                <option value="family">
-                  Rodinný
-                </option>
-
-                <option value="premium">
-                  Prémiový
-                </option>
-
-                <option value="offroad">
-                  Off-road
-                </option>
-
-                <option value="economical">
-                  Úsporný
-                </option>
-
-              </select>
-
-            </div>
-
-
-
-            <!-- ==============================================
-                 LENGTH
-            =============================================== -->
-
-            <div class="filter-item">
-
-              <label
-                class="filter-label"
-                for="length"
-              >
-                Maximálna dĺžka
-              </label>
-
-              <select
-                id="length"
-                name="length"
-                class="filter-control"
-              >
-
-                <option value="">
-                  Ľubovoľná
-                </option>
-
-                <option value="400">
-                  4,00 m
-                </option>
-
-                <option value="425">
-                  4,25 m
-                </option>
-
-                <option value="450">
-                  4,50 m
-                </option>
-
-                <option value="475">
-                  4,75 m
-                </option>
-
-                <option value="500">
-                  5,00 m
-                </option>
-
-                <option value="525">
-                  5,25 m
-                </option>
-
-              </select>
-
-            </div>
-
-
-
-            <!-- ==============================================
-                 YEAR
-            =============================================== -->
-
-            <div class="filter-item">
-
-              <label
-                class="filter-label"
-                for="year"
-              >
-                Minimálny modelový rok
-              </label>
-
-              <select
-                id="year"
-                name="year"
-                class="filter-control"
-              >
-
-                <option value="">
-                  Ľubovoľný
-                </option>
-
-                <option value="2020">
-                  2020+
-                </option>
-
-                <option value="2021">
-                  2021+
-                </option>
-
-                <option value="2022">
-                  2022+
-                </option>
-
-                <option value="2023">
-                  2023+
-                </option>
-
-                <option value="2024">
-                  2024+
-                </option>
-
-                <option value="2025">
-                  2025+
-                </option>
-
-                <option value="2026">
-                  2026+
-                </option>
-
-                <option value="2027">
-                  2027+
-                </option>
-
-              </select>
-
-            </div>
-
-
-
-            <!-- ==============================================
-                 AVOID BRANDS
-            =============================================== -->
-
-            <div class="filter-item filter-item-wide">
-
-              <label
-                class="filter-label"
-                for="avoidBrands"
-              >
-                Značky, ktorým sa chcete vyhnúť
-              </label>
-
-              <input
-                id="avoidBrands"
-                name="avoidBrands"
-                class="filter-control"
-                type="text"
-                maxlength="500"
-                autocomplete="off"
-                placeholder="Napríklad: Dacia, Fiat"
-              >
-
-            </div>
-
-
-          </div>
+        <!-- =================================================
+             EXAMPLE PROMPTS
+             ================================================= -->
+
+        <div class="examples">
+
+          <button
+            type="button"
+            class="example-chip"
+            data-example="Chcem nové prémiové SUV do 60 000 €, 4x4, aspoň 250 koní a veľký kufor."
+          >
+            🚙 Prémiové SUV
+          </button>
+
+          <button
+            type="button"
+            class="example-chip"
+            data-example="Chcem športové auto do 50 000 €, ktoré je rýchle, spoľahlivé a vhodné aj na bežné jazdenie."
+          >
+            🏎️ Športové auto
+          </button>
+
+          <button
+            type="button"
+            class="example-chip"
+            data-example="Chcem úsporné nové auto pre rodinu, s veľkým kufrom a nízkymi prevádzkovými nákladmi."
+          >
+            👨‍👩‍👧‍👦 Rodinné auto
+          </button>
 
         </div>
 
 
+        <!-- =================================================
+             FILTERS
+             ================================================= -->
 
-        <!-- ==================================================
+        <details class="filters-details">
+
+          <summary>
+            <span>
+              Spresniť výber
+            </span>
+
+            <span class="summary-arrow">
+              +
+            </span>
+          </summary>
+
+
+          <div class="filters">
+
+            <div class="filter-grid">
+
+              <!-- Budget -->
+
+              <div class="filter-item">
+                <label for="budget">
+                  Rozpočet
+                </label>
+
+                <input
+                  id="budget"
+                  type="text"
+                  placeholder="napr. 50 000 €"
+                >
+              </div>
+
+
+              <!-- Seats -->
+
+              <div class="filter-item">
+                <label for="seats">
+                  Počet miest
+                </label>
+
+                <select id="seats">
+                  <option value="">Ľubovoľný</option>
+                  <option value="2">2</option>
+                  <option value="4">4</option>
+                  <option value="5">5</option>
+                  <option value="6">6</option>
+                  <option value="7">7</option>
+                  <option value="8">8+</option>
+                </select>
+              </div>
+
+
+              <!-- Power -->
+
+              <div class="filter-item">
+                <label for="power">
+                  Minimálny výkon
+                </label>
+
+                <input
+                  id="power"
+                  type="text"
+                  placeholder="napr. 200 kW"
+                >
+              </div>
+
+
+              <!-- Trunk -->
+
+              <div class="filter-item">
+                <label for="trunk">
+                  Kufor
+                </label>
+
+                <input
+                  id="trunk"
+                  type="text"
+                  placeholder="napr. 600 l"
+                >
+              </div>
+
+
+              <!-- Drive -->
+
+              <div class="filter-item">
+                <label for="drive">
+                  Pohon
+                </label>
+
+                <select id="drive">
+                  <option value="">Ľubovoľný</option>
+                  <option value="FWD">Predný</option>
+                  <option value="RWD">Zadný</option>
+                  <option value="AWD / 4x4">4x4 / AWD</option>
+                </select>
+              </div>
+
+
+              <!-- Fuel -->
+
+              <div class="filter-item">
+                <label for="fuel">
+                  Palivo
+                </label>
+
+                <select id="fuel">
+                  <option value="">Ľubovoľné</option>
+                  <option value="Benzín">Benzín</option>
+                  <option value="Diesel">Diesel</option>
+                  <option value="Hybrid">Hybrid</option>
+                  <option value="Plug-in hybrid">Plug-in hybrid</option>
+                  <option value="Elektrické">Elektrické</option>
+                </select>
+              </div>
+
+
+              <!-- Body -->
+
+              <div class="filter-item">
+                <label for="body">
+                  Karoséria
+                </label>
+
+                <select id="body">
+                  <option value="">Ľubovoľná</option>
+                  <option value="SUV">SUV</option>
+                  <option value="Sedan">Sedan</option>
+                  <option value="Kombi">Kombi</option>
+                  <option value="Hatchback">Hatchback</option>
+                  <option value="Kupé">Kupé</option>
+                  <option value="Cabrio">Cabrio</option>
+                  <option value="MPV">MPV</option>
+                </select>
+              </div>
+
+
+              <!-- Style -->
+
+              <div class="filter-item">
+                <label for="style">
+                  Štýl
+                </label>
+
+                <select id="style">
+                  <option value="">Ľubovoľný</option>
+                  <option value="Športové">Športové</option>
+                  <option value="Luxusné">Luxusné</option>
+                  <option value="Elegantné">Elegantné</option>
+                  <option value="Rodinné">Rodinné</option>
+                  <option value="Praktické">Praktické</option>
+                  <option value="Off-road">Off-road</option>
+                </select>
+              </div>
+
+
+              <!-- Length -->
+
+              <div class="filter-item">
+                <label for="length">
+                  Maximálna dĺžka
+                </label>
+
+                <input
+                  id="length"
+                  type="text"
+                  placeholder="napr. 4,8 m"
+                >
+              </div>
+
+
+              <!-- Year -->
+
+              <div class="filter-item">
+                <label for="year">
+                  Rok / generácia
+                </label>
+
+                <input
+                  id="year"
+                  type="text"
+                  placeholder="napr. 2026+"
+                >
+              </div>
+
+
+              <!-- Avoid brands -->
+
+              <div class="filter-item filter-wide">
+                <label for="avoidBrands">
+                  Značky, ktorým sa vyhnúť
+                </label>
+
+                <input
+                  id="avoidBrands"
+                  type="text"
+                  placeholder="napr. Dacia, BMW"
+                >
+              </div>
+
+            </div>
+
+          </div>
+
+        </details>
+
+
+        <!-- =================================================
              SEARCH BUTTON
-        =================================================== -->
+             ================================================= -->
 
         <button
           id="searchButton"
-          class="find"
+          class="search-button"
           type="button"
         >
-          Nájsť auto
+
+          <span class="search-button-text">
+            Nájsť moje auto
+          </span>
+
+          <span class="search-button-arrow">
+            →
+          </span>
+
         </button>
 
-
-
-        <!-- ==================================================
-             HELPER
-        =================================================== -->
 
         <div
           id="helperText"
@@ -809,48 +421,40 @@
         </div>
 
 
-
-        <!-- ==================================================
+        <!-- =================================================
              STATUS
-        =================================================== -->
+             ================================================= -->
 
         <div
           id="status"
           class="status"
           aria-live="polite"
-        >
-          CARMATCH AI je pripravený.
-        </div>
+        ></div>
 
 
-
-        <!-- ==================================================
+        <!-- =================================================
              USAGE
-        =================================================== -->
+             ================================================= -->
 
-        <div
-          class="usage"
-        >
+        <div class="usage">
 
           <span
             id="usageDot"
-            class="usage-dot available"
+            class="usage-dot"
           ></span>
 
           <span id="usageText">
-            5 / 5 vyhľadávaní dnes
+            5 vyhľadávaní zostáva dnes
           </span>
 
         </div>
 
-
       </section>
 
 
-
-      <!-- ====================================================
+      <!-- ==================================================
            RESULTS
-      ===================================================== -->
+           ================================================== -->
 
       <section
         id="resultsSection"
@@ -858,11 +462,17 @@
         hidden
       >
 
-        <div class="results-header">
+        <div class="results-heading">
 
-          <h2>
-            Odporúčané autá
-          </h2>
+          <div>
+            <div class="eyebrow">
+              CARMATCH VÝBER
+            </div>
+
+            <h2>
+              Autá pre teba
+            </h2>
+          </div>
 
           <div
             id="resultsCount"
@@ -882,10 +492,9 @@
       </section>
 
 
-
-      <!-- ====================================================
+      <!-- ==================================================
            MESSAGE
-      ===================================================== -->
+           ================================================== -->
 
       <section
         id="messageSection"
@@ -900,105 +509,122 @@
 
       </section>
 
-
     </main>
 
 
-
-    <!-- ======================================================
+    <!-- ====================================================
          FOOTER
-    ======================================================= -->
+         ==================================================== -->
 
     <footer class="footer">
 
-      <div>
+      <div class="footer-brand">
         CARMATCH AI
       </div>
 
-      <div>
-        AI odporúčania áut podľa vašich požiadaviek
+      <div class="footer-text">
+        Inteligentné vyhľadávanie áut podľa toho,
+        čo naozaj potrebuješ.
       </div>
 
     </footer>
 
-
   </div>
 
 
-
-  <!-- ========================================================
-       FRONTEND JAVASCRIPT
-  ========================================================= -->
-
-  <script
-    src="app.js?v=13"
-    defer
-  ></script>
-
-
-  <!-- ========================================================
-       SAFETY SCRIPT
-       Nečaká na Supabase.
-  ========================================================= -->
+  <!-- ======================================================
+       APP CONFIG
+       ====================================================== -->
 
   <script>
-    document.addEventListener(
-      "DOMContentLoaded",
-      function () {
+    document.addEventListener("DOMContentLoaded", () => {
 
-        const button =
-          document.getElementById(
-            "searchButton"
-          );
+      const input =
+        document.getElementById("aiRequest");
 
-        if (button) {
-          button.disabled = false;
-          button.removeAttribute(
-            "disabled"
-          );
+      const charCount =
+        document.getElementById("charCount");
+
+      function updateCharCount() {
+
+        if (!input || !charCount) {
+          return;
         }
 
-
-        const input =
-          document.getElementById(
-            "aiRequest"
-          );
-
-        const counter =
-          document.getElementById(
-            "charCount"
-          );
-
-
-        if (
-          input &&
-          counter
-        ) {
-
-          function updateCounter() {
-
-            counter.textContent =
-              input.value.length +
-              " / 3000";
-
-          }
-
-          updateCounter();
-
-          input.addEventListener(
-            "input",
-            updateCounter
-          );
-
-        }
-
-      },
-      {
-        once: true
+        charCount.textContent =
+          `${input.value.length} / 3000`;
       }
-    );
+
+      if (input) {
+
+        input.addEventListener(
+          "input",
+          updateCharCount
+        );
+
+        updateCharCount();
+
+      }
+
+
+      document
+        .querySelectorAll(".example-chip")
+        .forEach(button => {
+
+          button.addEventListener(
+            "click",
+            () => {
+
+              if (!input) {
+                return;
+              }
+
+              input.value =
+                button.dataset.example || "";
+
+              input.focus();
+
+              updateCharCount();
+
+            }
+          );
+
+        });
+
+
+      document
+        .querySelectorAll(".filters-details")
+        .forEach(details => {
+
+          details.addEventListener(
+            "toggle",
+            () => {
+
+              const arrow =
+                details.querySelector(
+                  ".summary-arrow"
+                );
+
+              if (!arrow) {
+                return;
+              }
+
+              arrow.textContent =
+                details.open ? "−" : "+";
+
+            }
+          );
+
+        });
+
+    });
   </script>
 
+
+  <script
+    src="app.js?v=14"
+    defer
+  ></script>
 
 </body>
 </html>
