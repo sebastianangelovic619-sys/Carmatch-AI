@@ -1,8 +1,9 @@
 /* ============================================================
-   CARMATCH AI — FRONTEND v16
+   CARMATCH AI — FRONTEND v17
    ============================================================
    - Correct Supabase project
    - Supabase anonymous authentication
+   - Detailed Supabase authentication errors
    - Correct naturalLanguage API payload
    - Bearer authentication
    - 5 searches/day
@@ -23,21 +24,21 @@
    CONFIG
    ============================================================ */
 
-/*
- * IMPORTANT:
- * Supabase project used by CARMATCH AI.
- *
- * We intentionally do NOT use the old
- * window.CARMATCH_CONFIG.supabaseUrl value here.
- *
- * Correct project:
- * frmhjjzgvmitdgcvgfuk
- */
-
 const CONFIG = {
 
   supabaseUrl:
     "https://frmhjjzgvmitdgcvgfuk.supabase.co",
+
+  /*
+   * IMPORTANT:
+   * This must be the CURRENT publishable key
+   * from the SAME Supabase project:
+   *
+   * frmhjjzgvmitdgcvgfuk
+   *
+   * Replace this value if Supabase generated
+   * a newer publishable key.
+   */
 
   supabaseAnonKey:
     "sb_publishable_53FDnkTuv2C6rhZIVDJVxQ_MOAg_80E",
@@ -143,9 +144,11 @@ function setStatus(
     "status";
 
   if (type) {
+
     statusElement.classList.add(
       type
     );
+
   }
 
 }
@@ -198,6 +201,7 @@ function updateUsage(
       "Denný limit vyhľadávania";
 
     return;
+
   }
 
   const safe =
@@ -280,6 +284,13 @@ async function initializeSupabase() {
       "CARMATCH AI: Supabase library could not be loaded."
     );
 
+
+    setStatus(
+      "Supabase knižnica sa nepodarila načítať.",
+      "error"
+    );
+
+
     return null;
 
   }
@@ -306,8 +317,25 @@ async function initializeSupabase() {
 
 
     console.log(
-      "CARMATCH AI: Supabase initialized:",
+      "CARMATCH AI: Supabase initialized."
+    );
+
+
+    console.log(
+      "Supabase URL:",
       CONFIG.supabaseUrl
+    );
+
+
+    /*
+     * Never print the complete API key.
+     */
+
+    console.log(
+      "Supabase key loaded:",
+      Boolean(
+        CONFIG.supabaseAnonKey
+      )
     );
 
 
@@ -319,6 +347,16 @@ async function initializeSupabase() {
       "CARMATCH AI: Supabase initialization failed.",
       error
     );
+
+
+    setStatus(
+      `Supabase chyba pri inicializácii: ${
+        error?.message ||
+        "Neznáma chyba"
+      }`,
+      "error"
+    );
+
 
     return null;
 
@@ -357,13 +395,34 @@ async function initializeAnonymousUser() {
       await client.auth.getSession();
 
 
+    if (error) {
+
+      console.warn(
+        "CARMATCH AI: getSession returned an error.",
+        {
+          message: error.message,
+          status: error.status,
+          code: error.code,
+          name: error.name
+        }
+      );
+
+    }
+
+
     if (
       !error &&
-      data?.session
+      data?.session?.access_token
     ) {
 
       currentSession =
         data.session;
+
+
+      console.log(
+        "CARMATCH AI: existing Supabase session found."
+      );
+
 
       return currentSession;
 
@@ -373,18 +432,28 @@ async function initializeAnonymousUser() {
 
     console.warn(
       "CARMATCH AI: getSession failed.",
-      error
+      {
+        message: error?.message,
+        status: error?.status,
+        code: error?.code,
+        name: error?.name
+      }
     );
 
   }
 
 
   /*
-   * No session.
+   * No valid session.
    * Create anonymous account.
    */
 
   try {
+
+    console.log(
+      "CARMATCH AI: attempting anonymous Supabase sign-in..."
+    );
+
 
     const {
       data,
@@ -396,9 +465,32 @@ async function initializeAnonymousUser() {
     if (error) {
 
       console.error(
-        "CARMATCH AI: anonymous sign-in failed.",
-        error
+        "CARMATCH AI: anonymous sign-in FAILED.",
+        {
+          message: error.message,
+          status: error.status,
+          code: error.code,
+          name: error.name
+        }
       );
+
+
+      /*
+       * IMPORTANT:
+       * Show the real Supabase error.
+       */
+
+      const realMessage =
+        error?.message ||
+        error?.code ||
+        "Neznáma Supabase chyba";
+
+
+      setStatus(
+        `Supabase chyba: ${realMessage}`,
+        "error"
+      );
+
 
       return null;
 
@@ -409,23 +501,59 @@ async function initializeAnonymousUser() {
       data?.session || null;
 
 
-    if (currentSession) {
+    if (
+      currentSession?.access_token
+    ) {
 
       console.log(
         "CARMATCH AI: anonymous authentication successful."
       );
 
+
+      return currentSession;
+
     }
 
 
-    return currentSession;
+    /*
+     * Supabase returned no error,
+     * but also no session.
+     */
+
+    console.error(
+      "CARMATCH AI: Supabase returned no error but no session."
+    );
+
+
+    setStatus(
+      "Supabase nevytvoril prihlasovaciu reláciu.",
+      "error"
+    );
+
+
+    return null;
 
   } catch (error) {
 
     console.error(
-      "CARMATCH AI: anonymous authentication error.",
-      error
+      "CARMATCH AI: anonymous authentication exception.",
+      {
+        message: error?.message,
+        status: error?.status,
+        code: error?.code,
+        name: error?.name
+      }
     );
+
+
+    setStatus(
+      `Supabase chyba: ${
+        error?.message ||
+        "Neznáma chyba"
+      }`,
+      "error"
+    );
+
 
     return null;
 
@@ -460,8 +588,13 @@ async function refreshSession() {
 
       console.warn(
         "CARMATCH AI: refreshSession error.",
-        error
+        {
+          message: error.message,
+          status: error.status,
+          code: error.code
+        }
       );
+
 
       return null;
 
@@ -480,6 +613,7 @@ async function refreshSession() {
       "CARMATCH AI: session refresh failed.",
       error
     );
+
 
     return null;
 
@@ -754,14 +888,19 @@ async function performSearch(
 
 
   /*
-   * If backend says unauthorized,
-   * refresh the session once.
+   * Unauthorized:
+   * refresh session once and retry.
    */
 
   if (
     response.status === 401 &&
     retryAfterRefresh
   ) {
+
+    console.warn(
+      "CARMATCH AI: API returned 401. Refreshing Supabase session..."
+    );
+
 
     const refreshed =
       await refreshSession();
@@ -855,6 +994,17 @@ async function performSearch(
 
     serverError.data =
       data;
+
+
+    console.error(
+      "CARMATCH AI: API error.",
+      {
+        status: response.status,
+        code: serverError.code,
+        message: serverError.message,
+        data
+      }
+    );
 
 
     throw serverError;
@@ -1175,6 +1325,35 @@ function normalizeCar(
 
     image,
     imageSource,
+
+    /*
+     * Preserve additional image fields
+     * for image candidate processing.
+     */
+
+    images:
+      Array.isArray(item.images)
+        ? item.images
+        : [],
+
+    imageCandidates:
+      Array.isArray(item.imageCandidates)
+        ? item.imageCandidates
+        : [],
+
+    photos:
+      Array.isArray(item.photos)
+        ? item.photos
+        : [],
+
+    photo:
+      item.photo,
+
+    photoUrl:
+      item.photoUrl,
+
+    imageUrl:
+      item.imageUrl,
 
     power,
     price,
@@ -2023,14 +2202,30 @@ function getFriendlyError(
 
   if (
     code ===
-    "AUTH_REQUIRED" ||
+    "AUTH_REQUIRED"
+  ) {
+
+    return {
+
+      message:
+        "Supabase autentifikácia zlyhala. Pozri presnú chybu zobrazenú vyššie.",
+
+      type:
+        "error"
+
+    };
+
+  }
+
+
+  if (
     status === 401
   ) {
 
     return {
 
       message:
-        "Nepodarilo sa overiť pripojenie k CARMATCH AI. Skontroluj Supabase nastavenie a skús to znova.",
+        "Server odmietol prihlasovací token Supabase.",
 
       type:
         "error"
@@ -2047,7 +2242,7 @@ function getFriendlyError(
     return {
 
       message:
-        "CARMATCH AI nemá povolenie na prístup k Supabase. Skontroluj nastavenie projektu.",
+        "CARMATCH AI nemá povolenie na prístup k Supabase.",
 
       type:
         "error"
@@ -2519,6 +2714,10 @@ function setupKeyboard() {
 function setupSearchButton() {
 
   if (!searchButton) {
+
+    console.error(
+      "CARMATCH AI: #searchButton was not found."
+    );
 
     return;
 
