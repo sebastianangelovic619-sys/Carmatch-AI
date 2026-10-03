@@ -40,7 +40,7 @@ const CONFIG = {
     "https://frmhjjzgvmitdgcvgfuk.supabase.co",
 
   supabaseAnonKey:
-    "sb_publishable_Tl9JuJu6B_A1tQ_si2Wb25Q_f8A3e5uw",
+    "sb_publishable_53FDnkTuv2C6rhZIVDJVxQ_MOAg_80E",
 
   apiEndpoint:
     "/api/search"
