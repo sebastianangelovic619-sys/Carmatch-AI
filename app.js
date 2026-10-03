@@ -1,2867 +1,1267 @@
-/* ============================================================
-   CARMATCH AI — FRONTEND v17
-   ============================================================
-   - Correct Supabase project
-   - Supabase anonymous authentication
-   - Detailed Supabase authentication errors
-   - Correct naturalLanguage API payload
-   - Bearer authentication
-   - 5 searches/day
-   - Search refund supported by backend
-   - Robust fetch/error handling
-   - Exactly 3 cars
-   - Slovak UI
-   - Image candidates
-   - Vibration + sound
-   - No dark mode
-   - Premium UI
-   ============================================================ */
-
 "use strict";
 
-
-/* ============================================================
-   CONFIG
-   ============================================================ */
-
-const CONFIG = {
-
-  supabaseUrl:
-    "https://frmhjjzgvmitdgcvgfuk.supabase.co",
-
-  /*
-   * IMPORTANT:
-   * This must be the CURRENT publishable key
-   * from the SAME Supabase project:
-   *
-   * frmhjjzgvmitdgcvgfuk
-   *
-   * Replace this value if Supabase generated
-   * a newer publishable key.
-   */
-
-  supabaseAnonKey:
-    "sb_publishable_53FDnkTuv2C6rhZIVDJVxQ_MOAg_80E",
-
-  apiEndpoint:
-    "/api/search"
-
+const CONFIG = window.CARMATCH_CONFIG || {
+  supabaseUrl: "https://frmhjjzgvmitdgcvgfuk.supabase.co",
+  supabaseAnonKey: "sb_publishable_53FDnkTuv2C6rhZIVDJVxQ_MOAg_80E",
+  apiEndpoint: "/api/search"
 };
 
-
-/* ============================================================
-   STATE
-   ============================================================ */
+const API_ENDPOINT = CONFIG.apiEndpoint || "/api/search";
+const MAX_SEARCH_TEXT = 3000;
+const MAX_FILTER_TEXT = 500;
 
 let supabaseClient = null;
-let currentSession = null;
+let searching = false;
 
-let isSearching = false;
-let supabaseInitialized = false;
-
-let lastSearchRequest = null;
-
-
-/* ============================================================
-   DOM HELPERS
-   ============================================================ */
-
-function $(selector) {
-  return document.querySelector(selector);
-}
-
-
-function byId(id) {
+function $(id) {
   return document.getElementById(id);
 }
 
+function text(value, fallback = "") {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "string") return value.trim() || fallback;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    return value.map(v => text(v)).filter(Boolean).join(", ") || fallback;
+  }
 
-function value(id) {
+  if (typeof value === "object") {
+    for (const key of [
+      "message",
+      "error",
+      "text",
+      "value",
+      "name",
+      "description",
+      "reason"
+    ]) {
+      if (value[key] !== undefined) {
+        const result = text(value[key]);
+        if (result) return result;
+      }
+    }
 
-  const element =
-    byId(id);
+    try {
+      return JSON.stringify(value);
+    } catch (_) {
+      return fallback;
+    }
+  }
 
-  if (!element) {
+  return fallback;
+}
+
+function esc(value) {
+  return text(value).replace(/[&<>"']/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#039;"
+  }[char]));
+}
+
+function safeUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.protocol === "https:" ? url.href : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function formatPowerDisplay(value) {
+  const raw = text(value, "").replace(/,/g, ".").trim();
+
+  if (!raw) {
+    return "—";
+  }
+
+  const kwMatch = raw.match(/(\d+(?:\.\d+)?)\s*kW\b/i);
+
+  if (kwMatch) {
+    const kw = Number(kwMatch[1]);
+
+    if (Number.isFinite(kw) && kw > 0) {
+      const hp = Math.round(kw * 1.34102209);
+
+      return `${Math.round(kw)} kW (${hp} HP)`;
+    }
+  }
+
+  const hpMatch = raw.match(
+    /(\d+(?:\.\d+)?)\s*(?:hp|horsepower|bhp|ps|ks|cv)\b/i
+  );
+
+  if (hpMatch) {
+    const hp = Number(hpMatch[1]);
+
+    if (Number.isFinite(hp) && hp > 0) {
+      const kw = Math.round((hp / 1.34102209) * 10) / 10;
+      const mechanicalHp = Math.round(kw * 1.34102209);
+
+      return `${kw} kW (${mechanicalHp} HP)`;
+    }
+  }
+
+  const bare = Number(raw);
+
+  if (Number.isFinite(bare) && bare > 0) {
+    const hp = Math.round(bare * 1.34102209);
+
+    return `${Math.round(bare)} kW (${hp} HP)`;
+  }
+
+  return raw;
+}
+
+function getValue(id) {
+  return $(id)
+    ? String($(id).value || "").trim()
+    : "";
+}
+
+function getNumber(id) {
+  const raw = getValue(id);
+
+  if (!raw) {
     return "";
   }
 
-  return String(
-    element.value || ""
+  const n = Number(raw);
+
+  return Number.isFinite(n)
+    ? String(n)
+    : "";
+}
+
+function setStatus(message = "", type = "") {
+  const el = $("status");
+
+  if (!el) {
+    return;
+  }
+
+  el.className = `status${type ? ` ${type}` : ""}`;
+  el.textContent = message;
+}
+
+function updateCharCount() {
+  const input = $("aiRequest");
+  const counter = $("charCount");
+
+  if (!input || !counter) {
+    return;
+  }
+
+  counter.textContent =
+    `${input.value.length} / ${MAX_SEARCH_TEXT}`;
+}
+
+function setButtonBusy(isBusy) {
+  const button = $("searchButton");
+
+  if (!button) {
+    return;
+  }
+
+  button.disabled = isBusy;
+
+  const label = button.querySelector(".button-label");
+  const icon = button.querySelector(".button-icon");
+
+  if (label) {
+    label.textContent = isBusy
+      ? "Vyhľadávam…"
+      : "Nájsť moje auto";
+  }
+
+  if (icon) {
+    icon.textContent = isBusy
+      ? "•"
+      : "⌕";
+  }
+}
+
+function buildPayload() {
+  return {
+    naturalLanguage: getValue("aiRequest").slice(
+      0,
+      MAX_SEARCH_TEXT
+    ),
+
+    filters: {
+      budget: getNumber("budget"),
+      seats: getNumber("seats"),
+      power: getNumber("power"),
+      trunk: getNumber("trunk"),
+      drive: getValue("drive"),
+      fuel: getValue("fuel"),
+      body: getValue("body"),
+      style: getValue("style"),
+      length: getNumber("length"),
+      year: getNumber("year"),
+      avoid: getValue("avoidBrands").slice(
+        0,
+        MAX_FILTER_TEXT
+      )
+    }
+  };
+}
+
+function hasSearchInput(payload) {
+  if (payload.naturalLanguage) {
+    return true;
+  }
+
+  return Object.values(payload.filters).some(
+    value =>
+      String(value || "").trim() !== ""
+  );
+}
+
+async function ensureSupabaseClient() {
+  if (supabaseClient) {
+    return supabaseClient;
+  }
+
+  const url = String(
+    CONFIG.supabaseUrl || ""
   ).trim();
 
-}
-
-
-/* ============================================================
-   DOM ELEMENTS
-   ============================================================ */
-
-const searchButton =
-  byId("searchButton");
-
-const aiRequest =
-  byId("aiRequest");
-
-const statusElement =
-  byId("status");
-
-const usageText =
-  byId("usageText");
-
-const usageDot =
-  byId("usageDot");
-
-const resultsSection =
-  byId("resultsSection");
-
-const resultsContainer =
-  byId("results");
-
-const resultsCount =
-  byId("resultsCount");
-
-const helperText =
-  byId("helperText");
-
-
-/* ============================================================
-   STATUS
-   ============================================================ */
-
-function setStatus(
-  message,
-  type = ""
-) {
-
-  if (!statusElement) {
-    return;
-  }
-
-  statusElement.textContent =
-    message || "";
-
-  statusElement.className =
-    "status";
-
-  if (type) {
-
-    statusElement.classList.add(
-      type
-    );
-
-  }
-
-}
-
-
-/* ============================================================
-   BUTTON
-   ============================================================ */
-
-function setButtonBusy(
-  busy
-) {
-
-  if (!searchButton) {
-    return;
-  }
-
-  isSearching =
-    Boolean(busy);
-
-  searchButton.disabled =
-    Boolean(busy);
-
-  searchButton.classList.toggle(
-    "is-loading",
-    Boolean(busy)
-  );
-
-}
-
-
-/* ============================================================
-   USAGE
-   ============================================================ */
-
-function updateUsage(
-  remaining
-) {
-
-  if (!usageText) {
-    return;
-  }
-
-  const number =
-    Number(remaining);
-
-  if (!Number.isFinite(number)) {
-
-    usageText.textContent =
-      "Denný limit vyhľadávania";
-
-    return;
-
-  }
-
-  const safe =
-    Math.max(
-      0,
-      Math.floor(number)
-    );
-
-
-  if (safe === 0) {
-
-    usageText.textContent =
-      "0 vyhľadávaní zostáva dnes";
-
-  } else if (safe === 1) {
-
-    usageText.textContent =
-      "1 vyhľadávanie zostáva dnes";
-
-  } else {
-
-    usageText.textContent =
-      `${safe} vyhľadávania zostávajú dnes`;
-
-  }
-
-
-  if (usageDot) {
-
-    usageDot.style.background =
-      safe === 0
-        ? "#d33b3b"
-        : safe <= 1
-          ? "#e19a28"
-          : "#15945b";
-
-  }
-
-}
-
-
-/* ============================================================
-   SUPABASE INITIALIZATION
-   ============================================================ */
-
-async function initializeSupabase() {
+  const key = String(
+    CONFIG.supabaseAnonKey || ""
+  ).trim();
 
   if (
-    supabaseInitialized &&
-    supabaseClient
+    !url ||
+    !key ||
+    url.includes("PASTE_") ||
+    key.includes("PASTE_")
   ) {
-
-    return supabaseClient;
-
+    throw new Error(
+      "Supabase nie je správne nastavený."
+    );
   }
 
-
-  let attempts = 0;
-
-
-  while (
-    !window.supabase &&
-    attempts < 100
-  ) {
-
-    await sleep(50);
-
-    attempts++;
-
+  if (!window.supabase?.createClient) {
+    throw new Error(
+      "Nepodarilo sa načítať Supabase."
+    );
   }
 
-
-  if (
-    !window.supabase ||
-    typeof window.supabase.createClient !==
-      "function"
-  ) {
-
-    console.error(
-      "CARMATCH AI: Supabase library could not be loaded."
-    );
-
-
-    setStatus(
-      "Supabase knižnica sa nepodarila načítať.",
-      "error"
-    );
-
-
-    return null;
-
-  }
-
-
-  try {
-
-    supabaseClient =
-      window.supabase.createClient(
-        CONFIG.supabaseUrl,
-        CONFIG.supabaseAnonKey,
-        {
-          auth: {
-            persistSession: true,
-            autoRefreshToken: true,
-            detectSessionInUrl: false
-          }
-        }
-      );
-
-
-    supabaseInitialized =
-      true;
-
-
-    console.log(
-      "CARMATCH AI: Supabase initialized."
-    );
-
-
-    console.log(
-      "Supabase URL:",
-      CONFIG.supabaseUrl
-    );
-
-
-    /*
-     * Never print the complete API key.
-     */
-
-    console.log(
-      "Supabase key loaded:",
-      Boolean(
-        CONFIG.supabaseAnonKey
-      )
-    );
-
-
-    return supabaseClient;
-
-  } catch (error) {
-
-    console.error(
-      "CARMATCH AI: Supabase initialization failed.",
-      error
-    );
-
-
-    setStatus(
-      `Supabase chyba pri inicializácii: ${
-        error?.message ||
-        "Neznáma chyba"
-      }`,
-      "error"
-    );
-
-
-    return null;
-
-  }
-
-}
-
-
-/* ============================================================
-   ANONYMOUS USER
-   ============================================================ */
-
-async function initializeAnonymousUser() {
-
-  const client =
-    await initializeSupabase();
-
-
-  if (!client) {
-
-    return null;
-
-  }
-
-
-  /*
-   * First check existing session.
-   */
-
-  try {
-
-    const {
-      data,
-      error
-    } =
-      await client.auth.getSession();
-
-
-    if (error) {
-
-      console.warn(
-        "CARMATCH AI: getSession returned an error.",
-        {
-          message: error.message,
-          status: error.status,
-          code: error.code,
-          name: error.name
-        }
-      );
-
-    }
-
-
-    if (
-      !error &&
-      data?.session?.access_token
-    ) {
-
-      currentSession =
-        data.session;
-
-
-      console.log(
-        "CARMATCH AI: existing Supabase session found."
-      );
-
-
-      return currentSession;
-
-    }
-
-  } catch (error) {
-
-    console.warn(
-      "CARMATCH AI: getSession failed.",
-      {
-        message: error?.message,
-        status: error?.status,
-        code: error?.code,
-        name: error?.name
-      }
-    );
-
-  }
-
-
-  /*
-   * No valid session.
-   * Create anonymous account.
-   */
-
-  try {
-
-    console.log(
-      "CARMATCH AI: attempting anonymous Supabase sign-in..."
-    );
-
-
-    const {
-      data,
-      error
-    } =
-      await client.auth.signInAnonymously();
-
-
-    if (error) {
-
-      console.error(
-        "CARMATCH AI: anonymous sign-in FAILED.",
-        {
-          message: error.message,
-          status: error.status,
-          code: error.code,
-          name: error.name
-        }
-      );
-
-
-      /*
-       * IMPORTANT:
-       * Show the real Supabase error.
-       */
-
-      const realMessage =
-        error?.message ||
-        error?.code ||
-        "Neznáma Supabase chyba";
-
-
-      setStatus(
-        `Supabase chyba: ${realMessage}`,
-        "error"
-      );
-
-
-      return null;
-
-    }
-
-
-    currentSession =
-      data?.session || null;
-
-
-    if (
-      currentSession?.access_token
-    ) {
-
-      console.log(
-        "CARMATCH AI: anonymous authentication successful."
-      );
-
-
-      return currentSession;
-
-    }
-
-
-    /*
-     * Supabase returned no error,
-     * but also no session.
-     */
-
-    console.error(
-      "CARMATCH AI: Supabase returned no error but no session."
-    );
-
-
-    setStatus(
-      "Supabase nevytvoril prihlasovaciu reláciu.",
-      "error"
-    );
-
-
-    return null;
-
-  } catch (error) {
-
-    console.error(
-      "CARMATCH AI: anonymous authentication exception.",
-      {
-        message: error?.message,
-        status: error?.status,
-        code: error?.code,
-        name: error?.name
-      }
-    );
-
-
-    setStatus(
-      `Supabase chyba: ${
-        error?.message ||
-        "Neznáma chyba"
-      }`,
-      "error"
-    );
-
-
-    return null;
-
-  }
-
-}
-
-
-/* ============================================================
-   REFRESH SESSION
-   ============================================================ */
-
-async function refreshSession() {
-
-  if (!supabaseClient) {
-
-    return null;
-
-  }
-
-
-  try {
-
-    const {
-      data,
-      error
-    } =
-      await supabaseClient.auth.refreshSession();
-
-
-    if (error) {
-
-      console.warn(
-        "CARMATCH AI: refreshSession error.",
-        {
-          message: error.message,
-          status: error.status,
-          code: error.code
-        }
-      );
-
-
-      return null;
-
-    }
-
-
-    currentSession =
-      data?.session || null;
-
-
-    return currentSession;
-
-  } catch (error) {
-
-    console.warn(
-      "CARMATCH AI: session refresh failed.",
-      error
-    );
-
-
-    return null;
-
-  }
-
-}
-
-
-/* ============================================================
-   COLLECT REQUEST
-   ============================================================ */
-
-function collectRequest() {
-
-  const naturalLanguage =
-    value("aiRequest");
-
-
-  const filters = {
-
-    budget:
-      value("budget"),
-
-    seats:
-      value("seats"),
-
-    power:
-      value("power"),
-
-    trunk:
-      value("trunk"),
-
-    drive:
-      value("drive"),
-
-    fuel:
-      value("fuel"),
-
-    body:
-      value("body"),
-
-    style:
-      value("style"),
-
-    length:
-      value("length"),
-
-    year:
-      value("year"),
-
-    avoid:
-      value("avoidBrands") ||
-      value("avoid")
-
-  };
-
-
-  return {
-
-    naturalLanguage,
-
-    filters
-
-  };
-
-}
-
-
-/* ============================================================
-   CHECK REQUEST
-   ============================================================ */
-
-function hasSearchCriteria(
-  request
-) {
-
-  if (!request) {
-
-    return false;
-
-  }
-
-
-  if (
-    request.naturalLanguage &&
-    request.naturalLanguage.trim()
-  ) {
-
-    return true;
-
-  }
-
-
-  const filters =
-    request.filters || {};
-
-
-  return Object.values(
-    filters
-  ).some(
-    item =>
-      String(
-        item || ""
-      ).trim().length > 0
-  );
-
-}
-
-
-/* ============================================================
-   FETCH WITH TIMEOUT
-   ============================================================ */
-
-async function fetchWithTimeout(
-  url,
-  options = {},
-  timeout = 70000
-) {
-
-  const controller =
-    new AbortController();
-
-
-  const timer =
-    setTimeout(
-      () =>
-        controller.abort(),
-      timeout
-    );
-
-
-  try {
-
-    return await fetch(
+  supabaseClient =
+    window.supabase.createClient(
       url,
+      key,
       {
-        ...options,
-        signal:
-          controller.signal
+        auth: {
+          persistSession: true,
+          autoRefreshToken: true,
+          detectSessionInUrl: false
+        }
       }
     );
 
-  } finally {
-
-    clearTimeout(
-      timer
-    );
-
-  }
-
+  return supabaseClient;
 }
 
+async function getAccessToken() {
+  const client =
+    await ensureSupabaseClient();
 
-/* ============================================================
-   PERFORM SEARCH
-   ============================================================ */
+  const current =
+    await client.auth.getSession();
 
-async function performSearch(
-  request,
-  retryAfterRefresh = true
-) {
+  const currentToken =
+    current?.data?.session?.access_token;
 
-  /*
-   * Make sure authentication exists.
-   */
-
-  let session =
-    currentSession;
-
-
-  if (
-    !session?.access_token
-  ) {
-
-    session =
-      await initializeAnonymousUser();
-
+  if (currentToken) {
+    return currentToken;
   }
 
+  const signIn =
+    await client.auth.signInAnonymously();
 
-  if (
-    !session?.access_token
-  ) {
+  if (signIn?.error) {
+    throw new Error(
+      `Supabase: ${signIn.error.message}`
+    );
+  }
 
-    const error =
+  const token =
+    signIn?.data?.session?.access_token;
+
+  if (!token) {
+    throw new Error(
+      "Supabase nevytvoril platnú reláciu."
+    );
+  }
+
+  return token;
+}
+
+async function postSearch(payload) {
+  let token;
+
+  try {
+    token =
+      await getAccessToken();
+  } catch (error) {
+    throw Object.assign(
       new Error(
-        "AUTH_REQUIRED"
-      );
-
-    error.code =
-      "AUTH_REQUIRED";
-
-    throw error;
-
+        text(
+          error?.message,
+          "Nepodarilo sa prihlásiť."
+        )
+      ),
+      {
+        code: "AUTH"
+      }
+    );
   }
-
-
-  const endpoint =
-    CONFIG.apiEndpoint ||
-    "/api/search";
-
 
   let response;
 
-
   try {
-
-    response =
-      await fetchWithTimeout(
-        endpoint,
-        {
-
-          method:
-            "POST",
-
-          headers: {
-
-            "Content-Type":
-              "application/json",
-
-            "Accept":
-              "application/json",
-
-            "Authorization":
-              `Bearer ${session.access_token}`
-
-          },
-
-          body:
-            JSON.stringify(
-              request
-            )
-
-        },
-        70000
-      );
-
-  } catch (error) {
-
-    if (
-      error?.name ===
-      "AbortError"
-    ) {
-
-      const timeoutError =
-        new Error(
-          "REQUEST_TIMEOUT"
-        );
-
-      timeoutError.code =
-        "REQUEST_TIMEOUT";
-
-      throw timeoutError;
-
-    }
-
-
-    const fetchError =
-      new Error(
-        "FETCH_FAILED"
-      );
-
-    fetchError.code =
-      "FETCH_FAILED";
-
-    fetchError.original =
-      error;
-
-    throw fetchError;
-
-  }
-
-
-  /*
-   * Unauthorized:
-   * refresh session once and retry.
-   */
-
-  if (
-    response.status === 401 &&
-    retryAfterRefresh
-  ) {
-
-    console.warn(
-      "CARMATCH AI: API returned 401. Refreshing Supabase session..."
-    );
-
-
-    const refreshed =
-      await refreshSession();
-
-
-    if (
-      refreshed?.access_token
-    ) {
-
-      return performSearch(
-        request,
-        false
-      );
-
-    }
-
-  }
-
-
-  let data =
-    null;
-
-
-  const contentType =
-    response.headers.get(
-      "content-type"
-    ) || "";
-
-
-  try {
-
-    if (
-      contentType.includes(
-        "application/json"
-      )
-    ) {
-
-      data =
-        await response.json();
-
-    } else {
-
-      const text =
-        await response.text();
-
-
-      data = {
-
-        error:
-          text ||
-          "Unknown server response"
-
-      };
-
-    }
-
-  } catch (error) {
-
-    const invalidError =
-      new Error(
-        "INVALID_SERVER_RESPONSE"
-      );
-
-    invalidError.code =
-      "INVALID_SERVER_RESPONSE";
-
-    throw invalidError;
-
-  }
-
-
-  if (!response.ok) {
-
-    const serverError =
-      new Error(
-        data?.message ||
-        data?.error ||
-        `HTTP_${response.status}`
-      );
-
-
-    serverError.status =
-      response.status;
-
-
-    serverError.code =
-      data?.code ||
-      data?.errorCode ||
-      `HTTP_${response.status}`;
-
-
-    serverError.data =
-      data;
-
-
-    console.error(
-      "CARMATCH AI: API error.",
+    response = await fetch(
+      API_ENDPOINT,
       {
-        status: response.status,
-        code: serverError.code,
-        message: serverError.message,
-        data
+        method: "POST",
+
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+
+        body: JSON.stringify(payload),
+
+        cache: "no-store"
       }
     );
-
-
-    throw serverError;
-
+  } catch (_) {
+    throw Object.assign(
+      new Error(
+        "Nepodarilo sa spojiť so serverom. Vyhľadávanie sa nemuselo započítať do limitu."
+      ),
+      {
+        code: "FETCH_FAILED"
+      }
+    );
   }
 
+  const raw =
+    await response.text();
+
+  let data = {};
+
+  try {
+    data = raw
+      ? JSON.parse(raw)
+      : {};
+  } catch (_) {
+    data = {
+      message:
+        raw ||
+        "Server vrátil neplatnú odpoveď."
+    };
+  }
+
+  if (!response.ok) {
+    const error =
+      new Error(
+        text(
+          data?.message ||
+          data?.error,
+          `Server vrátil chybu ${response.status}.`
+        )
+      );
+
+    error.status =
+      response.status;
+
+    error.payload =
+      data;
+
+    throw error;
+  }
+
+  if (
+    !Array.isArray(data.cars) ||
+    data.cars.length !== 3
+  ) {
+    throw Object.assign(
+      new Error(
+        "Server nevrátil presne 3 vozidlá."
+      ),
+      {
+        code: "BAD_RESULT",
+        payload: data
+      }
+    );
+  }
 
   return data;
-
 }
 
+function imageUrls(car) {
+  const urls = [];
 
-/* ============================================================
-   SAFE TEXT
-   ============================================================ */
+  const direct =
+    safeUrl(car?.image);
 
-function safeText(
-  value,
-  fallback = ""
-) {
-
-  if (
-    value === null ||
-    value === undefined
-  ) {
-
-    return fallback;
-
+  if (direct) {
+    urls.push(direct);
   }
 
-
   if (
-    typeof value === "string" ||
-    typeof value === "number"
+    Array.isArray(
+      car?.imageCandidates
+    )
   ) {
-
-    const text =
-      String(
-        value
-      ).trim();
-
-
-    return text ||
-      fallback;
-
-  }
-
-
-  if (
-    typeof value === "object"
-  ) {
-
-    if (
-      typeof value.text ===
-      "string"
+    for (
+      const candidate
+      of car.imageCandidates
     ) {
+      const url =
+        safeUrl(candidate?.url);
 
-      return value.text;
+      if (
+        url &&
+        !urls.includes(url)
+      ) {
+        urls.push(url);
+      }
 
+      if (urls.length >= 6) {
+        break;
+      }
     }
-
-
-    if (
-      typeof value.value ===
-      "string"
-    ) {
-
-      return value.value;
-
-    }
-
-
-    if (
-      typeof value.name ===
-      "string"
-    ) {
-
-      return value.name;
-
-    }
-
-
-    return fallback;
-
   }
 
-
-  return fallback;
-
+  return urls;
 }
 
+function bestImage(car) {
+  return imageUrls(car)[0] || "";
+}
 
-/* ============================================================
-   ARRAY NORMALIZER
-   ============================================================ */
+function sourceUrl(car) {
+  const direct =
+    safeUrl(car?.photoSource);
 
-function normalizeArray(
-  value
-) {
+  if (direct) {
+    return direct;
+  }
 
   if (
-    Array.isArray(value)
+    Array.isArray(
+      car?.imageCandidates
+    )
   ) {
-
-    return value;
-
-  }
-
-
-  if (
-    typeof value === "string" &&
-    value.trim()
-  ) {
-
-    return [
-      value.trim()
-    ];
-
-  }
-
-
-  return [];
-
-}
-
-
-/* ============================================================
-   CAR NORMALIZATION
-   ============================================================ */
-
-function normalizeCar(
-  car,
-  index
-) {
-
-  const item =
-    car &&
-    typeof car === "object"
-      ? car
-      : {};
-
-
-  const title =
-    safeText(
-      item.title ||
-      item.name ||
-      item.model ||
-      item.vehicle,
-      `Auto ${index + 1}`
-    );
-
-
-  const subtitle =
-    safeText(
-      item.subtitle ||
-      item.variant ||
-      item.generation ||
-      item.trim,
-      ""
-    );
-
-
-  const description =
-    safeText(
-      item.description ||
-      item.summary ||
-      item.reason,
-      ""
-    );
-
-
-  const image =
-    safeText(
-      item.image ||
-      item.photo ||
-      item.photoUrl ||
-      item.imageUrl,
-      ""
-    );
-
-
-  const imageSource =
-    safeText(
-      item.imageSource ||
-      item.photoSource,
-      ""
-    );
-
-
-  const stats =
-    item.stats &&
-    typeof item.stats === "object"
-      ? item.stats
-      : {};
-
-
-  const power =
-    safeText(
-      item.power ||
-      item.powerKw ||
-      item.kw ||
-      stats.power,
-      "—"
-    );
-
-
-  const price =
-    safeText(
-      item.price ||
-      item.priceEUR ||
-      item.priceEur ||
-      stats.price,
-      "Cena nie je dostupná"
-    );
-
-
-  const trunk =
-    safeText(
-      item.trunk ||
-      item.trunkLitres ||
-      item.trunkL ||
-      stats.trunk,
-      "—"
-    );
-
-
-  const seats =
-    safeText(
-      item.seats ||
-      stats.seats,
-      "—"
-    );
-
-
-  const drive =
-    safeText(
-      item.drive ||
-      item.drivetrain ||
-      stats.drive,
-      "—"
-    );
-
-
-  const fuel =
-    safeText(
-      item.fuel ||
-      stats.fuel,
-      "—"
-    );
-
-
-  const year =
-    safeText(
-      item.year ||
-      item.modelYear ||
-      stats.year,
-      "—"
-    );
-
-
-  const pros =
-    normalizeArray(
-      item.pros ||
-      item.advantages ||
-      item.strengths
-    )
-      .map(
-        item =>
-          safeText(
-            item,
-            ""
-          )
-      )
-      .filter(Boolean)
-      .slice(0, 3);
-
-
-  const cons =
-    normalizeArray(
-      item.cons ||
-      item.disadvantages ||
-      item.weaknesses
-    )
-      .map(
-        item =>
-          safeText(
-            item,
-            ""
-          )
-      )
-      .filter(Boolean)
-      .slice(0, 3);
-
-
-  const officialUrl =
-    safeText(
-      item.officialUrl ||
-      item.configuratorUrl ||
-      item.officialConfigurator ||
-      item.url,
-      ""
-    );
-
-
-  const maintenance =
-    safeText(
-      item.maintenance ||
-      item.maintenanceInfo,
-      ""
-    );
-
-
-  return {
-
-    title,
-    subtitle,
-    description,
-
-    image,
-    imageSource,
-
-    /*
-     * Preserve additional image fields
-     * for image candidate processing.
-     */
-
-    images:
-      Array.isArray(item.images)
-        ? item.images
-        : [],
-
-    imageCandidates:
-      Array.isArray(item.imageCandidates)
-        ? item.imageCandidates
-        : [],
-
-    photos:
-      Array.isArray(item.photos)
-        ? item.photos
-        : [],
-
-    photo:
-      item.photo,
-
-    photoUrl:
-      item.photoUrl,
-
-    imageUrl:
-      item.imageUrl,
-
-    power,
-    price,
-    trunk,
-    seats,
-    drive,
-    fuel,
-    year,
-
-    pros,
-    cons,
-
-    officialUrl,
-
-    maintenance,
-
-    index
-
-  };
-
-}
-
-
-/* ============================================================
-   IMAGE CANDIDATE EXTRACTION
-   ============================================================ */
-
-function getImageCandidates(
-  car
-) {
-
-  if (!car) {
-
-    return [];
-
-  }
-
-
-  const candidates =
-    [];
-
-
-  const possibleValues = [
-
-    car.image,
-
-    car.photo,
-
-    car.photoUrl,
-
-    car.imageUrl,
-
-    ...(Array.isArray(
-      car.images
-    )
-      ? car.images
-      : []),
-
-    ...(Array.isArray(
-      car.imageCandidates
-    )
-      ? car.imageCandidates
-      : []),
-
-    ...(Array.isArray(
-      car.photos
-    )
-      ? car.photos
-      : [])
-
-  ];
-
-
-  for (
-    const candidate
-    of possibleValues
-  ) {
-
-    const url =
-      safeText(
-        candidate,
-        ""
-      );
-
-
-    if (
-      !url ||
-      !/^https?:\/\//i.test(
-        url
-      )
+    for (
+      const candidate
+      of car.imageCandidates
     ) {
+      const source =
+        safeUrl(candidate?.source);
 
-      continue;
-
+      if (source) {
+        return source;
+      }
     }
-
-
-    if (
-      !candidates.includes(
-        url
-      )
-    ) {
-
-      candidates.push(
-        url
-      );
-
-    }
-
   }
 
-
-  return candidates.slice(
-    0,
-    8
-  );
-
+  return "";
 }
 
-
-/* ============================================================
-   IMAGE ERROR FALLBACK
-   ============================================================ */
-
-function handleImageError(
-  image
+function renderList(
+  items,
+  empty = "Neboli uvedené."
 ) {
+  const safeItems =
+    Array.isArray(items)
+      ? items
+          .map(v => text(v))
+          .filter(Boolean)
+          .slice(0, 6)
+      : [];
 
-  if (!image) {
-
-    return;
-
+  if (!safeItems.length) {
+    return `<li>${esc(empty)}</li>`;
   }
 
-
-  const next =
-    image.dataset.nextImage;
-
-
-  if (next) {
-
-    image.dataset.nextImage =
-      "";
-
-
-    image.src =
-      next;
-
-
-    return;
-
-  }
-
-
-  const wrapper =
-    image.parentElement;
-
-
-  if (!wrapper) {
-
-    return;
-
-  }
-
-
-  image.remove();
-
-
-  const placeholder =
-    document.createElement(
-      "div"
-    );
-
-
-  placeholder.className =
-    "car-image-placeholder";
-
-
-  placeholder.textContent =
-    "Fotografia nie je dostupná";
-
-
-  wrapper.appendChild(
-    placeholder
-  );
-
+  return safeItems
+    .map(
+      item =>
+        `<li>${esc(item)}</li>`
+    )
+    .join("");
 }
 
+function renderImage(car) {
+  const urls =
+    imageUrls(car);
 
-/* ============================================================
-   ESCAPE HTML
-   ============================================================ */
-
-function escapeHtml(
-  value
-) {
-
-  return String(
-    value ?? ""
-  )
-    .replaceAll(
-      "&",
-      "&amp;"
-    )
-    .replaceAll(
-      "<",
-      "&lt;"
-    )
-    .replaceAll(
-      ">",
-      "&gt;"
-    )
-    .replaceAll(
-      '"',
-      "&quot;"
-    )
-    .replaceAll(
-      "'",
-      "&#039;"
-    );
-
-}
-
-
-/* ============================================================
-   SAFE URL
-   ============================================================ */
-
-function safeUrl(
-  value
-) {
-
-  const url =
-    safeText(
-      value,
-      ""
-    );
-
-
-  if (
-    !/^https?:\/\//i.test(
-      url
-    )
-  ) {
-
-    return "";
-
+  if (!urls.length) {
+    return `
+      <div class="empty-image">
+        Fotografia pre túto konkrétnu generáciu nebola spoľahlivo nájdená.
+      </div>
+    `;
   }
-
-
-  return url;
-
-}
-
-
-/* ============================================================
-   CAR CARD
-   ============================================================ */
-
-function createCarCard(
-  car,
-  index
-) {
-
-  const imageCandidates =
-    getImageCandidates(
-      car
-    );
-
-
-  const firstImage =
-    imageCandidates[0] ||
-    "";
-
-
-  const secondImage =
-    imageCandidates[1] ||
-    "";
-
-
-  const title =
-    escapeHtml(
-      car.title
-    );
-
-
-  const subtitle =
-    escapeHtml(
-      car.subtitle
-    );
-
-
-  const description =
-    escapeHtml(
-      car.description
-    );
-
-
-  const imageHtml =
-    firstImage
-      ? `
-        <img
-          class="car-image"
-          src="${escapeHtml(firstImage)}"
-          ${
-            secondImage
-              ? `data-next-image="${escapeHtml(secondImage)}"`
-              : ""
-          }
-          alt="${title}"
-          loading="lazy"
-          referrerpolicy="no-referrer"
-        >
-      `
-      : `
-        <div class="car-image-placeholder">
-          Fotografia nie je dostupná
-        </div>
-      `;
-
-
-  const prosHtml =
-    car.pros
-      .map(
-        item => `
-          <div class="car-point pro">
-            <span class="car-point-icon">+</span>
-            <span>${escapeHtml(item)}</span>
-          </div>
-        `
-      )
-      .join("");
-
-
-  const consHtml =
-    car.cons
-      .map(
-        item => `
-          <div class="car-point con">
-            <span class="car-point-icon">−</span>
-            <span>${escapeHtml(item)}</span>
-          </div>
-        `
-      )
-      .join("");
-
-
-  const officialUrl =
-    safeUrl(
-      car.officialUrl
-    );
-
-
-  const officialButton =
-    officialUrl
-      ? `
-        <a
-          class="car-link primary"
-          href="${escapeHtml(officialUrl)}"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Oficiálna stránka
-        </a>
-      `
-      : `
-        <span class="car-link">
-          Oficiálny odkaz nie je dostupný
-        </span>
-      `;
-
-
-  const imageSourceUrl =
-    safeUrl(
-      car.imageSource
-    );
-
 
   return `
-    <article class="car-card">
+    <img
+      src="${esc(urls[0])}"
+      alt="${esc(
+        car?.name || "Vozidlo"
+      )}"
+      loading="lazy"
+      decoding="async"
+      referrerpolicy="no-referrer"
+      data-candidates="${esc(
+        JSON.stringify(urls)
+      )}"
+      data-image-index="0"
+      onerror="window.carmatchNextImage(this)"
+    >
 
-      <div class="car-image-wrap">
+    <div
+      class="empty-image"
+      hidden
+    >
+      Fotografia sa nepodarilo načítať.
+    </div>
+  `;
+}
 
-        ${imageHtml}
+window.carmatchNextImage =
+  function (img) {
+    try {
+      const candidates =
+        JSON.parse(
+          img.getAttribute(
+            "data-candidates"
+          ) || "[]"
+        );
 
-        <div class="car-rank">
-          ${index + 1}. ODPORÚČANIE
-        </div>
+      const current =
+        Number(
+          img.getAttribute(
+            "data-image-index"
+          ) || "0"
+        );
 
+      const next =
+        current + 1;
+
+      if (
+        Array.isArray(candidates) &&
+        next < candidates.length
+      ) {
+        img.setAttribute(
+          "data-image-index",
+          String(next)
+        );
+
+        img.src =
+          candidates[next];
+
+        return;
+      }
+
+      img.style.display =
+        "none";
+
+      const fallback =
+        img.nextElementSibling;
+
+      if (fallback) {
+        fallback.hidden =
+          false;
+      }
+    } catch (_) {
+      img.style.display =
+        "none";
+    }
+  };
+
+function renderCard(
+  car,
+  index
+) {
+  const score =
+    Math.max(
+      0,
+      Math.min(
+        100,
+        Math.round(
+          Number(car?.score) || 0
+        )
+      )
+    );
+
+  const imageSource =
+    sourceUrl(car);
+
+  const priceSource =
+    safeUrl(car?.priceSource);
+
+  const configurator =
+    safeUrl(car?.configurator);
+
+  const year =
+    Number.isFinite(
+      Number(car?.year)
+    )
+      ? String(car.year)
+      : "—";
+
+  const seats =
+    Number.isFinite(
+      Number(car?.seats)
+    )
+      ? String(car.seats)
+      : "—";
+
+  const brand =
+    text(car?.brand, "");
+
+  const model =
+    text(car?.model, "");
+
+  const category =
+    text(car?.category, "");
+
+  const trim =
+    text(car?.trim, "");
+
+  const engine =
+    text(car?.engine, "");
+
+  const consumption =
+    text(
+      car?.consumptionWltp,
+      ""
+    );
+
+  const power =
+    formatPowerDisplay(
+      car?.power
+    );
+
+  const dataSources =
+    Array.isArray(
+      car?.dataSources
+    )
+      ? car.dataSources
+          .map(safeUrl)
+          .filter(Boolean)
+          .filter(
+            (v, i, a) =>
+              a.indexOf(v) === i
+          )
+          .slice(0, 6)
+      : [];
+
+  return `
+    <article class="carmatch-car-card">
+
+      <div class="carmatch-photo-wrap">
+        ${renderImage(car)}
       </div>
 
+      <div class="card-body">
 
-      <div class="car-body">
+        <div class="card-rank">
+          #${index + 1} najlepšia zhoda
+        </div>
 
-        <h3 class="car-title">
-          ${title}
+        <h3 class="card-title">
+          ${
+            esc(
+              brand && model
+                ? `${brand} ${model}`
+                : car?.name ||
+                  "Neznáme vozidlo"
+            )
+          }
         </h3>
 
+        <div class="card-subtitle">
 
-        ${
-          subtitle
-            ? `
-              <div class="car-subtitle">
-                ${subtitle}
-              </div>
-            `
-            : ""
-        }
+          ${
+            trim
+              ? `Výbava: ${esc(trim)}`
+              : "Výbava: neoverená"
+          }
 
+          ${
+            category
+              ? ` · Kategória: ${esc(category)}`
+              : ""
+          }
 
-        ${
-          description
-            ? `
-              <p class="car-description">
-                ${description}
-              </p>
-            `
-            : ""
-        }
+          ${
+            car?.generation
+              ? ` · ${esc(car.generation)}`
+              : ""
+          }
 
+          ${
+            year !== "—"
+              ? ` · ${esc(year)}`
+              : ""
+          }
 
-        <div class="car-stats">
+        </div>
 
-          <div class="car-stat">
+        <div class="score-pill">
+          Zhoda ${score}%
+        </div>
 
-            <span class="car-stat-label">
-              Výkon
+        <div class="spec-grid">
+
+          <div class="spec-item">
+            <b>Cena</b>
+            <span>
+              ${esc(
+                car?.price ||
+                "Cena na vyžiadanie"
+              )}
             </span>
-
-            <span class="car-stat-value">
-              ${escapeHtml(car.power)}
-            </span>
-
           </div>
 
-
-          <div class="car-stat">
-
-            <span class="car-stat-label">
-              Cena
+          <div class="spec-item">
+            <b>Výkon</b>
+            <span>
+              ${esc(power)}
             </span>
-
-            <span class="car-stat-value">
-              ${escapeHtml(car.price)}
-            </span>
-
           </div>
 
-
-          <div class="car-stat">
-
-            <span class="car-stat-label">
-              Kufor
+          <div class="spec-item">
+            <b>Spotreba WLTP</b>
+            <span>
+              ${esc(
+                consumption || "—"
+              )}
             </span>
-
-            <span class="car-stat-value">
-              ${escapeHtml(car.trunk)}
-            </span>
-
           </div>
 
-
-          <div class="car-stat">
-
-            <span class="car-stat-label">
-              Pohon
+          <div class="spec-item">
+            <b>Motor</b>
+            <span>
+              ${esc(
+                engine || "—"
+              )}
             </span>
+          </div>
 
-            <span class="car-stat-value">
-              ${escapeHtml(car.drive)}
+          <div class="spec-item">
+            <b>Sedadlá</b>
+            <span>
+              ${esc(seats)}
             </span>
+          </div>
 
+          <div class="spec-item">
+            <b>Kufor</b>
+            <span>
+              ${esc(
+                car?.trunk || "—"
+              )}
+            </span>
+          </div>
+
+          <div class="spec-item">
+            <b>Pohon</b>
+            <span>
+              ${esc(
+                car?.drive || "—"
+              )}
+            </span>
+          </div>
+
+          <div class="spec-item">
+            <b>Palivo</b>
+            <span>
+              ${esc(
+                car?.fuel || "—"
+              )}
+            </span>
+          </div>
+
+          <div class="spec-item">
+            <b>Prevodovka</b>
+            <span>
+              ${esc(
+                car?.transmission ||
+                "—"
+              )}
+            </span>
+          </div>
+
+          <div class="spec-item">
+            <b>Karoséria</b>
+            <span>
+              ${esc(
+                car?.body ||
+                category ||
+                "—"
+              )}
+            </span>
           </div>
 
         </div>
 
+        <div class="card-reason">
+          <strong>Prečo:</strong>
+          ${
+            esc(
+              car?.reason ||
+              "Spĺňa zadané požiadavky."
+            )
+          }
+        </div>
 
-        ${
-          car.pros.length ||
-          car.cons.length
-            ? `
-              <div class="car-points">
-                ${prosHtml}
-                ${consHtml}
-              </div>
-            `
-            : ""
-        }
+        <div class="card-columns">
 
+          <div>
+            <h4>Výhody</h4>
+            <ul>
+              ${renderList(car?.pros)}
+            </ul>
+          </div>
 
-        ${
-          car.maintenance
-            ? `
-              <div class="car-description">
-                <strong>Údržba:</strong>
-                ${escapeHtml(car.maintenance)}
-              </div>
-            `
-            : ""
-        }
+          <div>
+            <h4>Nevýhody</h4>
+            <ul>
+              ${renderList(car?.cons)}
+            </ul>
+          </div>
 
+        </div>
 
-        <div class="car-actions">
-
-          ${officialButton}
-
+        <div class="maintenance">
+          <h4>Údržba</h4>
 
           ${
-            imageSourceUrl
+            esc(
+              car?.maintenance ||
+              "Údaje o údržbe nie sú uvedené."
+            )
+          }
+        </div>
+
+        <div class="card-actions">
+
+          ${
+            priceSource
               ? `
                 <a
-                  class="car-link"
-                  href="${escapeHtml(imageSourceUrl)}"
+                  class="card-action card-action-dark"
+                  href="${esc(priceSource)}"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  Zdroj fotografie
+                  Oficiálna cena
                 </a>
               `
-              : `
-                <span class="car-link">
-                  Zdroj fotografie
-                </span>
+              : ""
+          }
+
+          ${
+            configurator
+              ? `
+                <a
+                  class="card-action card-action-soft"
+                  href="${esc(configurator)}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Oficiálny konfigurátor
+                </a>
               `
+              : ""
+          }
+
+          ${
+            imageSource
+              ? `
+                <a
+                  class="card-action card-action-soft"
+                  href="${esc(imageSource)}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Zdroj foto
+                </a>
+              `
+              : ""
           }
 
         </div>
 
-      </div>
+        ${
+          dataSources.length
+            ? `
+              <div class="source-links">
+                Zdroje:
+                ${
+                  dataSources
+                    .map(
+                      (url, i) =>
+                        `
+                          <a
+                            href="${esc(url)}"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            ${i + 1}
+                          </a>
+                        `
+                    )
+                    .join("")
+                }
+              </div>
+            `
+            : ""
+        }
 
+      </div>
     </article>
   `;
-
 }
 
+function renderResults(data) {
+  const section =
+    $("resultsSection");
 
-/* ============================================================
-   RENDER RESULTS
-   ============================================================ */
+  const results =
+    $("results");
 
-function renderResults(
-  cars
-) {
-
-  if (!resultsContainer) {
-
+  if (!section || !results) {
     return;
-
   }
 
+  results.innerHTML =
+    data.cars
+      .slice(0, 3)
+      .map(renderCard)
+      .join("");
 
-  resultsContainer.innerHTML =
-    "";
+  section.hidden = false;
 
+  const count =
+    $("resultsCount");
 
-  const normalizedCars =
-    Array.isArray(cars)
-      ? cars
-          .slice(0, 3)
-          .map(
-            (car, index) =>
-              normalizeCar(
-                car,
-                index
-              )
-          )
-      : [];
+  if (count) {
+    count.textContent =
+      "3 odporúčania";
+  }
 
+  requestAnimationFrame(() => {
+    section.scrollIntoView({
+      behavior: "smooth",
+      block: "start"
+    });
+  });
+}
 
-  if (
-    normalizedCars.length !== 3
+function renderError(error) {
+  const results =
+    $("results");
+
+  const section =
+    $("resultsSection");
+
+  if (!results || !section) {
+    return;
+  }
+
+  let message =
+    text(
+      error?.message,
+      "Vyhľadávanie sa nepodarilo dokončiť."
+    );
+
+  if (error?.status === 429) {
+    message =
+      text(
+        error?.payload?.message,
+        "Denný limit vyhľadávaní bol dosiahnutý."
+      );
+  } else if (
+    error?.status === 503
   ) {
+    message =
+      text(
+        error?.payload?.message,
+        "AI je momentálne nedostupná. Toto vyhľadávanie sa podľa servera nezapočítalo do limitu."
+      );
+  }
 
-    resultsContainer.innerHTML = `
-      <div class="empty-results">
-        CARMATCH AI nedostal kompletné 3 odporúčania.
-        Skús vyhľadávanie zopakovať.
+  results.innerHTML =
+    `
+      <div class="inline-error">
+        ${esc(message)}
       </div>
     `;
 
-  } else {
-
-    resultsContainer.innerHTML =
-      normalizedCars
-        .map(
-          (car, index) =>
-            createCarCard(
-              car,
-              index
-            )
-        )
-        .join("");
-
-  }
-
-
-  if (resultsSection) {
-
-    resultsSection.hidden =
-      false;
-
-
-    resultsSection.scrollIntoView({
-      behavior:
-        "smooth",
-      block:
-        "start"
-    });
-
-  }
-
-
-  if (resultsCount) {
-
-    resultsCount.textContent =
-      normalizedCars.length === 3
-        ? "3 autá"
-        : `${normalizedCars.length} autá`;
-
-  }
-
-
-  resultsContainer
-    .querySelectorAll(
-      "img.car-image"
-    )
-    .forEach(
-      image => {
-
-        image.addEventListener(
-          "error",
-          () => {
-
-            handleImageError(
-              image
-            );
-
-          },
-          {
-            once:
-              true
-          }
-        );
-
-      }
-    );
-
+  section.hidden = false;
 }
-
-
-/* ============================================================
-   CLEAR RESULTS
-   ============================================================ */
-
-function clearResults() {
-
-  if (resultsContainer) {
-
-    resultsContainer.innerHTML =
-      "";
-
-  }
-
-
-  if (resultsSection) {
-
-    resultsSection.hidden =
-      true;
-
-  }
-
-}
-
-
-/* ============================================================
-   SUCCESS FEEDBACK
-   ============================================================ */
 
 function successFeedback() {
-
   try {
-
-    if (
-      "vibrate" in navigator
-    ) {
-
-      navigator.vibrate(
-        [40, 45, 70]
-      );
-
+    if (navigator.vibrate) {
+      navigator.vibrate([
+        70,
+        40,
+        100
+      ]);
     }
-
   } catch (_) {}
 
-
   try {
-
-    const AudioContext =
+    const AudioContextClass =
       window.AudioContext ||
       window.webkitAudioContext;
 
-
-    if (!AudioContext) {
-
+    if (!AudioContextClass) {
       return;
-
     }
 
+    const ctx =
+      new AudioContextClass();
 
-    const context =
-      new AudioContext();
+    const now =
+      ctx.currentTime;
 
-
-    const oscillator =
-      context.createOscillator();
-
+    const osc =
+      ctx.createOscillator();
 
     const gain =
-      context.createGain();
+      ctx.createGain();
 
-
-    oscillator.type =
+    osc.type =
       "sine";
 
-
-    oscillator.frequency.setValueAtTime(
-      620,
-      context.currentTime
+    osc.frequency.setValueAtTime(
+      660,
+      now
     );
 
-
-    oscillator.frequency.exponentialRampToValueAtTime(
+    osc.frequency.setValueAtTime(
       880,
-      context.currentTime + 0.12
+      now + 0.08
     );
-
 
     gain.gain.setValueAtTime(
       0.0001,
-      context.currentTime
+      now
     );
-
 
     gain.gain.exponentialRampToValueAtTime(
-      0.045,
-      context.currentTime + 0.015
+      0.08,
+      now + 0.02
     );
-
 
     gain.gain.exponentialRampToValueAtTime(
       0.0001,
-      context.currentTime + 0.18
+      now + 0.22
     );
 
+    osc.connect(gain);
+    gain.connect(ctx.destination);
 
-    oscillator.connect(
-      gain
+    osc.start(now);
+    osc.stop(now + 0.24);
+
+    osc.addEventListener(
+      "ended",
+      () =>
+        ctx.close().catch(
+          () => {}
+        )
     );
-
-
-    gain.connect(
-      context.destination
-    );
-
-
-    oscillator.start();
-
-
-    oscillator.stop(
-      context.currentTime + 0.2
-    );
-
-
-    setTimeout(
-      () => {
-
-        try {
-
-          context.close();
-
-        } catch (_) {}
-
-      },
-      300
-    );
-
   } catch (_) {}
-
 }
-
-
-/* ============================================================
-   ERROR MESSAGE
-   ============================================================ */
-
-function getFriendlyError(
-  error
-) {
-
-  const code =
-    error?.code ||
-    "";
-
-
-  const status =
-    Number(
-      error?.status
-    );
-
-
-  if (
-    code ===
-    "FETCH_FAILED"
-  ) {
-
-    return {
-
-      message:
-        "Vyhľadávanie sa nepodarilo spojiť so serverom. Skontroluj internetové pripojenie a skús to znova.",
-
-      type:
-        "error"
-
-    };
-
-  }
-
-
-  if (
-    code ===
-    "REQUEST_TIMEOUT"
-  ) {
-
-    return {
-
-      message:
-        "Vyhľadávanie trvá príliš dlho. Skús to znova.",
-
-      type:
-        "error"
-
-    };
-
-  }
-
-
-  if (
-    code ===
-    "AUTH_REQUIRED"
-  ) {
-
-    return {
-
-      message:
-        "Supabase autentifikácia zlyhala. Pozri presnú chybu zobrazenú vyššie.",
-
-      type:
-        "error"
-
-    };
-
-  }
-
-
-  if (
-    status === 401
-  ) {
-
-    return {
-
-      message:
-        "Server odmietol prihlasovací token Supabase.",
-
-      type:
-        "error"
-
-    };
-
-  }
-
-
-  if (
-    status === 403
-  ) {
-
-    return {
-
-      message:
-        "CARMATCH AI nemá povolenie na prístup k Supabase.",
-
-      type:
-        "error"
-
-    };
-
-  }
-
-
-  if (
-    status === 503
-  ) {
-
-    return {
-
-      message:
-        error?.message ||
-        "AI služba je momentálne nedostupná. Vyhľadávanie sa nezapočítalo do denného limitu.",
-
-      type:
-        "error"
-
-    };
-
-  }
-
-
-  if (
-    status === 429
-  ) {
-
-    return {
-
-      message:
-        "Dosiahol si dnešný limit 5 vyhľadávaní.",
-
-      type:
-        "error"
-
-    };
-
-  }
-
-
-  if (
-    status >= 500
-  ) {
-
-    return {
-
-      message:
-        "Server CARMATCH AI momentálne neodpovedá správne. Skús to znova.",
-
-      type:
-        "error"
-
-    };
-
-  }
-
-
-  if (
-    code ===
-    "INVALID_RESULTS"
-  ) {
-
-    return {
-
-      message:
-        "CARMATCH AI nedostal kompletné 3 odporúčania. Skús vyhľadávanie zopakovať.",
-
-      type:
-        "error"
-
-    };
-
-  }
-
-
-  return {
-
-    message:
-      error?.message ||
-      "Vyhľadávanie sa nepodarilo dokončiť. Skús to znova.",
-
-    type:
-      "error"
-
-  };
-
-}
-
-
-/* ============================================================
-   MAIN SEARCH
-   ============================================================ */
 
 async function findCars() {
-
-  if (isSearching) {
-
+  if (searching) {
     return;
-
   }
 
+  const payload =
+    buildPayload();
 
-  const request =
-    collectRequest();
-
-
-  if (
-    !hasSearchCriteria(
-      request
-    )
-  ) {
-
+  if (!hasSearchInput(payload)) {
     setStatus(
-      "Najprv napíš, aké auto hľadáš, alebo nastav aspoň jeden filter.",
+      "Napíš požiadavku alebo nastav aspoň jeden filter.",
       "error"
     );
 
-
-    if (aiRequest) {
-
-      aiRequest.focus();
-
-    }
-
+    $("aiRequest")?.focus();
 
     return;
-
   }
 
+  searching = true;
 
-  clearResults();
-
-
-  setButtonBusy(
-    true
-  );
-
+  setButtonBusy(true);
 
   setStatus(
-    "Pripravujem vyhľadávanie…",
-    "loading"
+    "Hľadám aktuálne modely, ceny, WLTP a konfigurátory…"
   );
 
+  const results =
+    $("results");
 
-  lastSearchRequest =
-    request;
+  const section =
+    $("resultsSection");
 
+  if (results) {
+    results.innerHTML =
+      `
+        <div class="inline-error">
+          <span class="loading-inline">
+            <span class="loading-dot"></span>
+            Hľadám vhodné autá…
+          </span>
+        </div>
+      `;
+  }
+
+  if (section) {
+    section.hidden = false;
+  }
 
   try {
-
-    /*
-     * Authentication.
-     */
-
-    const session =
-      await initializeAnonymousUser();
-
-
-    if (
-      !session?.access_token
-    ) {
-
-      const authError =
-        new Error(
-          "AUTH_REQUIRED"
-        );
-
-
-      authError.code =
-        "AUTH_REQUIRED";
-
-
-      throw authError;
-
-    }
-
-
-    setStatus(
-      "Hľadám aktuálne modely a porovnávam ich s tvojimi požiadavkami…",
-      "loading"
-    );
-
-
     const data =
-      await performSearch(
-        request
-      );
+      await postSearch(payload);
 
+    renderResults(data);
 
-    const cars =
-      Array.isArray(
-        data?.cars
-      )
-        ? data.cars
-        : [];
-
-
-    if (
-      cars.length !== 3
-    ) {
-
-      const resultError =
-        new Error(
-          "CARMATCH AI nedostal presne 3 autá."
-        );
-
-
-      resultError.code =
-        "INVALID_RESULTS";
-
-
-      throw resultError;
-
-    }
-
-
-    /*
-     * Backend is responsible
-     * for search counting.
-     */
-
-    if (
-      data?.remaining !==
-      undefined
-    ) {
-
-      updateUsage(
-        data.remaining
-      );
-
-    }
-
-
-    renderResults(
-      cars
-    );
-
+    const remaining =
+      Number(data?.remaining);
 
     setStatus(
-      "Hotovo — našiel som 3 autá podľa tvojich požiadaviek.",
+      Number.isFinite(remaining)
+        ? `Hotovo · zostáva ${Math.max(
+            0,
+            Math.round(remaining)
+          )} vyhľadávaní dnes.`
+        : "Hotovo.",
       "success"
     );
 
-
     successFeedback();
 
-
   } catch (error) {
-
     console.error(
       "CARMATCH AI search error:",
       error
     );
 
+    renderError(error);
 
-    const friendly =
-      getFriendlyError(
-        error
+    if (
+      error?.code ===
+      "FETCH_FAILED"
+    ) {
+      setStatus(
+        "Server sa neozval. Skús to znova; vyhľadávanie sa nemá započítať do limitu.",
+        "error"
       );
-
-
-    setStatus(
-      friendly.message,
-      friendly.type
-    );
-
-
-    clearResults();
-
+    } else {
+      setStatus(
+        text(
+          error?.message,
+          "Vyhľadávanie sa nepodarilo dokončiť."
+        ),
+        "error"
+      );
+    }
 
   } finally {
-
-    setButtonBusy(
-      false
-    );
-
+    searching = false;
+    setButtonBusy(false);
   }
-
 }
 
+function setup() {
+  const input =
+    $("aiRequest");
 
-/* ============================================================
-   EXAMPLE BUTTONS
-   ============================================================ */
+  const button =
+    $("searchButton");
 
-function setupExampleButtons() {
+  input?.addEventListener(
+    "input",
+    updateCharCount
+  );
+
+  input?.addEventListener(
+    "keydown",
+    event => {
+      if (
+        (event.ctrlKey ||
+          event.metaKey) &&
+        event.key === "Enter"
+      ) {
+        event.preventDefault();
+        findCars();
+      }
+    }
+  );
+
+  button?.addEventListener(
+    "click",
+    findCars
+  );
 
   document
     .querySelectorAll(
       ".example-chip"
     )
-    .forEach(
-      button => {
-
-        button.addEventListener(
-          "click",
-          () => {
-
-            const example =
-              button.dataset.example ||
-              "";
-
-
-            if (!aiRequest) {
-
-              return;
-
-            }
-
-
-            aiRequest.value =
-              example;
-
-
-            aiRequest.dispatchEvent(
-              new Event(
-                "input",
-                {
-                  bubbles:
-                    true
-                }
-              )
-            );
-
-
-            aiRequest.focus();
-
+    .forEach(chip => {
+      chip.addEventListener(
+        "click",
+        () => {
+          if (!input) {
+            return;
           }
-        );
 
-      }
-    );
+          input.value =
+            chip.dataset.example ||
+            "";
 
-}
+          updateCharCount();
 
+          input.focus();
+        }
+      );
+    });
 
-/* ============================================================
-   CHARACTER COUNTER
-   ============================================================ */
-
-function setupCharacterCounter() {
-
-  if (!aiRequest) {
-
-    return;
-
-  }
-
-
-  const counter =
-    byId("charCount");
-
-
-  if (!counter) {
-
-    return;
-
-  }
-
-
-  function update() {
-
-    counter.textContent =
-      `${aiRequest.value.length} / 3000`;
-
-  }
-
-
-  aiRequest.addEventListener(
-    "input",
-    update
-  );
-
-
-  update();
-
-}
-
-
-/* ============================================================
-   FILTER DETAILS
-   ============================================================ */
-
-function setupFilters() {
-
-  document
-    .querySelectorAll(
-      ".filters-details"
-    )
-    .forEach(
-      details => {
-
-        details.addEventListener(
-          "toggle",
-          () => {
-
-            const arrow =
-              details.querySelector(
-                ".summary-arrow"
-              );
-
-
-            if (!arrow) {
-
-              return;
-
-            }
-
-
-            arrow.textContent =
-              details.open
-                ? "−"
-                : "+";
-
-          }
-        );
-
-      }
-    );
-
-}
-
-
-/* ============================================================
-   KEYBOARD SHORTCUT
-   ============================================================ */
-
-function setupKeyboard() {
-
-  if (!aiRequest) {
-
-    return;
-
-  }
-
-
-  aiRequest.addEventListener(
-    "keydown",
-    event => {
-
-      if (
-        (
-          event.ctrlKey ||
-          event.metaKey
-        ) &&
-        event.key === "Enter"
-      ) {
-
-        event.preventDefault();
-
-        findCars();
-
-      }
-
-    }
-  );
-
-}
-
-
-/* ============================================================
-   SEARCH BUTTON
-   ============================================================ */
-
-function setupSearchButton() {
-
-  if (!searchButton) {
-
-    console.error(
-      "CARMATCH AI: #searchButton was not found."
-    );
-
-    return;
-
-  }
-
-
-  searchButton.disabled =
-    false;
-
-
-  searchButton.addEventListener(
-    "click",
-    event => {
-
-      event.preventDefault();
-
-      findCars();
-
-    }
-  );
-
-}
-
-
-/* ============================================================
-   INITIAL START
-   ============================================================ */
-
-async function startCarmatch() {
-
-  if (searchButton) {
-
-    searchButton.disabled =
-      false;
-
-  }
-
-
-  updateUsage(
-    5
-  );
-
+  updateCharCount();
 
   setStatus(
     "Pripravené na vyhľadávanie."
   );
-
-
-  setupSearchButton();
-
-  setupExampleButtons();
-
-  setupCharacterCounter();
-
-  setupFilters();
-
-  setupKeyboard();
-
-
-  /*
-   * Authentication starts in background.
-   */
-
-  initializeAnonymousUser()
-    .then(
-      session => {
-
-        if (session) {
-
-          setStatus(
-            "Pripravené na vyhľadávanie."
-          );
-
-        } else {
-
-          console.warn(
-            "CARMATCH AI: Anonymous authentication did not create a session."
-          );
-
-        }
-
-      }
-    )
-    .catch(
-      error => {
-
-        console.warn(
-          "CARMATCH AI authentication:",
-          error
-        );
-
-      }
-    );
-
 }
-
-
-/* ============================================================
-   SLEEP
-   ============================================================ */
-
-function sleep(
-  milliseconds
-) {
-
-  return new Promise(
-    resolve =>
-      setTimeout(
-        resolve,
-        milliseconds
-      )
-  );
-
-}
-
-
-/* ============================================================
-   GLOBAL API
-   ============================================================ */
-
-window.findCars =
-  findCars;
-
-
-/* ============================================================
-   START
-   ============================================================ */
 
 if (
   document.readyState ===
   "loading"
 ) {
-
   document.addEventListener(
     "DOMContentLoaded",
-    startCarmatch,
-    {
-      once:
-        true
-    }
+    setup
   );
-
 } else {
-
-  startCarmatch();
-
+  setup();
 }
+
+window.findCars =
+  findCars;
