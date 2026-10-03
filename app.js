@@ -1,6 +1,7 @@
 /* ============================================================
-   CARMATCH AI — FRONTEND v15
+   CARMATCH AI — FRONTEND v16
    ============================================================
+   - Correct Supabase project
    - Supabase anonymous authentication
    - Correct naturalLanguage API payload
    - Bearer authentication
@@ -22,10 +23,28 @@
    CONFIG
    ============================================================ */
 
-const CONFIG = window.CARMATCH_CONFIG || {
-  supabaseUrl: "",
-  supabaseAnonKey: "",
-  apiEndpoint: "/api/search"
+/*
+ * IMPORTANT:
+ * Supabase project used by CARMATCH AI.
+ *
+ * We intentionally do NOT use the old
+ * window.CARMATCH_CONFIG.supabaseUrl value here.
+ *
+ * Correct project:
+ * frmhjjzgvmitdgcvgfuk
+ */
+
+const CONFIG = {
+
+  supabaseUrl:
+    "https://frmhjjzgvmitdgcvgfuk.supabase.co",
+
+  supabaseAnonKey:
+    "sb_publishable_Tl9JuJu6B_A1tQ_si2Wb25Q_f8A3e5uw",
+
+  apiEndpoint:
+    "/api/search"
+
 };
 
 
@@ -50,18 +69,25 @@ function $(selector) {
   return document.querySelector(selector);
 }
 
+
 function byId(id) {
   return document.getElementById(id);
 }
 
+
 function value(id) {
-  const element = byId(id);
+
+  const element =
+    byId(id);
 
   if (!element) {
     return "";
   }
 
-  return String(element.value || "").trim();
+  return String(
+    element.value || ""
+  ).trim();
+
 }
 
 
@@ -101,7 +127,10 @@ const helperText =
    STATUS
    ============================================================ */
 
-function setStatus(message, type = "") {
+function setStatus(
+  message,
+  type = ""
+) {
 
   if (!statusElement) {
     return;
@@ -114,8 +143,11 @@ function setStatus(message, type = "") {
     "status";
 
   if (type) {
-    statusElement.classList.add(type);
+    statusElement.classList.add(
+      type
+    );
   }
+
 }
 
 
@@ -123,13 +155,16 @@ function setStatus(message, type = "") {
    BUTTON
    ============================================================ */
 
-function setButtonBusy(busy) {
+function setButtonBusy(
+  busy
+) {
 
   if (!searchButton) {
     return;
   }
 
-  isSearching = Boolean(busy);
+  isSearching =
+    Boolean(busy);
 
   searchButton.disabled =
     Boolean(busy);
@@ -138,6 +173,7 @@ function setButtonBusy(busy) {
     "is-loading",
     Boolean(busy)
   );
+
 }
 
 
@@ -145,7 +181,9 @@ function setButtonBusy(busy) {
    USAGE
    ============================================================ */
 
-function updateUsage(remaining) {
+function updateUsage(
+  remaining
+) {
 
   if (!usageText) {
     return;
@@ -155,8 +193,10 @@ function updateUsage(remaining) {
     Number(remaining);
 
   if (!Number.isFinite(number)) {
+
     usageText.textContent =
       "Denný limit vyhľadávania";
+
     return;
   }
 
@@ -166,7 +206,13 @@ function updateUsage(remaining) {
       Math.floor(number)
     );
 
-  if (safe === 1) {
+
+  if (safe === 0) {
+
+    usageText.textContent =
+      "0 vyhľadávaní zostáva dnes";
+
+  } else if (safe === 1) {
 
     usageText.textContent =
       "1 vyhľadávanie zostáva dnes";
@@ -178,6 +224,7 @@ function updateUsage(remaining) {
 
   }
 
+
   if (usageDot) {
 
     usageDot.style.background =
@@ -188,6 +235,7 @@ function updateUsage(remaining) {
           : "#15945b";
 
   }
+
 }
 
 
@@ -197,29 +245,18 @@ function updateUsage(remaining) {
 
 async function initializeSupabase() {
 
-  if (supabaseInitialized) {
-    return supabaseClient;
-  }
-
   if (
-    !CONFIG.supabaseUrl ||
-    !CONFIG.supabaseAnonKey
+    supabaseInitialized &&
+    supabaseClient
   ) {
 
-    console.error(
-      "CARMATCH AI: Supabase configuration is missing."
-    );
+    return supabaseClient;
 
-    return null;
   }
 
 
-  /*
-   * The CDN script is loaded with defer.
-   * Wait briefly if window.supabase is not ready yet.
-   */
-
   let attempts = 0;
+
 
   while (
     !window.supabase &&
@@ -235,7 +272,8 @@ async function initializeSupabase() {
 
   if (
     !window.supabase ||
-    typeof window.supabase.createClient !== "function"
+    typeof window.supabase.createClient !==
+      "function"
   ) {
 
     console.error(
@@ -243,6 +281,7 @@ async function initializeSupabase() {
     );
 
     return null;
+
   }
 
 
@@ -261,7 +300,16 @@ async function initializeSupabase() {
         }
       );
 
-    supabaseInitialized = true;
+
+    supabaseInitialized =
+      true;
+
+
+    console.log(
+      "CARMATCH AI: Supabase initialized:",
+      CONFIG.supabaseUrl
+    );
+
 
     return supabaseClient;
 
@@ -273,7 +321,9 @@ async function initializeSupabase() {
     );
 
     return null;
+
   }
+
 }
 
 
@@ -286,13 +336,16 @@ async function initializeAnonymousUser() {
   const client =
     await initializeSupabase();
 
+
   if (!client) {
+
     return null;
+
   }
 
 
   /*
-   * First check whether a session already exists.
+   * First check existing session.
    */
 
   try {
@@ -300,14 +353,20 @@ async function initializeAnonymousUser() {
     const {
       data,
       error
-    } = await client.auth.getSession();
+    } =
+      await client.auth.getSession();
 
-    if (!error && data?.session) {
+
+    if (
+      !error &&
+      data?.session
+    ) {
 
       currentSession =
         data.session;
 
       return currentSession;
+
     }
 
   } catch (error) {
@@ -322,7 +381,7 @@ async function initializeAnonymousUser() {
 
   /*
    * No session.
-   * Create an anonymous account.
+   * Create anonymous account.
    */
 
   try {
@@ -330,7 +389,9 @@ async function initializeAnonymousUser() {
     const {
       data,
       error
-    } = await client.auth.signInAnonymously();
+    } =
+      await client.auth.signInAnonymously();
+
 
     if (error) {
 
@@ -340,10 +401,22 @@ async function initializeAnonymousUser() {
       );
 
       return null;
+
     }
+
 
     currentSession =
       data?.session || null;
+
+
+    if (currentSession) {
+
+      console.log(
+        "CARMATCH AI: anonymous authentication successful."
+      );
+
+    }
+
 
     return currentSession;
 
@@ -355,7 +428,9 @@ async function initializeAnonymousUser() {
     );
 
     return null;
+
   }
+
 }
 
 
@@ -366,22 +441,36 @@ async function initializeAnonymousUser() {
 async function refreshSession() {
 
   if (!supabaseClient) {
+
     return null;
+
   }
+
 
   try {
 
     const {
       data,
       error
-    } = await supabaseClient.auth.refreshSession();
+    } =
+      await supabaseClient.auth.refreshSession();
+
 
     if (error) {
+
+      console.warn(
+        "CARMATCH AI: refreshSession error.",
+        error
+      );
+
       return null;
+
     }
+
 
     currentSession =
       data?.session || null;
+
 
     return currentSession;
 
@@ -393,7 +482,9 @@ async function refreshSession() {
     );
 
     return null;
+
   }
+
 }
 
 
@@ -402,13 +493,6 @@ async function refreshSession() {
    ============================================================ */
 
 function collectRequest() {
-
-  /*
-   * IMPORTANT:
-   * Backend expects "naturalLanguage".
-   * The previous frontend used "request",
-   * which could cause the search to fail.
-   */
 
   const naturalLanguage =
     value("aiRequest");
@@ -454,9 +538,13 @@ function collectRequest() {
 
 
   return {
+
     naturalLanguage,
+
     filters
+
   };
+
 }
 
 
@@ -464,27 +552,40 @@ function collectRequest() {
    CHECK REQUEST
    ============================================================ */
 
-function hasSearchCriteria(request) {
+function hasSearchCriteria(
+  request
+) {
 
   if (!request) {
+
     return false;
+
   }
+
 
   if (
     request.naturalLanguage &&
     request.naturalLanguage.trim()
   ) {
+
     return true;
+
   }
+
 
   const filters =
     request.filters || {};
 
-  return Object.values(filters)
-    .some(
-      item =>
-        String(item || "").trim().length > 0
-    );
+
+  return Object.values(
+    filters
+  ).some(
+    item =>
+      String(
+        item || ""
+      ).trim().length > 0
+  );
+
 }
 
 
@@ -501,9 +602,11 @@ async function fetchWithTimeout(
   const controller =
     new AbortController();
 
+
   const timer =
     setTimeout(
-      () => controller.abort(),
+      () =>
+        controller.abort(),
       timeout
     );
 
@@ -521,9 +624,12 @@ async function fetchWithTimeout(
 
   } finally {
 
-    clearTimeout(timer);
+    clearTimeout(
+      timer
+    );
 
   }
+
 }
 
 
@@ -537,19 +643,37 @@ async function performSearch(
 ) {
 
   /*
-   * Make sure Supabase exists.
+   * Make sure authentication exists.
    */
 
-  const session =
-    currentSession ||
-    await initializeAnonymousUser();
+  let session =
+    currentSession;
 
 
-  if (!session?.access_token) {
+  if (
+    !session?.access_token
+  ) {
 
-    throw new Error(
-      "AUTH_REQUIRED"
-    );
+    session =
+      await initializeAnonymousUser();
+
+  }
+
+
+  if (
+    !session?.access_token
+  ) {
+
+    const error =
+      new Error(
+        "AUTH_REQUIRED"
+      );
+
+    error.code =
+      "AUTH_REQUIRED";
+
+    throw error;
+
   }
 
 
@@ -567,9 +691,12 @@ async function performSearch(
       await fetchWithTimeout(
         endpoint,
         {
-          method: "POST",
+
+          method:
+            "POST",
 
           headers: {
+
             "Content-Type":
               "application/json",
 
@@ -578,10 +705,14 @@ async function performSearch(
 
             "Authorization":
               `Bearer ${session.access_token}`
+
           },
 
           body:
-            JSON.stringify(request)
+            JSON.stringify(
+              request
+            )
+
         },
         70000
       );
@@ -602,6 +733,7 @@ async function performSearch(
         "REQUEST_TIMEOUT";
 
       throw timeoutError;
+
     }
 
 
@@ -617,13 +749,13 @@ async function performSearch(
       error;
 
     throw fetchError;
+
   }
 
 
   /*
-   * 401:
-   * Refresh the Supabase session once
-   * and retry the request.
+   * If backend says unauthorized,
+   * refresh the session once.
    */
 
   if (
@@ -633,6 +765,7 @@ async function performSearch(
 
     const refreshed =
       await refreshSession();
+
 
     if (
       refreshed?.access_token
@@ -644,10 +777,13 @@ async function performSearch(
       );
 
     }
+
   }
 
 
-  let data = null;
+  let data =
+    null;
+
 
   const contentType =
     response.headers.get(
@@ -671,18 +807,29 @@ async function performSearch(
       const text =
         await response.text();
 
+
       data = {
+
         error:
-          text || "Unknown server response"
+          text ||
+          "Unknown server response"
+
       };
 
     }
 
   } catch (error) {
 
-    throw new Error(
-      "INVALID_SERVER_RESPONSE"
-    );
+    const invalidError =
+      new Error(
+        "INVALID_SERVER_RESPONSE"
+      );
+
+    invalidError.code =
+      "INVALID_SERVER_RESPONSE";
+
+    throw invalidError;
+
   }
 
 
@@ -695,22 +842,28 @@ async function performSearch(
         `HTTP_${response.status}`
       );
 
+
     serverError.status =
       response.status;
+
 
     serverError.code =
       data?.code ||
       data?.errorCode ||
       `HTTP_${response.status}`;
 
+
     serverError.data =
       data;
 
+
     throw serverError;
+
   }
 
 
   return data;
+
 }
 
 
@@ -718,14 +871,20 @@ async function performSearch(
    SAFE TEXT
    ============================================================ */
 
-function safeText(value, fallback = "") {
+function safeText(
+  value,
+  fallback = ""
+) {
 
   if (
     value === null ||
     value === undefined
   ) {
+
     return fallback;
+
   }
+
 
   if (
     typeof value === "string" ||
@@ -733,11 +892,16 @@ function safeText(value, fallback = "") {
   ) {
 
     const text =
-      String(value).trim();
+      String(
+        value
+      ).trim();
+
 
     return text ||
       fallback;
+
   }
+
 
   if (
     typeof value === "object"
@@ -747,27 +911,39 @@ function safeText(value, fallback = "") {
       typeof value.text ===
       "string"
     ) {
+
       return value.text;
+
     }
+
 
     if (
       typeof value.value ===
       "string"
     ) {
+
       return value.value;
+
     }
+
 
     if (
       typeof value.name ===
       "string"
     ) {
+
       return value.name;
+
     }
 
+
     return fallback;
+
   }
 
+
   return fallback;
+
 }
 
 
@@ -775,11 +951,18 @@ function safeText(value, fallback = "") {
    ARRAY NORMALIZER
    ============================================================ */
 
-function normalizeArray(value) {
+function normalizeArray(
+  value
+) {
 
-  if (Array.isArray(value)) {
+  if (
+    Array.isArray(value)
+  ) {
+
     return value;
+
   }
+
 
   if (
     typeof value === "string" &&
@@ -792,7 +975,9 @@ function normalizeArray(value) {
 
   }
 
+
   return [];
+
 }
 
 
@@ -806,7 +991,8 @@ function normalizeCar(
 ) {
 
   const item =
-    car && typeof car === "object"
+    car &&
+    typeof car === "object"
       ? car
       : {};
 
@@ -937,7 +1123,10 @@ function normalizeCar(
     )
       .map(
         item =>
-          safeText(item, "")
+          safeText(
+            item,
+            ""
+          )
       )
       .filter(Boolean)
       .slice(0, 3);
@@ -951,7 +1140,10 @@ function normalizeCar(
     )
       .map(
         item =>
-          safeText(item, "")
+          safeText(
+            item,
+            ""
+          )
       )
       .filter(Boolean)
       .slice(0, 3);
@@ -1002,6 +1194,7 @@ function normalizeCar(
     index
 
   };
+
 }
 
 
@@ -1009,14 +1202,19 @@ function normalizeCar(
    IMAGE CANDIDATE EXTRACTION
    ============================================================ */
 
-function getImageCandidates(car) {
+function getImageCandidates(
+  car
+) {
 
   if (!car) {
+
     return [];
+
   }
 
 
-  const candidates = [];
+  const candidates =
+    [];
 
 
   const possibleValues = [
@@ -1029,15 +1227,21 @@ function getImageCandidates(car) {
 
     car.imageUrl,
 
-    ...(Array.isArray(car.images)
+    ...(Array.isArray(
+      car.images
+    )
       ? car.images
       : []),
 
-    ...(Array.isArray(car.imageCandidates)
+    ...(Array.isArray(
+      car.imageCandidates
+    )
       ? car.imageCandidates
       : []),
 
-    ...(Array.isArray(car.photos)
+    ...(Array.isArray(
+      car.photos
+    )
       ? car.photos
       : [])
 
@@ -1055,26 +1259,39 @@ function getImageCandidates(car) {
         ""
       );
 
+
     if (
       !url ||
-      !/^https?:\/\//i.test(url)
+      !/^https?:\/\//i.test(
+        url
+      )
     ) {
+
       continue;
+
     }
 
+
     if (
-      !candidates.includes(url)
+      !candidates.includes(
+        url
+      )
     ) {
 
-      candidates.push(url);
+      candidates.push(
+        url
+      );
 
     }
 
   }
 
 
-  return candidates
-    .slice(0, 8);
+  return candidates.slice(
+    0,
+    8
+  );
+
 }
 
 
@@ -1087,30 +1304,39 @@ function handleImageError(
 ) {
 
   if (!image) {
+
     return;
+
   }
 
 
   const next =
     image.dataset.nextImage;
 
+
   if (next) {
 
     image.dataset.nextImage =
       "";
 
+
     image.src =
       next;
 
+
     return;
+
   }
 
 
   const wrapper =
     image.parentElement;
 
+
   if (!wrapper) {
+
     return;
+
   }
 
 
@@ -1122,15 +1348,19 @@ function handleImageError(
       "div"
     );
 
+
   placeholder.className =
     "car-image-placeholder";
+
 
   placeholder.textContent =
     "Fotografia nie je dostupná";
 
+
   wrapper.appendChild(
     placeholder
   );
+
 }
 
 
@@ -1138,16 +1368,34 @@ function handleImageError(
    ESCAPE HTML
    ============================================================ */
 
-function escapeHtml(value) {
+function escapeHtml(
+  value
+) {
 
   return String(
     value ?? ""
   )
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+    .replaceAll(
+      "&",
+      "&amp;"
+    )
+    .replaceAll(
+      "<",
+      "&lt;"
+    )
+    .replaceAll(
+      ">",
+      "&gt;"
+    )
+    .replaceAll(
+      '"',
+      "&quot;"
+    )
+    .replaceAll(
+      "'",
+      "&#039;"
+    );
+
 }
 
 
@@ -1155,7 +1403,9 @@ function escapeHtml(value) {
    SAFE URL
    ============================================================ */
 
-function safeUrl(value) {
+function safeUrl(
+  value
+) {
 
   const url =
     safeText(
@@ -1163,13 +1413,20 @@ function safeUrl(value) {
       ""
     );
 
+
   if (
-    !/^https?:\/\//i.test(url)
+    !/^https?:\/\//i.test(
+      url
+    )
   ) {
+
     return "";
+
   }
 
+
   return url;
+
 }
 
 
@@ -1183,23 +1440,31 @@ function createCarCard(
 ) {
 
   const imageCandidates =
-    getImageCandidates(car);
+    getImageCandidates(
+      car
+    );
 
 
   const firstImage =
-    imageCandidates[0] || "";
+    imageCandidates[0] ||
+    "";
 
 
   const secondImage =
-    imageCandidates[1] || "";
+    imageCandidates[1] ||
+    "";
 
 
   const title =
-    escapeHtml(car.title);
+    escapeHtml(
+      car.title
+    );
 
 
   const subtitle =
-    escapeHtml(car.subtitle);
+    escapeHtml(
+      car.subtitle
+    );
 
 
   const description =
@@ -1214,9 +1479,11 @@ function createCarCard(
         <img
           class="car-image"
           src="${escapeHtml(firstImage)}"
-          ${secondImage
-            ? `data-next-image="${escapeHtml(secondImage)}"`
-            : ""}
+          ${
+            secondImage
+              ? `data-next-image="${escapeHtml(secondImage)}"`
+              : ""
+          }
           alt="${title}"
           loading="lazy"
           referrerpolicy="no-referrer"
@@ -1280,6 +1547,12 @@ function createCarCard(
       `;
 
 
+  const imageSourceUrl =
+    safeUrl(
+      car.imageSource
+    );
+
+
   return `
     <article class="car-card">
 
@@ -1299,6 +1572,7 @@ function createCarCard(
         <h3 class="car-title">
           ${title}
         </h3>
+
 
         ${
           subtitle
@@ -1325,6 +1599,7 @@ function createCarCard(
         <div class="car-stats">
 
           <div class="car-stat">
+
             <span class="car-stat-label">
               Výkon
             </span>
@@ -1332,10 +1607,12 @@ function createCarCard(
             <span class="car-stat-value">
               ${escapeHtml(car.power)}
             </span>
+
           </div>
 
 
           <div class="car-stat">
+
             <span class="car-stat-label">
               Cena
             </span>
@@ -1343,10 +1620,12 @@ function createCarCard(
             <span class="car-stat-value">
               ${escapeHtml(car.price)}
             </span>
+
           </div>
 
 
           <div class="car-stat">
+
             <span class="car-stat-label">
               Kufor
             </span>
@@ -1354,10 +1633,12 @@ function createCarCard(
             <span class="car-stat-value">
               ${escapeHtml(car.trunk)}
             </span>
+
           </div>
 
 
           <div class="car-stat">
+
             <span class="car-stat-label">
               Pohon
             </span>
@@ -1365,13 +1646,15 @@ function createCarCard(
             <span class="car-stat-value">
               ${escapeHtml(car.drive)}
             </span>
+
           </div>
 
         </div>
 
 
         ${
-          prosHtml || consHtml
+          car.pros.length ||
+          car.cons.length
             ? `
               <div class="car-points">
                 ${prosHtml}
@@ -1398,14 +1681,13 @@ function createCarCard(
 
           ${officialButton}
 
+
           ${
-            car.imageSource
+            imageSourceUrl
               ? `
                 <a
                   class="car-link"
-                  href="${escapeHtml(
-                    safeUrl(car.imageSource)
-                  )}"
+                  href="${escapeHtml(imageSourceUrl)}"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -1425,6 +1707,7 @@ function createCarCard(
 
     </article>
   `;
+
 }
 
 
@@ -1437,7 +1720,9 @@ function renderResults(
 ) {
 
   if (!resultsContainer) {
+
     return;
+
   }
 
 
@@ -1486,20 +1771,17 @@ function renderResults(
   }
 
 
-  /*
-   * Important:
-   * The HTML starts with resultsSection hidden.
-   * We explicitly show it after rendering.
-   */
-
   if (resultsSection) {
 
     resultsSection.hidden =
       false;
 
+
     resultsSection.scrollIntoView({
-      behavior: "smooth",
-      block: "start"
+      behavior:
+        "smooth",
+      block:
+        "start"
     });
 
   }
@@ -1515,10 +1797,6 @@ function renderResults(
   }
 
 
-  /*
-   * Image fallback handling.
-   */
-
   resultsContainer
     .querySelectorAll(
       "img.car-image"
@@ -1529,17 +1807,21 @@ function renderResults(
         image.addEventListener(
           "error",
           () => {
+
             handleImageError(
               image
             );
+
           },
           {
-            once: true
+            once:
+              true
           }
         );
 
       }
     );
+
 }
 
 
@@ -1550,13 +1832,18 @@ function renderResults(
 function clearResults() {
 
   if (resultsContainer) {
+
     resultsContainer.innerHTML =
       "";
+
   }
 
+
   if (resultsSection) {
+
     resultsSection.hidden =
       true;
+
   }
 
 }
@@ -1567,10 +1854,6 @@ function clearResults() {
    ============================================================ */
 
 function successFeedback() {
-
-  /*
-   * Vibration
-   */
 
   try {
 
@@ -1587,27 +1870,27 @@ function successFeedback() {
   } catch (_) {}
 
 
-  /*
-   * Small confirmation sound.
-   * Generated locally — no external file.
-   */
-
   try {
 
     const AudioContext =
       window.AudioContext ||
       window.webkitAudioContext;
 
+
     if (!AudioContext) {
+
       return;
+
     }
 
 
     const context =
       new AudioContext();
 
+
     const oscillator =
       context.createOscillator();
+
 
     const gain =
       context.createGain();
@@ -1616,10 +1899,12 @@ function successFeedback() {
     oscillator.type =
       "sine";
 
+
     oscillator.frequency.setValueAtTime(
       620,
       context.currentTime
     );
+
 
     oscillator.frequency.exponentialRampToValueAtTime(
       880,
@@ -1632,10 +1917,12 @@ function successFeedback() {
       context.currentTime
     );
 
+
     gain.gain.exponentialRampToValueAtTime(
       0.045,
       context.currentTime + 0.015
     );
+
 
     gain.gain.exponentialRampToValueAtTime(
       0.0001,
@@ -1643,13 +1930,18 @@ function successFeedback() {
     );
 
 
-    oscillator.connect(gain);
+    oscillator.connect(
+      gain
+    );
+
+
     gain.connect(
       context.destination
     );
 
 
     oscillator.start();
+
 
     oscillator.stop(
       context.currentTime + 0.2
@@ -1658,9 +1950,13 @@ function successFeedback() {
 
     setTimeout(
       () => {
+
         try {
+
           context.close();
+
         } catch (_) {}
+
       },
       300
     );
@@ -1695,11 +1991,13 @@ function getFriendlyError(
   ) {
 
     return {
+
       message:
         "Vyhľadávanie sa nepodarilo spojiť so serverom. Skontroluj internetové pripojenie a skús to znova.",
 
       type:
         "error"
+
     };
 
   }
@@ -1711,11 +2009,13 @@ function getFriendlyError(
   ) {
 
     return {
+
       message:
         "Vyhľadávanie trvá príliš dlho. Skús to znova.",
 
       type:
         "error"
+
     };
 
   }
@@ -1728,32 +2028,48 @@ function getFriendlyError(
   ) {
 
     return {
+
       message:
-        "Nepodarilo sa overiť tvoje pripojenie. Obnov stránku a skús to znova.",
+        "Nepodarilo sa overiť pripojenie k CARMATCH AI. Skontroluj Supabase nastavenie a skús to znova.",
 
       type:
         "error"
+
     };
 
   }
 
 
-  /*
-   * Backend's provider failure.
-   * The backend handles the refund.
-   */
+  if (
+    status === 403
+  ) {
+
+    return {
+
+      message:
+        "CARMATCH AI nemá povolenie na prístup k Supabase. Skontroluj nastavenie projektu.",
+
+      type:
+        "error"
+
+    };
+
+  }
+
 
   if (
     status === 503
   ) {
 
     return {
+
       message:
         error?.message ||
         "AI služba je momentálne nedostupná. Vyhľadávanie sa nezapočítalo do denného limitu.",
 
       type:
         "error"
+
     };
 
   }
@@ -1764,11 +2080,13 @@ function getFriendlyError(
   ) {
 
     return {
+
       message:
         "Dosiahol si dnešný limit 5 vyhľadávaní.",
 
       type:
         "error"
+
     };
 
   }
@@ -1779,24 +2097,47 @@ function getFriendlyError(
   ) {
 
     return {
+
       message:
         "Server CARMATCH AI momentálne neodpovedá správne. Skús to znova.",
 
       type:
         "error"
+
+    };
+
+  }
+
+
+  if (
+    code ===
+    "INVALID_RESULTS"
+  ) {
+
+    return {
+
+      message:
+        "CARMATCH AI nedostal kompletné 3 odporúčania. Skús vyhľadávanie zopakovať.",
+
+      type:
+        "error"
+
     };
 
   }
 
 
   return {
+
     message:
       error?.message ||
       "Vyhľadávanie sa nepodarilo dokončiť. Skús to znova.",
 
     type:
       "error"
+
   };
+
 }
 
 
@@ -1807,7 +2148,9 @@ function getFriendlyError(
 async function findCars() {
 
   if (isSearching) {
+
     return;
+
   }
 
 
@@ -1816,7 +2159,9 @@ async function findCars() {
 
 
   if (
-    !hasSearchCriteria(request)
+    !hasSearchCriteria(
+      request
+    )
   ) {
 
     setStatus(
@@ -1824,17 +2169,26 @@ async function findCars() {
       "error"
     );
 
+
     if (aiRequest) {
+
       aiRequest.focus();
+
     }
 
+
     return;
+
   }
 
 
   clearResults();
 
-  setButtonBusy(true);
+
+  setButtonBusy(
+    true
+  );
+
 
   setStatus(
     "Pripravujem vyhľadávanie…",
@@ -1849,24 +2203,29 @@ async function findCars() {
   try {
 
     /*
-     * Make sure anonymous authentication exists.
+     * Authentication.
      */
 
     const session =
       await initializeAnonymousUser();
 
 
-    if (!session?.access_token) {
+    if (
+      !session?.access_token
+    ) {
 
       const authError =
         new Error(
           "AUTH_REQUIRED"
         );
 
+
       authError.code =
         "AUTH_REQUIRED";
 
+
       throw authError;
+
     }
 
 
@@ -1882,16 +2241,10 @@ async function findCars() {
       );
 
 
-    /*
-     * Backend should return:
-     * {
-     *   cars: [...],
-     *   remaining: number
-     * }
-     */
-
     const cars =
-      Array.isArray(data?.cars)
+      Array.isArray(
+        data?.cars
+      )
         ? data.cars
         : [];
 
@@ -1905,20 +2258,24 @@ async function findCars() {
           "CARMATCH AI nedostal presne 3 autá."
         );
 
+
       resultError.code =
         "INVALID_RESULTS";
 
+
       throw resultError;
+
     }
 
 
     /*
-     * Update usage only after
-     * successful search.
+     * Backend is responsible
+     * for search counting.
      */
 
     if (
-      data?.remaining !== undefined
+      data?.remaining !==
+      undefined
     ) {
 
       updateUsage(
@@ -1962,20 +2319,14 @@ async function findCars() {
     );
 
 
-    /*
-     * Do not deduct anything
-     * on the frontend.
-     *
-     * Backend is responsible for
-     * refunding failed AI searches.
-     */
-
     clearResults();
 
 
   } finally {
 
-    setButtonBusy(false);
+    setButtonBusy(
+      false
+    );
 
   }
 
@@ -2003,9 +2354,13 @@ function setupExampleButtons() {
               button.dataset.example ||
               "";
 
+
             if (!aiRequest) {
+
               return;
+
             }
+
 
             aiRequest.value =
               example;
@@ -2015,7 +2370,8 @@ function setupExampleButtons() {
               new Event(
                 "input",
                 {
-                  bubbles: true
+                  bubbles:
+                    true
                 }
               )
             );
@@ -2038,10 +2394,10 @@ function setupExampleButtons() {
 
 function setupCharacterCounter() {
 
-  if (
-    !aiRequest
-  ) {
+  if (!aiRequest) {
+
     return;
+
   }
 
 
@@ -2050,7 +2406,9 @@ function setupCharacterCounter() {
 
 
   if (!counter) {
+
     return;
+
   }
 
 
@@ -2095,9 +2453,13 @@ function setupFilters() {
                 ".summary-arrow"
               );
 
+
             if (!arrow) {
+
               return;
+
             }
+
 
             arrow.textContent =
               details.open
@@ -2120,7 +2482,9 @@ function setupFilters() {
 function setupKeyboard() {
 
   if (!aiRequest) {
+
     return;
+
   }
 
 
@@ -2129,8 +2493,10 @@ function setupKeyboard() {
     event => {
 
       if (
-        (event.ctrlKey ||
-          event.metaKey) &&
+        (
+          event.ctrlKey ||
+          event.metaKey
+        ) &&
         event.key === "Enter"
       ) {
 
@@ -2153,7 +2519,9 @@ function setupKeyboard() {
 function setupSearchButton() {
 
   if (!searchButton) {
+
     return;
+
   }
 
 
@@ -2181,18 +2549,17 @@ function setupSearchButton() {
 
 async function startCarmatch() {
 
-  /*
-   * The button must NOT start disabled
-   * while authentication loads.
-   */
-
   if (searchButton) {
+
     searchButton.disabled =
       false;
+
   }
 
 
-  updateUsage(5);
+  updateUsage(
+    5
+  );
 
 
   setStatus(
@@ -2212,8 +2579,7 @@ async function startCarmatch() {
 
 
   /*
-   * Authentication happens in the background.
-   * The UI does not need to wait for it.
+   * Authentication starts in background.
    */
 
   initializeAnonymousUser()
@@ -2224,6 +2590,12 @@ async function startCarmatch() {
 
           setStatus(
             "Pripravené na vyhľadávanie."
+          );
+
+        } else {
+
+          console.warn(
+            "CARMATCH AI: Anonymous authentication did not create a session."
           );
 
         }
@@ -2284,7 +2656,8 @@ if (
     "DOMContentLoaded",
     startCarmatch,
     {
-      once: true
+      once:
+        true
     }
   );
 
