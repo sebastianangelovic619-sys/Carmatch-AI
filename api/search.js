@@ -1,6 +1,13 @@
 // ============================================================
-// CARMATCH AI - PRODUCTION BACKEND v13.3 TEST
+// CARMATCH AI - PRODUCTION BACKEND v13.4
 // ============================================================
+//
+// FIXES
+// - Correct Supabase project
+// - Correct Supabase authentication
+// - Detailed Supabase auth errors
+// - Supports publishable / anon key environment variables
+// - No old Supabase project fallback
 //
 // TEST MODE
 // - 5 searches/day LIMIT DISABLED
@@ -12,14 +19,6 @@
 // - Groq GPT-OSS 120B + Browser Search
 // - Groq GPT-OSS 20B + Browser Search fallback
 // - OpenRouter FREE fallbacks
-//
-// PERFORMANCE
-// - Lower Groq reasoning effort
-// - Longer Groq timeouts
-// - Parallel OpenRouter fallback
-// - Parallel image lookup
-// - Parallel official URL verification
-// - Hard request deadline
 //
 // OUTPUT
 // - Exactly 3 cars
@@ -65,16 +64,28 @@ const GROQ_API_KEY =
 const OPENROUTER_API_KEY =
   process.env.OPENROUTER_API_KEY || "";
 
+// ============================================================
+// SUPABASE
+// ============================================================
+//
+// CORRECT PROJECT:
+// frmhjjzgvmitdgcvgfuk
+//
+// IMPORTANT:
+// The backend first uses Vercel Environment Variables.
+// There is NO old Supabase project fallback anymore.
+// ============================================================
+
 const SUPABASE_URL =
   process.env.SUPABASE_URL ||
   process.env.NEXT_PUBLIC_SUPABASE_URL ||
-  "https://ltqjgvrphjinsjvyaxrb.supabase.co";
+  "https://frmhjjzgvmitdgcvgfuk.supabase.co";
 
 const SUPABASE_ANON_KEY =
   process.env.SUPABASE_ANON_KEY ||
   process.env.SUPABASE_PUBLISHABLE_KEY ||
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  "sb_publishable_Tl9JJu6B_A1tQ_si2Wb25Q_f8A3e5uw";
+  "sb_publishable_53FDnkTuv2C6rhZIVDJVxQ_MOAg_80E";
 
 // ============================================================
 // AI MODELS
@@ -611,7 +622,8 @@ function extractFilters(
 
     avoid:
       cleanText(
-        source.avoid
+        source.avoid ||
+        source.avoidBrands
       )
   };
 }
@@ -2588,6 +2600,7 @@ function extractBearerToken(
     "";
 
   if (
+    typeof auth !== "string" ||
     !auth.startsWith(
       "Bearer "
     )
@@ -2608,11 +2621,35 @@ async function verifySupabaseUser(
   rootSignal,
   deadline
 ) {
+  // ----------------------------------------------------------
+  // TOKEN CHECK
+  // ----------------------------------------------------------
+
   if (!accessToken) {
     throw new Error(
-      "Missing Supabase access token"
+      "SUPABASE_AUTH: Missing Bearer access token"
     );
   }
+
+  // ----------------------------------------------------------
+  // CONFIG CHECK
+  // ----------------------------------------------------------
+
+  if (!SUPABASE_URL) {
+    throw new Error(
+      "SUPABASE_AUTH: SUPABASE_URL is missing"
+    );
+  }
+
+  if (!SUPABASE_ANON_KEY) {
+    throw new Error(
+      "SUPABASE_AUTH: SUPABASE_ANON_KEY is missing"
+    );
+  }
+
+  // ----------------------------------------------------------
+  // SUPABASE USER ENDPOINT
+  // ----------------------------------------------------------
 
   const endpoint =
     `${SUPABASE_URL}/auth/v1/user`;
@@ -2626,7 +2663,7 @@ async function verifySupabaseUser(
     available <= 100
   ) {
     throw new Error(
-      "REQUEST_HARD_TIMEOUT"
+      "SUPABASE_AUTH: REQUEST_HARD_TIMEOUT"
     );
   }
 
@@ -2643,7 +2680,10 @@ async function verifySupabaseUser(
             SUPABASE_ANON_KEY,
 
           Authorization:
-            `Bearer ${accessToken}`
+            `Bearer ${accessToken}`,
+
+          Accept:
+            "application/json"
         }
       },
 
@@ -2676,12 +2716,44 @@ async function verifySupabaseUser(
     data = null;
   }
 
-  if (
-    !response.ok ||
-    !data?.id
-  ) {
+  // ----------------------------------------------------------
+  // SUPABASE ERROR
+  // ----------------------------------------------------------
+
+  if (!response.ok) {
+    const supabaseMessage =
+      data?.msg ||
+      data?.message ||
+      data?.error_description ||
+      data?.error ||
+      body ||
+      `HTTP ${response.status}`;
+
+    console.error(
+      "SUPABASE AUTH HTTP ERROR:",
+      response.status,
+      supabaseMessage
+    );
+
     throw new Error(
-      "Supabase authentication failed"
+      `SUPABASE_AUTH: HTTP ${response.status}: ${String(
+        supabaseMessage
+      ).slice(0, 500)}`
+    );
+  }
+
+  // ----------------------------------------------------------
+  // USER CHECK
+  // ----------------------------------------------------------
+
+  if (!data?.id) {
+    console.error(
+      "SUPABASE AUTH INVALID USER RESPONSE:",
+      data
+    );
+
+    throw new Error(
+      "SUPABASE_AUTH: Supabase returned no user ID"
     );
   }
 
@@ -2800,7 +2872,7 @@ export default async function handler(
     }
 
     // ========================================================
-    // EXTRACT REQUEST
+    // REQUEST
     // ========================================================
 
     const naturalLanguage =
@@ -2840,9 +2912,10 @@ export default async function handler(
     // TEST MODE
     // ========================================================
     //
-    // NO search RPC.
-    // NO search consumption.
-    // NO refund.
+    // Search limit is currently disabled.
+    // No RPC.
+    // No search consumption.
+    // No refund.
     // ========================================================
 
     const remaining = 5;
@@ -2985,6 +3058,43 @@ export default async function handler(
         "abort"
       );
 
+    // --------------------------------------------------------
+    // AUTH ERROR
+    // --------------------------------------------------------
+
+    if (
+      message.startsWith(
+        "SUPABASE_AUTH:"
+      )
+    ) {
+      return json(
+        res,
+        401,
+        {
+          ok: false,
+
+          error:
+            "Supabase authentication failed.",
+
+          detail:
+            message,
+
+          authError:
+            true,
+
+          refunded:
+            false,
+
+          limitEnabled:
+            SEARCH_LIMIT_ENABLED
+        }
+      );
+    }
+
+    // --------------------------------------------------------
+    // GENERAL ERROR
+    // --------------------------------------------------------
+
     return json(
       res,
 
@@ -3001,10 +3111,7 @@ export default async function handler(
             : "Vyhľadávanie sa nepodarilo dokončiť.",
 
         detail:
-          process.env.NODE_ENV ===
-          "development"
-            ? message
-            : undefined,
+          message,
 
         refunded:
           false,
