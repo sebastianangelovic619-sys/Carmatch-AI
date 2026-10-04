@@ -1,43 +1,18 @@
 "use strict";
 
 /* ============================================================
-   CARMATCH AI - FINAL FRONTEND v16
-   ============================================================
-   - Uses Supabase configuration from index.html
-   - No old Supabase project fallback
-   - Supabase anonymous authentication
-   - 5 searches/day
-   - Search refund support
-   - Exactly 3 cars
-   - Image candidates + automatic image fallback
-   - Current price display
-   - Slovak UI
-   - kW + HP
-   - Dark / Light mode compatible
-   - Premium frontend v15 compatible
-   - Fixed search button selectors
-   - Better number parsing
+   CARMATCH AI - FRONTEND v17
    ============================================================ */
 
-
-/* ============================================================
-   CONFIGURATION
-   ============================================================ */
-
-const CONFIG = window.CARMATCH_CONFIG || {
-  supabaseUrl: "https://ltqjgvrphjinsjvyaxrb.supabase.co",
-  supabaseAnonKey: "",
-  apiEndpoint: "/api/search"
-};
-
-const API_ENDPOINT =
-  CONFIG.apiEndpoint || "/api/search";
+const CONFIG = window.CARMATCH_CONFIG || {};
+const API_ENDPOINT = CONFIG.apiEndpoint || "/api/search";
 
 const MAX_SEARCH_TEXT = 3000;
 const MAX_FILTER_TEXT = 500;
 
 let supabaseClient = null;
 let searching = false;
+let initialized = false;
 
 
 /* ============================================================
@@ -91,7 +66,9 @@ function text(value, fallback = "") {
       ]
     ) {
 
-      if (value[key] !== undefined) {
+      if (
+        value[key] !== undefined
+      ) {
 
         const result =
           text(value[key]);
@@ -99,7 +76,9 @@ function text(value, fallback = "") {
         if (result) {
           return result;
         }
+
       }
+
     }
 
     try {
@@ -107,6 +86,7 @@ function text(value, fallback = "") {
     } catch (_) {
       return fallback;
     }
+
   }
 
   return fallback;
@@ -133,7 +113,9 @@ function safeUrl(value) {
   try {
 
     const url =
-      new URL(String(value || ""));
+      new URL(
+        String(value || "")
+      );
 
     return url.protocol === "https:"
       ? url.href
@@ -142,7 +124,9 @@ function safeUrl(value) {
   } catch (_) {
 
     return "";
+
   }
+
 }
 
 
@@ -153,23 +137,13 @@ function safeUrl(value) {
 function parseNumber(value) {
 
   let raw =
-    text(value, "")
+    text(value)
       .replace(/\u00A0/g, " ")
       .trim();
 
   if (!raw) {
     return "";
   }
-
-  /*
-   Supports examples such as:
-   50 000 €
-   50.000 €
-   50,000 €
-   4,8 m
-   600 l
-   200 kW
-  */
 
   raw =
     raw.replace(
@@ -178,32 +152,35 @@ function parseNumber(value) {
     );
 
   raw =
-    raw.replace(/\s+/g, "");
-
-  /*
-   European decimal:
-   4,8 -> 4.8
-  */
+    raw.replace(
+      /\s+/g,
+      ""
+    );
 
   if (
     raw.includes(",") &&
     !raw.includes(".")
   ) {
-    raw =
-      raw.replace(",", ".");
-  }
 
-  /*
-   Thousands separator:
-   50.000 -> 50000
-  */
+    raw =
+      raw.replace(
+        ",",
+        "."
+      );
+
+  }
 
   if (
     raw.includes(".") &&
     /^\d{1,3}(?:\.\d{3})+$/.test(raw)
   ) {
+
     raw =
-      raw.replace(/\./g, "");
+      raw.replace(
+        /\./g,
+        ""
+      );
+
   }
 
   const number =
@@ -217,10 +194,13 @@ function parseNumber(value) {
 
 function getValue(id) {
 
-  const element = $(id);
+  const element =
+    $(id);
 
   return element
-    ? String(element.value || "").trim()
+    ? String(
+        element.value || ""
+      ).trim()
     : "";
 }
 
@@ -244,92 +224,158 @@ function getNumber(id) {
 
 
 /* ============================================================
-   POWER DISPLAY
+   POWER
    ============================================================ */
 
-function formatPowerDisplay(value) {
+function formatPowerDisplay(power) {
 
-  const raw =
-    text(value, "")
-      .replace(/,/g, ".")
-      .trim();
-
-  if (!raw) {
-    return "—";
-  }
-
-  const kwMatch =
-    raw.match(
-      /(\d+(?:\.\d+)?)\s*kW\b/i
+  const kw =
+    Number(
+      power?.kw
     );
 
-  if (kwMatch) {
-
-    const kw =
-      Number(kwMatch[1]);
-
-    if (
-      Number.isFinite(kw) &&
-      kw > 0
-    ) {
-
-      const hp =
-        Math.round(
-          kw * 1.34102209
-        );
-
-      return `${Math.round(kw)} kW (${hp} HP)`;
-    }
-  }
-
-
-  const hpMatch =
-    raw.match(
-      /(\d+(?:\.\d+)?)\s*(?:hp|horsepower|bhp|ps|ks|cv)\b/i
+  const hp =
+    Number(
+      power?.hp
     );
 
-  if (hpMatch) {
-
-    const hp =
-      Number(hpMatch[1]);
-
-    if (
-      Number.isFinite(hp) &&
-      hp > 0
-    ) {
-
-      const kw =
-        Math.round(
-          (hp / 1.34102209) * 10
-        ) / 10;
-
-      const mechanicalHp =
-        Math.round(
-          kw * 1.34102209
-        );
-
-      return `${kw} kW (${mechanicalHp} HP)`;
-    }
-  }
-
-
-  const bare =
-    Number(raw);
 
   if (
-    Number.isFinite(bare) &&
-    bare > 0
+    Number.isFinite(kw) &&
+    kw > 0
   ) {
 
-    const hp =
-      Math.round(
-        bare * 1.34102209
-      );
+    const displayHp =
+      Number.isFinite(hp) &&
+      hp > 0
+        ? Math.round(hp)
+        : Math.round(
+            kw * 1.35962
+          );
 
-    return `${Math.round(bare)} kW (${hp} HP)`;
+    return `${Math.round(kw)} kW (${displayHp} HP)`;
   }
 
-  return raw;
+
+  if (
+    Number.isFinite(hp) &&
+    hp > 0
+  ) {
+
+    const displayKw =
+      Math.round(
+        (hp / 1.35962) * 10
+      ) / 10;
+
+    return `${displayKw} kW (${Math.round(hp)} HP)`;
+  }
+
+
+  return "—";
+}
+
+
+/* ============================================================
+   PRICE
+   ============================================================ */
+
+function formatPrice(price) {
+
+  if (!price) {
+    return "Cena na vyžiadanie";
+  }
+
+  let amount =
+    null;
+
+  let currency =
+    "EUR";
+
+  let type =
+    "starting";
+
+
+  if (
+    typeof price === "object"
+  ) {
+
+    amount =
+      Number(
+        price.amount
+      );
+
+    currency =
+      text(
+        price.currency,
+        "EUR"
+      ).toUpperCase();
+
+    type =
+      text(
+        price.type,
+        "starting"
+      );
+
+  } else if (
+    typeof price === "number"
+  ) {
+
+    amount =
+      price;
+
+  } else {
+
+    const numeric =
+      parseNumber(price);
+
+    amount =
+      numeric === ""
+        ? null
+        : Number(numeric);
+
+  }
+
+
+  if (
+    !Number.isFinite(amount) ||
+    amount <= 0
+  ) {
+
+    return "Cena na vyžiadanie";
+  }
+
+
+  const formatted =
+    new Intl.NumberFormat(
+      "sk-SK",
+      {
+        maximumFractionDigits:
+          0
+      }
+    ).format(
+      Math.round(amount)
+    );
+
+
+  const suffix =
+    currency === "EUR"
+      ? " €"
+      : ` ${currency}`;
+
+
+  const prefix =
+    [
+      "starting",
+      "from",
+      "od"
+    ].includes(
+      type.toLowerCase()
+    )
+      ? "od "
+      : "";
+
+
+  return `${prefix}${formatted}${suffix}`;
 }
 
 
@@ -385,7 +431,9 @@ function updateCharCount() {
    SEARCH BUTTON
    ============================================================ */
 
-function setButtonBusy(isBusy) {
+function setButtonBusy(
+  isBusy
+) {
 
   const button =
     $("searchButton");
@@ -398,20 +446,21 @@ function setButtonBusy(isBusy) {
     isBusy;
 
 
-  /*
-   New premium HTML uses:
-   .search-button-text
-   .search-button-arrow
-  */
-
   const label =
     button.querySelector(
-      ".search-button-text"
+      ".search-button-text, .button-label"
     );
+
 
   const arrow =
     button.querySelector(
       ".search-button-arrow"
+    );
+
+
+  const oldIcon =
+    button.querySelector(
+      ".button-icon"
     );
 
 
@@ -421,6 +470,7 @@ function setButtonBusy(isBusy) {
       isBusy
         ? "Vyhľadávam…"
         : "Nájsť moje auto";
+
   }
 
 
@@ -430,30 +480,9 @@ function setButtonBusy(isBusy) {
       isBusy
         ? "•••"
         : "→";
+
   }
 
-
-  /*
-   Backwards compatibility with older design
-  */
-
-  const oldLabel =
-    button.querySelector(
-      ".button-label"
-    );
-
-  const oldIcon =
-    button.querySelector(
-      ".button-icon"
-    );
-
-  if (oldLabel) {
-
-    oldLabel.textContent =
-      isBusy
-        ? "Vyhľadávam…"
-        : "Nájsť moje auto";
-  }
 
   if (oldIcon) {
 
@@ -461,7 +490,9 @@ function setButtonBusy(isBusy) {
       isBusy
         ? "•"
         : "⌕";
+
   }
+
 }
 
 
@@ -474,70 +505,96 @@ function buildPayload() {
   return {
 
     naturalLanguage:
-      getValue("aiRequest")
-        .slice(
-          0,
-          MAX_SEARCH_TEXT
-        ),
+      getValue(
+        "aiRequest"
+      ).slice(
+        0,
+        MAX_SEARCH_TEXT
+      ),
 
     filters: {
 
       budget:
-        getNumber("budget"),
+        getNumber(
+          "budget"
+        ),
 
       seats:
-        getNumber("seats"),
+        getNumber(
+          "seats"
+        ),
 
       power:
-        getNumber("power"),
+        getNumber(
+          "power"
+        ),
 
       trunk:
-        getNumber("trunk"),
+        getNumber(
+          "trunk"
+        ),
 
       drive:
-        getValue("drive"),
+        getValue(
+          "drive"
+        ),
 
       fuel:
-        getValue("fuel"),
+        getValue(
+          "fuel"
+        ),
 
       body:
-        getValue("body"),
+        getValue(
+          "body"
+        ),
 
       style:
-        getValue("style"),
+        getValue(
+          "style"
+        ),
 
       length:
-        getNumber("length"),
+        getNumber(
+          "length"
+        ),
 
       year:
-        getNumber("year"),
+        getNumber(
+          "year"
+        ),
 
       avoid:
-        getValue("avoidBrands")
-          .slice(
-            0,
-            MAX_FILTER_TEXT
-          )
+        getValue(
+          "avoidBrands"
+        ).slice(
+          0,
+          MAX_FILTER_TEXT
+        )
+
     }
+
   };
 }
 
 
-function hasSearchInput(payload) {
+function hasSearchInput(
+  payload
+) {
 
-  if (
+  return Boolean(
     payload.naturalLanguage
-  ) {
-    return true;
-  }
+  ) ||
 
-  return Object.values(
-    payload.filters
-  ).some(
-    value =>
-      String(value || "")
-        .trim() !== ""
-  );
+    Object.values(
+      payload.filters || {}
+    ).some(
+      value =>
+        String(
+          value || ""
+        ).trim() !== ""
+    );
+
 }
 
 
@@ -551,53 +608,47 @@ async function ensureSupabaseClient() {
     return supabaseClient;
   }
 
+
   const url =
     String(
       CONFIG.supabaseUrl || ""
     ).trim();
 
+
   const key =
     String(
-      CONFIG.supabaseAnonKey || ""
+      CONFIG.supabaseAnonKey ||
+      CONFIG.supabasePublishableKey ||
+      ""
     ).trim();
 
 
   if (!url) {
 
     throw new Error(
-      "Supabase URL nie je nastavená."
+      "Supabase URL nie je nastavená v index.html."
     );
+
   }
 
 
   if (!key) {
 
     throw new Error(
-      "Supabase Publishable key nie je nastavený."
+      "Supabase Publishable key nie je nastavený v index.html."
     );
+
   }
 
 
   if (
-    !key.startsWith(
-      "sb_publishable_"
-    )
+    !window.supabase?.createClient
   ) {
 
     throw new Error(
-      "Supabase používa nesprávny API kľúč. Použi Publishable key zo Supabase."
+      "Nepodarilo sa načítať Supabase knižnicu."
     );
-  }
 
-
-  if (
-    !window.supabase ||
-    !window.supabase.createClient
-  ) {
-
-    throw new Error(
-      "Nepodarilo sa načítať Supabase."
-    );
   }
 
 
@@ -616,6 +667,7 @@ async function ensureSupabaseClient() {
 
           detectSessionInUrl:
             false
+
         }
       }
     );
@@ -635,11 +687,12 @@ async function getAccessToken() {
     await ensureSupabaseClient();
 
 
-  let current;
+  let sessionResult;
+
 
   try {
 
-    current =
+    sessionResult =
       await client.auth.getSession();
 
   } catch (error) {
@@ -650,11 +703,14 @@ async function getAccessToken() {
         "Nepodarilo sa načítať reláciu."
       )}`
     );
+
   }
 
 
   const currentToken =
-    current?.data?.session
+    sessionResult
+      ?.data
+      ?.session
       ?.access_token;
 
 
@@ -664,6 +720,7 @@ async function getAccessToken() {
 
 
   let signIn;
+
 
   try {
 
@@ -679,14 +736,18 @@ async function getAccessToken() {
         "Anonymné prihlásenie zlyhalo."
       )}`
     );
+
   }
 
 
-  if (signIn?.error) {
+  if (
+    signIn?.error
+  ) {
 
     throw new Error(
       `Supabase: ${signIn.error.message}`
     );
+
   }
 
 
@@ -702,6 +763,7 @@ async function getAccessToken() {
     throw new Error(
       "Supabase nevytvoril platnú reláciu."
     );
+
   }
 
 
@@ -713,7 +775,9 @@ async function getAccessToken() {
    API REQUEST
    ============================================================ */
 
-async function postSearch(payload) {
+async function postSearch(
+  payload
+) {
 
   let token;
 
@@ -733,9 +797,11 @@ async function postSearch(payload) {
         )
       ),
       {
-        code: "AUTH"
+        code:
+          "AUTH"
       }
     );
+
   }
 
 
@@ -748,7 +814,8 @@ async function postSearch(payload) {
       await fetch(
         API_ENDPOINT,
         {
-          method: "POST",
+          method:
+            "POST",
 
           headers: {
 
@@ -756,14 +823,21 @@ async function postSearch(payload) {
               "application/json",
 
             "Authorization":
-              `Bearer ${token}`
+              `Bearer ${token}`,
+
+            "Accept":
+              "application/json"
+
           },
 
           body:
-            JSON.stringify(payload),
+            JSON.stringify(
+              payload
+            ),
 
           cache:
             "no-store"
+
         }
       );
 
@@ -778,6 +852,7 @@ async function postSearch(payload) {
           "FETCH_FAILED"
       }
     );
+
   }
 
 
@@ -785,28 +860,35 @@ async function postSearch(payload) {
     await response.text();
 
 
-  let data = {};
+  let data =
+    {};
 
 
   try {
 
     data =
       raw
-        ? JSON.parse(raw)
+        ? JSON.parse(
+            raw
+          )
         : {};
 
   } catch (_) {
 
     data = {
 
-      message:
+      error:
         raw ||
         "Server vrátil neplatnú odpoveď."
+
     };
+
   }
 
 
-  if (!response.ok) {
+  if (
+    !response.ok
+  ) {
 
     const error =
       new Error(
@@ -817,13 +899,17 @@ async function postSearch(payload) {
         )
       );
 
+
     error.status =
       response.status;
+
 
     error.payload =
       data;
 
+
     throw error;
+
   }
 
 
@@ -846,6 +932,7 @@ async function postSearch(payload) {
           data
       }
     );
+
   }
 
 
@@ -857,19 +944,65 @@ async function postSearch(payload) {
    IMAGE HANDLING
    ============================================================ */
 
-function imageUrls(car) {
+function imageUrls(
+  car
+) {
 
-  const urls = [];
-
-
-  const direct =
-    safeUrl(
-      car?.image
-    );
+  const urls =
+    [];
 
 
-  if (direct) {
-    urls.push(direct);
+  function add(
+    value
+  ) {
+
+    const url =
+      safeUrl(
+        value
+      );
+
+
+    if (
+      url &&
+      !urls.includes(
+        url
+      ) &&
+      urls.length < 8
+    ) {
+
+      urls.push(
+        url
+      );
+
+    }
+
+  }
+
+
+  add(
+    car?.image
+  );
+
+
+  if (
+    Array.isArray(
+      car?.images
+    )
+  ) {
+
+    for (
+      const item
+      of car.images
+    ) {
+
+      add(
+        typeof item === "string"
+          ? item
+          : item?.url
+      );
+
+    }
+
   }
 
 
@@ -880,31 +1013,18 @@ function imageUrls(car) {
   ) {
 
     for (
-      const candidate
+      const item
       of car.imageCandidates
     ) {
 
-      const url =
-        safeUrl(
-          candidate?.url
-        );
+      add(
+        typeof item === "string"
+          ? item
+          : item?.url
+      );
 
-
-      if (
-        url &&
-        !urls.includes(url)
-      ) {
-
-        urls.push(url);
-      }
-
-
-      if (
-        urls.length >= 6
-      ) {
-        break;
-      }
     }
+
   }
 
 
@@ -912,22 +1032,26 @@ function imageUrls(car) {
 }
 
 
-function bestImage(car) {
+function sourceUrl(
+  car
+) {
 
-  return imageUrls(car)[0] || "";
-}
+  for (
+    const value of [
+      car?.photoSource,
+      car?.imageSource
+    ]
+  ) {
 
+    const url =
+      safeUrl(
+        value
+      );
 
-function sourceUrl(car) {
+    if (url) {
+      return url;
+    }
 
-  const direct =
-    safeUrl(
-      car?.photoSource
-    );
-
-
-  if (direct) {
-    return direct;
   }
 
 
@@ -938,30 +1062,30 @@ function sourceUrl(car) {
   ) {
 
     for (
-      const candidate
+      const item
       of car.imageCandidates
     ) {
 
-      const source =
+      const url =
         safeUrl(
-          candidate?.source
+          typeof item === "object"
+            ? item?.source
+            : ""
         );
 
 
-      if (source) {
-        return source;
+      if (url) {
+        return url;
       }
+
     }
+
   }
 
 
   return "";
 }
 
-
-/* ============================================================
-   IMAGE FALLBACK
-   ============================================================ */
 
 window.carmatchNextImage =
   function(img) {
@@ -1005,7 +1129,9 @@ window.carmatchNextImage =
         img.src =
           candidates[next];
 
+
         return;
+
       }
 
 
@@ -1013,32 +1139,33 @@ window.carmatchNextImage =
         "none";
 
 
-      const fallback =
-        img.nextElementSibling;
+      if (
+        img.nextElementSibling
+      ) {
 
-
-      if (fallback) {
-
-        fallback.hidden =
+        img.nextElementSibling.hidden =
           false;
+
       }
 
     } catch (_) {
 
       img.style.display =
         "none";
+
     }
+
   };
 
 
-/* ============================================================
-   IMAGE RENDER
-   ============================================================ */
-
-function renderImage(car) {
+function renderImage(
+  car
+) {
 
   const urls =
-    imageUrls(car);
+    imageUrls(
+      car
+    );
 
 
   if (!urls.length) {
@@ -1048,21 +1175,26 @@ function renderImage(car) {
         Fotografia pre túto konkrétnu generáciu nebola spoľahlivo nájdená.
       </div>
     `;
+
   }
 
 
   return `
     <img
-      src="${esc(urls[0])}"
+      src="${esc(
+        urls[0]
+      )}"
       alt="${esc(
         car?.name ||
-        "Vozidlo"
+        `${car?.brand || ""} ${car?.model || "vozidlo"}`
       )}"
       loading="lazy"
       decoding="async"
       referrerpolicy="no-referrer"
       data-candidates="${esc(
-        JSON.stringify(urls)
+        JSON.stringify(
+          urls
+        )
       )}"
       data-image-index="0"
       onerror="window.carmatchNextImage(this)"
@@ -1075,11 +1207,12 @@ function renderImage(car) {
       Fotografia sa nepodarilo načítať.
     </div>
   `;
+
 }
 
 
 /* ============================================================
-   LIST RENDER
+   LIST
    ============================================================ */
 
 function renderList(
@@ -1088,13 +1221,19 @@ function renderList(
 ) {
 
   const safeItems =
-    Array.isArray(items)
+    Array.isArray(
+      items
+    )
       ? items
           .map(
-            v => text(v)
+            v =>
+              text(v)
           )
           .filter(Boolean)
-          .slice(0, 6)
+          .slice(
+            0,
+            6
+          )
       : [];
 
 
@@ -1107,6 +1246,7 @@ function renderList(
         ${esc(empty)}
       </li>
     `;
+
   }
 
 
@@ -1116,6 +1256,7 @@ function renderList(
         `<li>${esc(item)}</li>`
     )
     .join("");
+
 }
 
 
@@ -1143,7 +1284,9 @@ function renderCard(
 
 
   const imageSource =
-    sourceUrl(car);
+    sourceUrl(
+      car
+    );
 
 
   const priceSource =
@@ -1154,108 +1297,50 @@ function renderCard(
 
   const configurator =
     safeUrl(
-      car?.configurator
+      car?.configurator ||
+      car?.officialUrl
     );
 
 
-  const year =
-    Number.isFinite(
-      Number(car?.year)
-    )
-      ? String(
-          car.year
-        )
-      : "—";
+  const yearValue =
+    car?.modelYear ??
+    car?.year;
 
 
-  const seats =
-    Number.isFinite(
-      Number(car?.seats)
-    )
-      ? String(
-          car.seats
-        )
-      : "—";
+  const seatsValue =
+    car?.seats;
 
 
-  const brand =
-    text(
-      car?.brand,
-      ""
-    );
+  const trunkValue =
+    car?.trunkLiters ??
+    car?.trunk;
 
 
-  const model =
-    text(
-      car?.model,
-      ""
-    );
+  const driveValue =
+    car?.drivetrain ??
+    car?.drive;
 
 
-  const category =
-    text(
-      car?.category,
-      ""
-    );
-
-
-  const trim =
-    text(
-      car?.trim,
-      ""
-    );
-
-
-  const engine =
-    text(
-      car?.engine,
-      ""
-    );
-
-
-  const consumption =
-    text(
-      car?.consumptionWltp,
-      ""
-    );
-
-
-  const power =
-    formatPowerDisplay(
-      car?.power
-    );
-
-
-  const dataSources =
-    Array.isArray(
-      car?.dataSources
-    )
-      ? car.dataSources
-          .map(
-            safeUrl
-          )
-          .filter(Boolean)
-          .filter(
-            (v, i, a) =>
-              a.indexOf(v) === i
-          )
-          .slice(0, 6)
-      : [];
+  const bodyValue =
+    car?.body ??
+    car?.category;
 
 
   const carName =
-    brand && model
-      ? `${brand} ${model}`
+    car?.brand &&
+    car?.model
+
+      ? `${car.brand} ${car.model}`
+
       : text(
           car?.name,
           "Neznáme vozidlo"
         );
 
 
-  const price =
-    text(
-      car?.price,
-      ""
+  const power =
+    formatPowerDisplay(
+      car?.power
     );
 
 
@@ -1286,14 +1371,14 @@ function renderCard(
         <div class="card-subtitle">
 
           ${
-            trim
-              ? `Výbava: ${esc(trim)}`
+            car?.trim
+              ? `Výbava: ${esc(car.trim)}`
               : "Výbava: neoverená"
           }
 
           ${
-            category
-              ? ` · Kategória: ${esc(category)}`
+            bodyValue
+              ? ` · Karoséria: ${esc(bodyValue)}`
               : ""
           }
 
@@ -1304,8 +1389,8 @@ function renderCard(
           }
 
           ${
-            year !== "—"
-              ? ` · ${esc(year)}`
+            yearValue
+              ? ` · ${esc(yearValue)}`
               : ""
           }
 
@@ -1319,13 +1404,13 @@ function renderCard(
 
         <div class="spec-grid">
 
-
           <div class="spec-item">
             <b>Cena</b>
             <span>
               ${esc(
-                price ||
-                "Cena na vyžiadanie"
+                formatPrice(
+                  car?.price
+                )
               )}
             </span>
           </div>
@@ -1343,7 +1428,7 @@ function renderCard(
             <b>Spotreba WLTP</b>
             <span>
               ${esc(
-                consumption ||
+                car?.consumptionWltp ||
                 "—"
               )}
             </span>
@@ -1354,7 +1439,7 @@ function renderCard(
             <b>Motor</b>
             <span>
               ${esc(
-                engine ||
+                car?.engine ||
                 "—"
               )}
             </span>
@@ -1364,7 +1449,10 @@ function renderCard(
           <div class="spec-item">
             <b>Sedadlá</b>
             <span>
-              ${esc(seats)}
+              ${esc(
+                seatsValue ??
+                "—"
+              )}
             </span>
           </div>
 
@@ -1373,8 +1461,9 @@ function renderCard(
             <b>Kufor</b>
             <span>
               ${esc(
-                car?.trunk ||
-                "—"
+                trunkValue
+                  ? `${trunkValue} l`
+                  : "—"
               )}
             </span>
           </div>
@@ -1384,7 +1473,7 @@ function renderCard(
             <b>Pohon</b>
             <span>
               ${esc(
-                car?.drive ||
+                driveValue ||
                 "—"
               )}
             </span>
@@ -1414,16 +1503,15 @@ function renderCard(
 
 
           <div class="spec-item">
-            <b>Karoséria</b>
+            <b>Dĺžka</b>
             <span>
               ${esc(
-                car?.body ||
-                category ||
-                "—"
+                car?.lengthMm
+                  ? `${car.lengthMm} mm`
+                  : "—"
               )}
             </span>
           </div>
-
 
         </div>
 
@@ -1436,6 +1524,7 @@ function renderCard(
 
           ${esc(
             car?.reason ||
+            car?.description ||
             "Spĺňa zadané požiadavky."
           )}
 
@@ -1443,7 +1532,6 @@ function renderCard(
 
 
         <div class="card-columns">
-
 
           <div>
 
@@ -1474,7 +1562,6 @@ function renderCard(
 
           </div>
 
-
         </div>
 
 
@@ -1493,7 +1580,6 @@ function renderCard(
 
 
         <div class="card-actions">
-
 
           ${
             priceSource
@@ -1520,7 +1606,7 @@ function renderCard(
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  Oficiálny konfigurátor
+                  Oficiálny web
                 </a>
               `
               : ""
@@ -1542,39 +1628,56 @@ function renderCard(
               : ""
           }
 
-
         </div>
 
 
-        ${
-          dataSources.length
-            ? `
-              <div class="source-links">
+        <div class="source-links">
 
-                Zdroje:
+          ${
+            priceSource
+              ? `
+                <a
+                  href="${esc(priceSource)}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Cena
+                </a>
+              `
+              : ""
+          }
 
-                ${
-                  dataSources
-                    .map(
-                      (url, i) =>
-                        `
-                          <a
-                            href="${esc(url)}"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            ${i + 1}
-                          </a>
-                        `
-                    )
-                    .join("")
-                }
 
-              </div>
-            `
-            : ""
-        }
+          ${
+            configurator
+              ? `
+                <a
+                  href="${esc(configurator)}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Výrobca
+                </a>
+              `
+              : ""
+          }
 
+
+          ${
+            imageSource
+              ? `
+                <a
+                  href="${esc(imageSource)}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Foto
+                </a>
+              `
+              : ""
+          }
+
+        </div>
 
       </div>
 
@@ -1587,7 +1690,9 @@ function renderCard(
    RESULTS
    ============================================================ */
 
-function renderResults(data) {
+function renderResults(
+  data
+) {
 
   const section =
     $("resultsSection");
@@ -1606,7 +1711,10 @@ function renderResults(data) {
 
   results.innerHTML =
     data.cars
-      .slice(0, 3)
+      .slice(
+        0,
+        3
+      )
       .map(
         renderCard
       )
@@ -1625,7 +1733,13 @@ function renderResults(data) {
 
     count.textContent =
       "3 odporúčania";
+
   }
+
+
+  updateUsage(
+    data
+  );
 
 
   requestAnimationFrame(
@@ -1641,14 +1755,97 @@ function renderResults(data) {
 
     }
   );
+
 }
 
 
 /* ============================================================
-   ERROR DISPLAY
+   USAGE
    ============================================================ */
 
-function renderError(error) {
+function updateUsage(
+  data
+) {
+
+  const remaining =
+    Number(
+      data?.remaining
+    );
+
+
+  if (
+    !Number.isFinite(
+      remaining
+    )
+  ) {
+    return;
+  }
+
+
+  for (
+    const id
+    of [
+      "remainingSearches",
+      "searchesRemaining",
+      "usageRemaining"
+    ]
+  ) {
+
+    const el =
+      $(id);
+
+    if (el) {
+
+      el.textContent =
+        String(
+          Math.max(
+            0,
+            Math.round(
+              remaining
+            )
+          )
+        );
+
+    }
+
+  }
+
+
+  for (
+    const id
+    of [
+      "usageCount",
+      "searchUsage"
+    ]
+  ) {
+
+    const el =
+      $(id);
+
+    if (el) {
+
+      el.textContent =
+        `${Math.max(
+          0,
+          Math.round(
+            5 - remaining
+          )
+        )} / 5 vyhľadávaní dnes`;
+
+    }
+
+  }
+
+}
+
+
+/* ============================================================
+   ERROR
+   ============================================================ */
+
+function renderError(
+  error
+) {
 
   const results =
     $("results");
@@ -1678,19 +1875,28 @@ function renderError(error) {
 
     message =
       text(
-        error?.payload?.message,
+        error?.payload?.message ||
+        error?.payload?.error,
+
         "Denný limit vyhľadávaní bol dosiahnutý."
       );
 
-  } else if (
-    error?.status === 503
+  }
+
+
+  if (
+    error?.status === 503 ||
+    error?.status === 502
   ) {
 
     message =
       text(
-        error?.payload?.message,
-        "AI je momentálne nedostupná. Toto vyhľadávanie sa podľa servera nezapočítalo do limitu."
+        error?.payload?.message ||
+        error?.payload?.error,
+
+        "AI je momentálne nedostupná. Vyhľadávanie sa podľa servera nezapočítalo do limitu."
       );
+
   }
 
 
@@ -1724,6 +1930,7 @@ function successFeedback() {
         40,
         100
       ]);
+
     }
 
   } catch (_) {}
@@ -1791,11 +1998,18 @@ function successFeedback() {
     );
 
 
-    osc.connect(gain);
-    gain.connect(ctx.destination);
+    osc.connect(
+      gain
+    );
+
+    gain.connect(
+      ctx.destination
+    );
 
 
-    osc.start(now);
+    osc.start(
+      now
+    );
 
 
     osc.stop(
@@ -1812,6 +2026,7 @@ function successFeedback() {
     );
 
   } catch (_) {}
+
 }
 
 
@@ -1866,7 +2081,6 @@ async function findCars() {
   const results =
     $("results");
 
-
   const section =
     $("resultsSection");
 
@@ -1887,6 +2101,7 @@ async function findCars() {
 
         </div>
       `;
+
   }
 
 
@@ -1894,6 +2109,7 @@ async function findCars() {
 
     section.hidden =
       false;
+
   }
 
 
@@ -1932,6 +2148,7 @@ async function findCars() {
         : "Hotovo.",
 
       "success"
+
     );
 
 
@@ -1951,26 +2168,21 @@ async function findCars() {
     );
 
 
-    if (
+    setStatus(
+
       error?.code ===
       "FETCH_FAILED"
-    ) {
 
-      setStatus(
-        "Server sa neozval. Skús to znova; vyhľadávanie sa nemá započítať do limitu.",
-        "error"
-      );
+        ? "Server sa neozval. Skús to znova; vyhľadávanie sa nemá započítať do limitu."
 
-    } else {
+        : text(
+            error?.message,
+            "Vyhľadávanie sa nepodarilo dokončiť."
+          ),
 
-      setStatus(
-        text(
-          error?.message,
-          "Vyhľadávanie sa nepodarilo dokončiť."
-        ),
-        "error"
-      );
-    }
+      "error"
+
+    );
 
 
   } finally {
@@ -1982,7 +2194,9 @@ async function findCars() {
     setButtonBusy(
       false
     );
+
   }
+
 }
 
 
@@ -2021,11 +2235,13 @@ function setupExampleChips() {
 
 
             input.focus();
+
           }
         );
 
       }
     );
+
 }
 
 
@@ -2061,11 +2277,13 @@ function setupFilters() {
               details.open
                 ? "−"
                 : "+";
+
           }
         );
 
       }
     );
+
 }
 
 
@@ -2074,6 +2292,15 @@ function setupFilters() {
    ============================================================ */
 
 function setup() {
+
+  if (initialized) {
+    return;
+  }
+
+
+  initialized =
+    true;
+
 
   const input =
     $("aiRequest");
@@ -2104,15 +2331,54 @@ function setup() {
         event.preventDefault();
 
         findCars();
+
       }
+
     }
   );
 
 
   button?.addEventListener(
     "click",
-    findCars
+    event => {
+
+      event.preventDefault();
+
+      findCars();
+
+    }
   );
+
+
+  document
+    .querySelectorAll(
+      "form"
+    )
+    .forEach(
+      form => {
+
+        if (
+          button &&
+          form.contains(
+            button
+          )
+        ) {
+
+          form.addEventListener(
+            "submit",
+            event => {
+
+              event.preventDefault();
+
+              findCars();
+
+            }
+          );
+
+        }
+
+      }
+    );
 
 
   setupExampleChips();
@@ -2127,6 +2393,7 @@ function setup() {
   setStatus(
     "Pripravené na vyhľadávanie."
   );
+
 }
 
 
@@ -2141,17 +2408,21 @@ if (
 
   document.addEventListener(
     "DOMContentLoaded",
-    setup
+    setup,
+    {
+      once: true
+    }
   );
 
 } else {
 
   setup();
+
 }
 
 
 /* ============================================================
-   GLOBAL ACCESS
+   GLOBAL
    ============================================================ */
 
 window.findCars =
