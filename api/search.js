@@ -15,7 +15,8 @@
 // - Wikimedia / Wikipedia image candidates
 // - Power in kW + HP
 // - Slovak output
-// - Safe ES Module export
+// - Supports JSON and plain-text request bodies
+// - Supports multiple frontend query field names
 // ============================================================
 
 "use strict";
@@ -43,9 +44,7 @@ const SUPABASE_SERVICE_ROLE_KEY =
 // ============================================================
 
 const IMAGE_TIMEOUT = 8000;
-
 const MAX_IMAGES = 8;
-
 const MAX_CARS = 3;
 
 
@@ -88,34 +87,26 @@ const OPENROUTER_MODELS = [
 // ============================================================
 
 function json(res, status, data) {
-
   return res
     .status(status)
     .json(data);
-
 }
 
 
 function clean(value) {
-
   if (
     value === undefined ||
     value === null
   ) {
-
     return "";
-
   }
 
   return String(value).trim();
-
 }
 
 
 function isValidUrl(value) {
-
   try {
-
     const url =
       new URL(value);
 
@@ -123,108 +114,313 @@ function isValidUrl(value) {
       url.protocol === "http:" ||
       url.protocol === "https:"
     );
-
   } catch {
-
     return false;
-
   }
-
 }
 
 
 function normalizeUrl(value) {
-
   if (!value) {
-
     return "";
-
   }
-
 
   let url =
     String(value).trim();
 
-
   if (
     !/^https?:\/\//i.test(url)
   ) {
-
     url =
       "https://" + url;
-
   }
-
 
   return isValidUrl(url)
     ? url
     : "";
-
 }
 
 
 function hpFromKw(kw) {
-
   const number =
     Number(kw);
-
 
   if (
     !Number.isFinite(number) ||
     number <= 0
   ) {
-
     return null;
-
   }
-
 
   return Math.round(
     number * 1.35962
   );
-
 }
 
 
 function kwFromHp(hp) {
-
   const number =
     Number(hp);
-
 
   if (
     !Number.isFinite(number) ||
     number <= 0
   ) {
-
     return null;
-
   }
-
 
   return Math.round(
     number / 1.35962
   );
+}
+
+
+// ============================================================
+// REQUEST BODY NORMALIZATION
+// ============================================================
+
+function getRequestBody(req) {
+
+  const body =
+    req?.body;
+
+  if (
+    body === undefined ||
+    body === null
+  ) {
+    return {};
+  }
+
+
+  // ----------------------------------------------------------
+  // JSON body already parsed by Vercel
+  // ----------------------------------------------------------
+
+  if (
+    typeof body === "object" &&
+    !Buffer.isBuffer(body)
+  ) {
+    return body;
+  }
+
+
+  // ----------------------------------------------------------
+  // Plain text body
+  // ----------------------------------------------------------
+
+  if (
+    typeof body === "string"
+  ) {
+
+    const trimmed =
+      body.trim();
+
+    if (!trimmed) {
+      return {};
+    }
+
+
+    try {
+
+      const parsed =
+        JSON.parse(trimmed);
+
+      if (
+        parsed &&
+        typeof parsed === "object"
+      ) {
+        return parsed;
+      }
+
+    } catch {
+      // Not JSON.
+    }
+
+
+    return {
+      text:
+        trimmed
+    };
+
+  }
+
+
+  // ----------------------------------------------------------
+  // Buffer body
+  // ----------------------------------------------------------
+
+  if (
+    Buffer.isBuffer(body)
+  ) {
+
+    const text =
+      body
+        .toString("utf8")
+        .trim();
+
+    if (!text) {
+      return {};
+    }
+
+
+    try {
+
+      const parsed =
+        JSON.parse(text);
+
+      if (
+        parsed &&
+        typeof parsed === "object"
+      ) {
+        return parsed;
+      }
+
+    } catch {
+      // Not JSON.
+    }
+
+
+    return {
+      text
+    };
+
+  }
+
+
+  return {};
 
 }
 
 
 // ============================================================
-// REQUEST BODY
+// REQUEST QUERY EXTRACTION
 // ============================================================
 
 function getUserQuery(req) {
 
   const body =
-    req.body || {};
+    getRequestBody(req);
 
 
-  return clean(
-    body.query ||
-    body.search ||
-    body.prompt ||
-    body.text
-  );
+  const query =
+    req?.query || {};
+
+
+  const candidates = [
+
+    body.query,
+    body.search,
+    body.prompt,
+    body.text,
+    body.userQuery,
+    body.user_query,
+    body.input,
+    body.message,
+    body.requirements,
+    body.carQuery,
+    body.car_query,
+    body.request,
+
+    query.query,
+    query.search,
+    query.prompt,
+    query.text,
+    query.userQuery,
+    query.user_query,
+    query.input,
+    query.message
+
+  ];
+
+
+  for (
+    const value of candidates
+  ) {
+
+    const cleaned =
+      clean(value);
+
+    if (
+      cleaned
+    ) {
+      return cleaned;
+    }
+
+  }
+
+
+  // If the entire body itself was plain text.
+  if (
+    typeof req?.body === "string"
+  ) {
+
+    const plain =
+      req.body.trim();
+
+    if (
+      plain &&
+      !plain.startsWith("{") &&
+      !plain.startsWith("[")
+    ) {
+      return plain;
+    }
+
+  }
+
+
+  return "";
+
+}
+
+
+// ============================================================
+// USER ID EXTRACTION
+// ============================================================
+
+function getUserId(req) {
+
+  const body =
+    getRequestBody(req);
+
+
+  const headerId =
+    req?.headers?.["x-user-id"];
+
+
+  const candidates = [
+
+    headerId,
+
+    body.userId,
+    body.user_id,
+
+    body.userID,
+    body.uid,
+    body.user_id_value,
+
+    req?.query?.userId,
+    req?.query?.user_id
+
+  ];
+
+
+  for (
+    const value of candidates
+  ) {
+
+    const cleaned =
+      clean(value);
+
+    if (
+      cleaned
+    ) {
+      return cleaned;
+    }
+
+  }
+
+
+  return "";
 
 }
 
@@ -265,14 +461,14 @@ async function supabaseRpc(
             "Content-Type":
               "application/json",
 
+            "Accept":
+              "application/json",
+
             "apikey":
               SUPABASE_SERVICE_ROLE_KEY,
 
             "Authorization":
-              `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-
-            "Accept":
-              "application/json"
+              `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
           },
 
           body:
@@ -378,9 +574,7 @@ async function chargeSearch(
 
       return {
         ok: true,
-
         functionName,
-
         data:
           result.data
       };
@@ -392,7 +586,6 @@ async function chargeSearch(
 
   return {
     ok: false,
-
     error:
       "Search usage function unavailable"
   };
@@ -435,7 +628,6 @@ async function refundSearch(
 
       return {
         ok: true,
-
         functionName
       };
 
@@ -546,9 +738,7 @@ async function wikipediaImage(
     if (
       !response.ok
     ) {
-
       return [];
-
     }
 
 
@@ -677,9 +867,7 @@ async function wikimediaImages(
     if (
       !response.ok
     ) {
-
       return [];
-
     }
 
 
@@ -709,9 +897,7 @@ async function wikimediaImages(
       if (
         !imageInfo
       ) {
-
         continue;
-
       }
 
 
@@ -724,9 +910,7 @@ async function wikimediaImages(
       if (
         !imageUrl
       ) {
-
         continue;
-
       }
 
 
@@ -735,9 +919,7 @@ async function wikimediaImages(
           imageUrl
         )
       ) {
-
         continue;
-
       }
 
 
@@ -826,9 +1008,7 @@ async function getImageCandidates(
     if (
       !image
     ) {
-
       continue;
-
     }
 
 
@@ -837,9 +1017,7 @@ async function getImageCandidates(
         image
       )
     ) {
-
       continue;
-
     }
 
 
@@ -848,9 +1026,7 @@ async function getImageCandidates(
         image
       )
     ) {
-
       continue;
-
     }
 
 
@@ -914,6 +1090,7 @@ GENERAL RULES:
 - Prefer the newest available generation/model year.
 - Research current prices whenever possible.
 - If a price cannot be verified, return null.
+- Try to provide a real current price for every car.
 - Use EUR when appropriate for European users.
 - Power must contain both kW and HP.
 - Use only kW and HP for power units.
@@ -924,7 +1101,7 @@ GENERAL RULES:
 - Do not confuse horsepower with kilowatts.
 - Do not confuse trunk capacity with maximum cargo capacity.
 - Do not confuse model year with generation year.
-- Return exactly 3 cars whenever possible.
+- Return exactly 3 cars.
 
 PRICE:
 Use a numeric starting price when a current verifiable price exists.
@@ -938,7 +1115,7 @@ Use only the official manufacturer's website or official configurator.
 
 IMAGE:
 Do not return image URLs.
-Images are searched separately by the CARMATCH AI backend.
+Images are searched separately by the backend.
 
 IMPORTANT JSON RULE:
 Return ONLY valid JSON.
@@ -1228,7 +1405,7 @@ async function callOpenRouter(
 
     } catch {
 
-      // Try next model.
+      // Continue with next model.
 
     }
 
@@ -1440,9 +1617,12 @@ function normalizeCar(
         : null,
 
     price: {
-      amount: null,
+      amount:
+        null,
+
       currency:
         "EUR",
+
       type:
         "starting"
     },
@@ -1467,12 +1647,8 @@ function normalizeCar(
         car?.pros
       )
         ? car.pros
-            .map(
-              clean
-            )
-            .filter(
-              Boolean
-            )
+            .map(clean)
+            .filter(Boolean)
             .slice(
               0,
               5
@@ -1484,12 +1660,8 @@ function normalizeCar(
         car?.cons
       )
         ? car.cons
-            .map(
-              clean
-            )
-            .filter(
-              Boolean
-            )
+            .map(clean)
+            .filter(Boolean)
             .slice(
               0,
               5
@@ -1521,31 +1693,23 @@ function normalizeCar(
 
 
   if (
-    Number.isFinite(
-      kw
-    ) &&
+    Number.isFinite(kw) &&
     kw > 0
   ) {
 
     result.power.kw =
-      Math.round(
-        kw
-      );
+      Math.round(kw);
 
   }
 
 
   if (
-    Number.isFinite(
-      hp
-    ) &&
+    Number.isFinite(hp) &&
     hp > 0
   ) {
 
     result.power.hp =
-      Math.round(
-        hp
-      );
+      Math.round(hp);
 
   }
 
@@ -1587,16 +1751,12 @@ function normalizeCar(
 
 
   if (
-    Number.isFinite(
-      amount
-    ) &&
+    Number.isFinite(amount) &&
     amount > 0
   ) {
 
     result.price.amount =
-      Math.round(
-        amount
-      );
+      Math.round(amount);
 
   }
 
@@ -1612,8 +1772,7 @@ function normalizeCar(
   ) {
 
     result.price.currency =
-      currency
-        .toUpperCase();
+      currency.toUpperCase();
 
   }
 
@@ -1650,20 +1809,6 @@ function normalizeCar(
 // ============================================================
 // MAIN VERCEL FUNCTION
 // ============================================================
-//
-// IMPORTANT:
-// package.json contains:
-// "type": "module"
-//
-// Therefore CommonJS:
-// module.exports = ...
-//
-// MUST NOT be used.
-//
-// ES Module export:
-// export default ...
-//
-// ============================================================
 
 export default async function handler(
   req,
@@ -1694,18 +1839,39 @@ export default async function handler(
 
 
   // ==========================================================
-  // USER QUERY
+  // REQUEST DATA
   // ==========================================================
 
-  const userQuery =
-    getUserQuery(
-      req
-    );
+  const requestBody =
+    getRequestBody(req);
 
+
+  const userQuery =
+    getUserQuery(req);
+
+
+  // ==========================================================
+  // QUERY VALIDATION
+  // ==========================================================
 
   if (
     !userQuery
   ) {
+
+    console.error(
+      "CARMATCH AI: request received without user query",
+      {
+        bodyType:
+          typeof req?.body,
+
+        body:
+          requestBody,
+
+        query:
+          req?.query || {}
+      }
+    );
+
 
     return json(
       res,
@@ -1726,18 +1892,17 @@ export default async function handler(
   // ==========================================================
 
   const userId =
-    clean(
-      req.headers[
-        "x-user-id"
-      ] ||
-      req.body?.userId ||
-      req.body?.user_id
-    );
+    getUserId(req);
 
 
   if (
     !userId
   ) {
+
+    console.error(
+      "CARMATCH AI: request received without user ID"
+    );
+
 
     return json(
       res,
@@ -1766,6 +1931,12 @@ export default async function handler(
   if (
     !charge.ok
   ) {
+
+    console.error(
+      "CARMATCH AI: chargeSearch failed",
+      charge.error
+    );
+
 
     return json(
       res,
@@ -1827,9 +1998,13 @@ export default async function handler(
 
         }
 
-      } catch {
+      } catch (error) {
 
-        // Continue.
+        console.error(
+          `CARMATCH AI: ${provider.name} failed`,
+          error?.message ||
+            error
+        );
 
       }
 
@@ -1853,7 +2028,7 @@ export default async function handler(
 
 
     // ========================================================
-    // PARSE JSON
+    // PARSE
     // ========================================================
 
     const parsed =
@@ -1971,6 +2146,17 @@ export default async function handler(
   } catch (error) {
 
     // ========================================================
+    // LOG REAL ERROR
+    // ========================================================
+
+    console.error(
+      "CARMATCH AI SEARCH ERROR:",
+      error?.message ||
+        error
+    );
+
+
+    // ========================================================
     // REFUND
     // ========================================================
 
@@ -1978,9 +2164,21 @@ export default async function handler(
       !success
     ) {
 
-      await refundSearch(
-        userId
-      );
+      const refund =
+        await refundSearch(
+          userId
+        );
+
+
+      if (
+        !refund.ok
+      ) {
+
+        console.error(
+          "CARMATCH AI: refund failed"
+        );
+
+      }
 
     }
 
