@@ -4,33 +4,45 @@
    CARMATCH AI - SEARCH API v18 FINAL
    ============================================================
    - Vercel ES Module compatible
-   - Current app.js compatible
-   - Reads naturalLanguage
+   - Compatible with current frontend app.js
+   - Reads naturalLanguage + filters
    - Reads Authorization: Bearer <Supabase access token>
-   - Verifies the token through Supabase Auth
+   - Verifies token through Supabase Auth
    - Uses verified Supabase user.id
-   - 5 searches/day through existing RPC functions
-   - Automatic refund when complete AI search fails
+   - 5 searches/day via existing RPC functions
+   - Automatic refund if complete AI search fails
    - Groq primary + Groq mini
-   - OpenRouter fallbacks
+   - OpenRouter FREE fallbacks
    - Exactly 3 cars
-   - Current price + official URL
+   - Current price / official URL
    - kW + HP
    - Wikimedia + Wikipedia images
    ============================================================ */
 
-const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
+const GROQ_API_KEY =
+  process.env.GROQ_API_KEY || "";
 
-const SUPABASE_URL = String(process.env.SUPABASE_URL || "")
-  .trim()
-  .replace(/\/+$/, "");
+const OPENROUTER_API_KEY =
+  process.env.OPENROUTER_API_KEY || "";
 
+const SUPABASE_URL =
+  String(process.env.SUPABASE_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+
+/*
+ * New Supabase server key first.
+ * Legacy service_role key remains supported.
+ */
 const SUPABASE_SERVER_KEY =
   process.env.SUPABASE_SECRET_KEY ||
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   "";
 
+/*
+ * New publishable key first.
+ * Legacy anon key remains supported.
+ */
 const SUPABASE_PUBLIC_KEY =
   process.env.SUPABASE_PUBLISHABLE_KEY ||
   process.env.SUPABASE_ANON_KEY ||
@@ -38,20 +50,25 @@ const SUPABASE_PUBLIC_KEY =
 
 const AUTH_TIMEOUT = 8000;
 const IMAGE_TIMEOUT = 8000;
+
 const MAX_IMAGES = 8;
 const MAX_CARS = 3;
 
-const GROQ_PROVIDERS = [
+const PROVIDERS = [
   {
     name: "groq",
-    url: "https://api.groq.com/openai/v1/chat/completions",
-    model: "openai/gpt-oss-120b",
+    url:
+      "https://api.groq.com/openai/v1/chat/completions",
+    model:
+      "openai/gpt-oss-120b",
     timeout: 55000
   },
   {
     name: "groq-mini",
-    url: "https://api.groq.com/openai/v1/chat/completions",
-    model: "openai/gpt-oss-20b",
+    url:
+      "https://api.groq.com/openai/v1/chat/completions",
+    model:
+      "openai/gpt-oss-20b",
     timeout: 45000
   }
 ];
@@ -71,14 +88,24 @@ function json(res, status, data) {
 }
 
 function clean(value) {
-  if (value === undefined || value === null) return "";
+  if (
+    value === undefined ||
+    value === null
+  ) {
+    return "";
+  }
+
   return String(value).trim();
 }
 
 function isValidUrl(value) {
   try {
     const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
+
+    return (
+      url.protocol === "http:" ||
+      url.protocol === "https:"
+    );
   } catch (_) {
     return false;
   }
@@ -87,33 +114,51 @@ function isValidUrl(value) {
 function normalizeUrl(value) {
   let url = clean(value);
 
-  if (!url) return "";
+  if (!url) {
+    return "";
+  }
 
-  if (!/^https?:\/\//i.test(url)) {
+  if (
+    !/^https?:\/\//i.test(url)
+  ) {
     url = `https://${url}`;
   }
 
-  return isValidUrl(url) ? url : "";
+  return isValidUrl(url)
+    ? url
+    : "";
 }
 
 function hpFromKw(kw) {
-  const value = Number(kw);
+  const value =
+    Number(kw);
 
-  if (!Number.isFinite(value) || value <= 0) {
+  if (
+    !Number.isFinite(value) ||
+    value <= 0
+  ) {
     return null;
   }
 
-  return Math.round(value * 1.35962);
+  return Math.round(
+    value * 1.35962
+  );
 }
 
 function kwFromHp(hp) {
-  const value = Number(hp);
+  const value =
+    Number(hp);
 
-  if (!Number.isFinite(value) || value <= 0) {
+  if (
+    !Number.isFinite(value) ||
+    value <= 0
+  ) {
     return null;
   }
 
-  return Math.round((value / 1.35962) * 10) / 10;
+  return Math.round(
+    (value / 1.35962) * 10
+  ) / 10;
 }
 
 /* ============================================================
@@ -121,30 +166,43 @@ function kwFromHp(hp) {
    ============================================================ */
 
 function getRequestBody(req) {
-  const body = req?.body;
+  const body =
+    req?.body;
 
-  if (body === undefined || body === null) {
+  if (
+    body === undefined ||
+    body === null
+  ) {
     return {};
   }
 
-  if (typeof body === "object" && !Buffer.isBuffer(body)) {
+  if (
+    typeof body === "object" &&
+    !Buffer.isBuffer(body)
+  ) {
     return body;
   }
 
-  const raw = Buffer.isBuffer(body)
-    ? body.toString("utf8")
-    : String(body);
+  const raw =
+    Buffer.isBuffer(body)
+      ? body.toString("utf8")
+      : String(body);
 
-  const trimmed = raw.trim();
+  const trimmed =
+    raw.trim();
 
   if (!trimmed) {
     return {};
   }
 
   try {
-    const parsed = JSON.parse(trimmed);
+    const parsed =
+      JSON.parse(trimmed);
 
-    if (parsed && typeof parsed === "object") {
+    if (
+      parsed &&
+      typeof parsed === "object"
+    ) {
       return parsed;
     }
   } catch (_) {}
@@ -159,13 +217,20 @@ function getRequestBody(req) {
    ============================================================ */
 
 function filtersToText(filters) {
-  if (!filters || typeof filters !== "object") {
+  if (
+    !filters ||
+    typeof filters !== "object"
+  ) {
     return "";
   }
 
   const parts = [];
 
-  function add(label, value, suffix = "") {
+  function add(
+    label,
+    value,
+    suffix = ""
+  ) {
     if (
       value !== undefined &&
       value !== null &&
@@ -177,19 +242,68 @@ function filtersToText(filters) {
     }
   }
 
-  add("maximálny rozpočet", filters.budget, " €");
-  add("počet sedadiel", filters.seats);
-  add("minimálny výkon", filters.power, " kW");
-  add("minimálny kufor", filters.trunk, " l");
-  add("pohon", filters.drive);
-  add("palivo", filters.fuel);
-  add("karoséria", filters.body);
-  add("štýl", filters.style);
-  add("maximálna dĺžka", filters.length, " m");
-  add("minimálny modelový rok", filters.year);
-  add("vynechať značky", filters.avoid);
+  add(
+    "maximálny rozpočet",
+    filters.budget,
+    " €"
+  );
 
-  return parts.join("; ");
+  add(
+    "počet sedadiel",
+    filters.seats
+  );
+
+  add(
+    "minimálny výkon",
+    filters.power,
+    " kW"
+  );
+
+  add(
+    "minimálny kufor",
+    filters.trunk,
+    " l"
+  );
+
+  add(
+    "pohon",
+    filters.drive
+  );
+
+  add(
+    "palivo",
+    filters.fuel
+  );
+
+  add(
+    "karoséria",
+    filters.body
+  );
+
+  add(
+    "štýl",
+    filters.style
+  );
+
+  add(
+    "maximálna dĺžka",
+    filters.length,
+    " m"
+  );
+
+  add(
+    "minimálny modelový rok",
+    filters.year
+  );
+
+  add(
+    "vynechať značky",
+    filters.avoid
+  );
+
+  return parts.join(
+    "; "
+  );
 }
 
 /* ============================================================
@@ -197,8 +311,11 @@ function filtersToText(filters) {
    ============================================================ */
 
 function getUserQuery(req) {
-  const body = getRequestBody(req);
-  const query = req?.query || {};
+  const body =
+    getRequestBody(req);
+
+  const query =
+    req?.query || {};
 
   const candidates = [
     body.naturalLanguage,
@@ -231,29 +348,58 @@ function getUserQuery(req) {
 
   let naturalLanguage = "";
 
-  for (const value of candidates) {
-    const cleaned = clean(value);
+  for (
+    const value of candidates
+  ) {
+    const cleaned =
+      clean(value);
 
     if (cleaned) {
-      naturalLanguage = cleaned;
+      naturalLanguage =
+        cleaned;
+
       break;
     }
   }
 
-  const filterText = filtersToText(body.filters);
+  const filterText =
+    filtersToText(
+      body.filters
+    );
 
-  if (naturalLanguage && filterText) {
+  if (
+    naturalLanguage &&
+    filterText
+  ) {
     return `${naturalLanguage}
 
 Doplňujúce filtre: ${filterText}`;
   }
 
-  if (naturalLanguage) {
+  if (
+    naturalLanguage
+  ) {
     return naturalLanguage;
   }
 
   if (filterText) {
     return `Používateľ nezadal voľný text. Vyber auto podľa týchto filtrov: ${filterText}`;
+  }
+
+  if (
+    typeof req?.body ===
+    "string"
+  ) {
+    const plain =
+      req.body.trim();
+
+    if (
+      plain &&
+      !plain.startsWith("{") &&
+      !plain.startsWith("[")
+    ) {
+      return plain;
+    }
   }
 
   return "";
@@ -264,25 +410,35 @@ Doplňujúce filtre: ${filterText}`;
    ============================================================ */
 
 function getBearerToken(req) {
-  const authorization =
+  const raw =
     req?.headers?.authorization ||
     req?.headers?.Authorization ||
     "";
 
-  const match = String(authorization).match(
-    /^Bearer\s+(.+)$/i
-  );
+  const match =
+    String(raw).match(
+      /^Bearer\s+(.+)$/i
+    );
 
-  return match ? match[1].trim() : "";
+  return match
+    ? match[1].trim()
+    : "";
 }
 
-function isValidSupabaseUrl(url) {
+function isSupabaseUrl(url) {
   try {
-    const parsed = new URL(url);
+    const parsed =
+      new URL(url);
 
-    return (
-      parsed.protocol === "https:" &&
-      parsed.hostname.endsWith(".supabase.co")
+    if (
+      parsed.protocol !==
+      "https:"
+    ) {
+      return false;
+    }
+
+    return parsed.hostname.endsWith(
+      ".supabase.co"
     );
   } catch (_) {
     return false;
@@ -295,110 +451,166 @@ function looksLikeUuid(value) {
   );
 }
 
-async function verifySupabaseAccessToken(req) {
-  const token = getBearerToken(req);
+async function verifySupabaseAccessToken(
+  req
+) {
+  const token =
+    getBearerToken(req);
 
   if (!token) {
     return {
       ok: false,
       status: 401,
       code: "missing_token",
-      error: "Chýba Supabase access token."
+      error:
+        "Chýba Supabase access token."
     };
   }
 
-  if (!SUPABASE_URL || !isValidSupabaseUrl(SUPABASE_URL)) {
+  if (
+    !SUPABASE_URL ||
+    !isSupabaseUrl(
+      SUPABASE_URL
+    )
+  ) {
     return {
       ok: false,
       status: 500,
       code: "bad_supabase_url",
-      error: "SUPABASE_URL nie je správne nastavená."
+      error:
+        "SUPABASE_URL nie je správne nastavená."
     };
   }
 
-  if (!SUPABASE_PUBLIC_KEY) {
+  if (
+    !SUPABASE_PUBLIC_KEY
+  ) {
     return {
       ok: false,
       status: 500,
       code: "missing_supabase_key",
-      error: "Chýba Supabase publishable/anon key."
+      error:
+        "Na serveri chýba Supabase publishable/anon key."
     };
   }
 
-  const controller = new AbortController();
+  const controller =
+    new AbortController();
 
-  const timer = setTimeout(
-    () => controller.abort(),
-    AUTH_TIMEOUT
-  );
-
-  try {
-    const response = await fetch(
-      `${SUPABASE_URL}/auth/v1/user`,
-      {
-        method: "GET",
-        headers: {
-          apikey: SUPABASE_PUBLIC_KEY,
-          Authorization: `Bearer ${token}`,
-          Accept: "application/json"
-        },
-        cache: "no-store",
-        signal: controller.signal
-      }
+  const timer =
+    setTimeout(
+      () =>
+        controller.abort(),
+      AUTH_TIMEOUT
     );
 
-    const raw = await response.text();
+  try {
+    /*
+     * Supabase recommended verification:
+     * apikey = publishable/anon key
+     * Authorization = user's JWT
+     */
+    const response =
+      await fetch(
+        `${SUPABASE_URL}/auth/v1/user`,
+        {
+          method: "GET",
+
+          headers: {
+            apikey:
+              SUPABASE_PUBLIC_KEY,
+
+            Authorization:
+              `Bearer ${token}`,
+
+            Accept:
+              "application/json"
+          },
+
+          cache:
+            "no-store",
+
+          signal:
+            controller.signal
+        }
+      );
+
+    const raw =
+      await response.text();
 
     let data = null;
 
     try {
-      data = raw ? JSON.parse(raw) : null;
+      data =
+        raw
+          ? JSON.parse(raw)
+          : null;
     } catch (_) {
       data = null;
     }
 
-    if (response.status === 401 || response.status === 403) {
+    if (
+      response.status === 401 ||
+      response.status === 403
+    ) {
       return {
         ok: false,
         status: 401,
         code: "invalid_token",
-        error: "Supabase access token je neplatný alebo expirovaný."
+        error:
+          "Supabase access token je neplatný alebo expirovaný."
       };
     }
 
-    if (!response.ok) {
+    if (
+      !response.ok
+    ) {
       console.error(
         "CARMATCH AI: Supabase Auth verification failed",
         {
-          status: response.status,
-          response: data || raw?.slice(0, 500)
+          status:
+            response.status,
+
+          response:
+            data ||
+            raw?.slice(
+              0,
+              500
+            )
         }
       );
 
       return {
         ok: false,
         status: 500,
-        code: "auth_server_error",
+        code:
+          "auth_server_error",
         error:
-          "Supabase Auth odmietol overenie používateľa."
+          "Supabase Auth server odmietol overenie. Skontroluj, že SUPABASE_URL a Supabase kľúč patria k rovnakému projektu."
       };
     }
 
-    const userId = clean(
-      data?.id ||
-      data?.user?.id
-    );
+    const userId =
+      clean(
+        data?.id ||
+        data?.user?.id
+      );
 
-    if (!looksLikeUuid(userId)) {
+    if (
+      !looksLikeUuid(
+        userId
+      )
+    ) {
       console.error(
-        "CARMATCH AI: Invalid Supabase user id",
+        "CARMATCH AI: Supabase Auth returned no valid user id",
         data
       );
 
       return {
         ok: false,
         status: 500,
-        code: "missing_user_id",
+        code:
+          "missing_user_id",
         error:
           "Supabase Auth nevrátil platné ID používateľa."
       };
@@ -412,23 +624,29 @@ async function verifySupabaseAccessToken(req) {
   } catch (error) {
     console.error(
       "CARMATCH AI: Supabase Auth request failed",
-      error?.message || error
+      error?.message ||
+        error
     );
 
     return {
       ok: false,
       status: 500,
       code:
-        error?.name === "AbortError"
+        error?.name ===
+        "AbortError"
           ? "auth_timeout"
           : "auth_network_error",
+
       error:
-        error?.name === "AbortError"
+        error?.name ===
+        "AbortError"
           ? "Supabase Auth server neodpovedal včas."
           : "Nepodarilo sa spojiť so Supabase Auth serverom."
     };
   } finally {
-    clearTimeout(timer);
+    clearTimeout(
+      timer
+    );
   }
 }
 
@@ -436,82 +654,134 @@ async function verifySupabaseAccessToken(req) {
    SUPABASE RPC
    ============================================================ */
 
-async function supabaseRpc(functionName, payload) {
-  if (!SUPABASE_URL || !SUPABASE_SERVER_KEY) {
+async function supabaseRpc(
+  functionName,
+  payload
+) {
+  if (
+    !SUPABASE_URL ||
+    !SUPABASE_SERVER_KEY
+  ) {
     return {
       ok: false,
       status: 500,
-      error: "Supabase server configuration missing"
+      error:
+        "Supabase server configuration missing"
     };
   }
 
   try {
-    const response = await fetch(
-      `${SUPABASE_URL}/rest/v1/rpc/${functionName}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          apikey: SUPABASE_SERVER_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVER_KEY}`
-        },
-        body: JSON.stringify(payload || {}),
-        cache: "no-store"
-      }
-    );
+    const response =
+      await fetch(
+        `${SUPABASE_URL}/rest/v1/rpc/${functionName}`,
+        {
+          method: "POST",
 
-    const raw = await response.text();
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            Accept:
+              "application/json",
+
+            /*
+             * IMPORTANT:
+             * New sb_secret_* keys are NOT JWTs.
+             * They belong in apikey only.
+             */
+            apikey:
+              SUPABASE_SERVER_KEY
+          },
+
+          body:
+            JSON.stringify(
+              payload || {}
+            ),
+
+          cache:
+            "no-store"
+        }
+      );
+
+    const raw =
+      await response.text();
 
     let data = null;
 
     try {
-      data = raw ? JSON.parse(raw) : null;
+      data =
+        raw
+          ? JSON.parse(raw)
+          : null;
     } catch (_) {
       data = raw;
     }
 
-    if (!response.ok) {
+    if (
+      !response.ok
+    ) {
       return {
         ok: false,
-        status: response.status,
+        status:
+          response.status,
         error: data
       };
     }
 
     return {
       ok: true,
-      status: response.status,
+      status:
+        response.status,
       data
     };
   } catch (error) {
     return {
       ok: false,
       status: 0,
-      error: error?.message || "Supabase RPC failed"
+      error:
+        error?.message ||
+        "Supabase request failed"
     };
   }
 }
 
-function chargeAllowed(data) {
-  if (data === false) {
+/* ============================================================
+   RPC RESULT HELPERS
+   ============================================================ */
+
+function chargeAllowed(
+  data
+) {
+  if (
+    data === false
+  ) {
     return false;
   }
 
   if (
-    typeof data === "number" &&
+    typeof data ===
+      "number" &&
     data < 0
   ) {
     return false;
   }
 
-  if (data && typeof data === "object") {
+  if (
+    data &&
+    typeof data ===
+      "object"
+  ) {
     if (
-      data.allowed === false ||
-      data.success === false ||
-      data.ok === false ||
-      data.can_search === false ||
-      data.canSearch === false
+      data.allowed ===
+        false ||
+      data.success ===
+        false ||
+      data.ok ===
+        false ||
+      data.can_search ===
+        false ||
+      data.canSearch ===
+        false
     ) {
       return false;
     }
@@ -520,19 +790,28 @@ function chargeAllowed(data) {
   return true;
 }
 
-function extractRemaining(data) {
+function extractRemaining(
+  data
+) {
   if (
-    typeof data === "number" &&
+    typeof data ===
+      "number" &&
     data >= 0
   ) {
-    return Math.round(data);
+    return Math.round(
+      data
+    );
   }
 
-  if (!data || typeof data !== "object") {
+  if (
+    !data ||
+    typeof data !==
+      "object"
+  ) {
     return null;
   }
 
-  const possibleKeys = [
+  const keys = [
     "remaining",
     "searches_remaining",
     "remaining_searches",
@@ -540,14 +819,23 @@ function extractRemaining(data) {
     "left"
   ];
 
-  for (const key of possibleKeys) {
-    const number = Number(data[key]);
+  for (
+    const key of keys
+  ) {
+    const number =
+      Number(
+        data[key]
+      );
 
     if (
-      Number.isFinite(number) &&
+      Number.isFinite(
+        number
+      ) &&
       number >= 0
     ) {
-      return Math.round(number);
+      return Math.round(
+        number
+      );
     }
   }
 
@@ -558,19 +846,38 @@ async function tryRpcFunctionNames(
   functionNames,
   userId
 ) {
+  /*
+   * Supports the common parameter names
+   * used by the existing saved RPCs.
+   */
   const payloads = [
-    { p_user_id: userId },
-    { user_id: userId }
+    {
+      p_user_id:
+        userId
+    },
+    {
+      user_id:
+        userId
+    }
   ];
 
-  for (const functionName of functionNames) {
-    for (const payload of payloads) {
-      const result = await supabaseRpc(
-        functionName,
-        payload
-      );
+  for (
+    const functionName
+    of functionNames
+  ) {
+    for (
+      const payload
+      of payloads
+    ) {
+      const result =
+        await supabaseRpc(
+          functionName,
+          payload
+        );
 
-      if (result.ok) {
+      if (
+        result.ok
+      ) {
         return {
           ...result,
           functionName,
@@ -585,56 +892,99 @@ async function tryRpcFunctionNames(
   };
 }
 
-async function chargeSearch(userId) {
-  const result = await tryRpcFunctionNames(
-    [
-      "use_search",
-      "consume_search",
-      "increment_search"
-    ],
-    userId
-  );
+/* ============================================================
+   CHARGE SEARCH
+   ============================================================ */
 
-  if (!result.ok) {
+async function chargeSearch(
+  userId
+) {
+  const result =
+    await tryRpcFunctionNames(
+      [
+        "use_search",
+        "consume_search",
+        "increment_search"
+      ],
+      userId
+    );
+
+  if (
+    !result.ok
+  ) {
     return {
       ok: false,
-      error: "Search usage function unavailable"
+      error:
+        "Search usage function unavailable"
     };
   }
 
-  const allowed = chargeAllowed(result.data);
+  const allowed =
+    chargeAllowed(
+      result.data
+    );
 
   return {
     ok: allowed,
-    limited: !allowed,
-    functionName: result.functionName,
-    data: result.data,
-    remaining: extractRemaining(result.data)
-  };
-}
 
-async function refundSearch(userId) {
-  const result = await tryRpcFunctionNames(
-    [
-      "refund_search",
-      "refund_search_usage",
-      "decrement_search"
-    ],
-    userId
-  );
+    limited:
+      !allowed,
 
-  return {
-    ok: result.ok,
-    functionName: result.functionName || null
+    functionName:
+      result.functionName,
+
+    data:
+      result.data,
+
+    remaining:
+      extractRemaining(
+        result.data
+      )
   };
 }
 
 /* ============================================================
-   IMAGE SEARCH
+   REFUND SEARCH
    ============================================================ */
 
-function rejectedImageUrl(url) {
-  const value = String(url || "").toLowerCase();
+async function refundSearch(
+  userId
+) {
+  const result =
+    await tryRpcFunctionNames(
+      [
+        "refund_search",
+        "refund_search_usage",
+        "decrement_search"
+      ],
+      userId
+    );
+
+  if (
+    result.ok
+  ) {
+    return {
+      ok: true,
+      functionName:
+        result.functionName
+    };
+  }
+
+  return {
+    ok: false
+  };
+}
+
+/* ============================================================
+   IMAGE FILTERING
+   ============================================================ */
+
+function rejectedImageUrl(
+  url
+) {
+  const value =
+    String(url || "")
+      .toLowerCase();
 
   const blocked = [
     "logo",
@@ -655,59 +1005,86 @@ function rejectedImageUrl(url) {
   ];
 
   return blocked.some(
-    term => value.includes(term)
+    term =>
+      value.includes(
+        term
+      )
   );
 }
+
+/* ============================================================
+   TIMED FETCH
+   ============================================================ */
 
 async function timedFetch(
   url,
   options = {},
-  timeout = IMAGE_TIMEOUT
+  timeout =
+    IMAGE_TIMEOUT
 ) {
-  const controller = new AbortController();
+  const controller =
+    new AbortController();
 
-  const timer = setTimeout(
-    () => controller.abort(),
-    timeout
-  );
+  const timer =
+    setTimeout(
+      () =>
+        controller.abort(),
+      timeout
+    );
 
   try {
-    return await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
+    return await fetch(
+      url,
+      {
+        ...options,
+
+        signal:
+          controller.signal
+      }
+    );
   } finally {
-    clearTimeout(timer);
+    clearTimeout(
+      timer
+    );
   }
 }
+
+/* ============================================================
+   WIKIPEDIA IMAGE
+   ============================================================ */
 
 async function wikipediaImage(
   brand,
   model
 ) {
-  const title = encodeURIComponent(
-    `${brand} ${model}`.trim()
-  );
+  const title =
+    encodeURIComponent(
+      `${brand} ${model}`.trim()
+    );
 
   const url =
     `https://en.wikipedia.org/api/rest_v1/page/summary/${title}`;
 
   try {
-    const response = await timedFetch(
-      url,
-      {
-        headers: {
-          "User-Agent":
-            "CARMATCH-AI/1.0"
+    const response =
+      await timedFetch(
+        url,
+        {
+          headers: {
+            "User-Agent":
+              "CARMATCH-AI/1.0"
+          }
         }
-      }
-    );
+      );
 
-    if (!response.ok) {
+    if (
+      !response.ok
+    ) {
       return [];
     }
 
-    const data = await response.json();
+    const data =
+      await response.json();
 
     const images = [];
 
@@ -716,14 +1093,25 @@ async function wikipediaImage(
       data?.thumbnail?.source
     ];
 
-    for (const image of candidates) {
+    for (
+      const image
+      of candidates
+    ) {
       if (
         image &&
-        isValidUrl(image) &&
-        !rejectedImageUrl(image) &&
-        !images.includes(image)
+        isValidUrl(
+          image
+        ) &&
+        !rejectedImageUrl(
+          image
+        ) &&
+        !images.includes(
+          image
+        )
       ) {
-        images.push(image);
+        images.push(
+          image
+        );
       }
     }
 
@@ -733,15 +1121,20 @@ async function wikipediaImage(
   }
 }
 
+/* ============================================================
+   WIKIMEDIA COMMONS
+   ============================================================ */
+
 async function wikimediaImages(
   brand,
   model,
   generation,
   modelYear
 ) {
-  const search = encodeURIComponent(
-    `${brand} ${model} ${generation || ""} ${modelYear || ""}`.trim()
-  );
+  const search =
+    encodeURIComponent(
+      `${brand} ${model} ${generation || ""} ${modelYear || ""}`.trim()
+    );
 
   const url =
     `https://commons.wikimedia.org/w/api.php` +
@@ -749,7 +1142,7 @@ async function wikimediaImages(
     `&generator=search` +
     `&gsrsearch=${search}` +
     `&gsrnamespace=6` +
-    `&gsrlimit=30` +
+    `&gsrlimit=20` +
     `&prop=imageinfo` +
     `&iiprop=url|extmetadata` +
     `&iiurlwidth=1600` +
@@ -757,29 +1150,39 @@ async function wikimediaImages(
     `&origin=*`;
 
   try {
-    const response = await timedFetch(
-      url,
-      {
-        headers: {
-          "User-Agent":
-            "CARMATCH-AI/1.0"
+    const response =
+      await timedFetch(
+        url,
+        {
+          headers: {
+            "User-Agent":
+              "CARMATCH-AI/1.0"
+          }
         }
-      }
-    );
+      );
 
-    if (!response.ok) {
+    if (
+      !response.ok
+    ) {
       return [];
     }
 
-    const data = await response.json();
+    const data =
+      await response.json();
 
-    const pages = data?.query?.pages
-      ? Object.values(data.query.pages)
-      : [];
+    const pages =
+      data?.query?.pages
+        ? Object.values(
+            data.query.pages
+          )
+        : [];
 
     const images = [];
 
-    for (const page of pages) {
+    for (
+      const page
+      of pages
+    ) {
       const info =
         page?.imageinfo?.[0];
 
@@ -788,31 +1191,42 @@ async function wikimediaImages(
         info?.url ||
         "";
 
-      const title = clean(
-        page?.title
-      ).toLowerCase();
+      const title =
+        clean(
+          page?.title
+        ).toLowerCase();
 
-      const description = clean(
-        info?.extmetadata
-          ?.ImageDescription
-          ?.value ||
-        info?.extmetadata
-          ?.ObjectName
-          ?.value ||
-        ""
-      ).toLowerCase();
+      const description =
+        clean(
+          info?.extmetadata
+            ?.ImageDescription
+            ?.value ||
+            info
+              ?.extmetadata
+              ?.ObjectName
+              ?.value ||
+            ""
+        ).toLowerCase();
 
       if (
         !imageUrl ||
-        !isValidUrl(imageUrl)
+        !isValidUrl(
+          imageUrl
+        )
       ) {
         continue;
       }
 
       if (
-        rejectedImageUrl(imageUrl) ||
-        rejectedImageUrl(title) ||
-        rejectedImageUrl(description)
+        rejectedImageUrl(
+          imageUrl
+        ) ||
+        rejectedImageUrl(
+          title
+        ) ||
+        rejectedImageUrl(
+          description
+        )
       ) {
         continue;
       }
@@ -821,46 +1235,67 @@ async function wikimediaImages(
         `${title} ${description}`;
 
       const brandText =
-        String(brand || "")
-          .toLowerCase();
+        String(
+          brand || ""
+        ).toLowerCase();
+
+      const brandOk =
+        haystack.includes(
+          brandText
+        );
 
       const modelWords =
-        String(model || "")
+        String(
+          model || ""
+        )
           .toLowerCase()
-          .split(/\s+/)
-          .map(word =>
-            word.replace(
-              /[^a-z0-9-]/g,
-              ""
-            )
+          .split(
+            /\s+/
           )
-          .filter(Boolean)
-          .slice(0, 4);
+          .map(
+            word =>
+              word.replace(
+                /[^a-z0-9-]/g,
+                ""
+              )
+          )
+          .filter(
+            Boolean
+          )
+          .slice(
+            0,
+            3
+          );
+
+      const modelOk =
+        modelWords.length === 0 ||
+        modelWords.some(
+          word =>
+            haystack.includes(
+              word
+            )
+        );
 
       if (
-        brandText &&
-        !haystack.includes(brandText)
+        !brandOk ||
+        !modelOk
       ) {
         continue;
       }
 
-      const modelMatches =
-        modelWords.length === 0 ||
-        modelWords.some(
-          word =>
-            haystack.includes(word)
+      if (
+        !images.includes(
+          imageUrl
+        )
+      ) {
+        images.push(
+          imageUrl
         );
-
-      if (!modelMatches) {
-        continue;
-      }
-
-      if (!images.includes(imageUrl)) {
-        images.push(imageUrl);
       }
 
       if (
-        images.length >= MAX_IMAGES
+        images.length >=
+        MAX_IMAGES
       ) {
         break;
       }
@@ -872,18 +1307,26 @@ async function wikimediaImages(
   }
 }
 
+/* ============================================================
+   IMAGE CANDIDATES
+   ============================================================ */
+
 async function getImageCandidates(
   brand,
   model,
   generation,
   modelYear
 ) {
-  const [wiki, commons] =
+  const [
+    wiki,
+    commons
+  ] =
     await Promise.all([
       wikipediaImage(
         brand,
         model
       ),
+
       wikimediaImages(
         brand,
         model,
@@ -894,26 +1337,44 @@ async function getImageCandidates(
 
   const unique = [];
 
-  for (const image of [
-    ...wiki,
-    ...commons
-  ]) {
-    if (!isValidUrl(image)) {
+  for (
+    const image
+    of [
+      ...wiki,
+      ...commons
+    ]
+  ) {
+    if (
+      !isValidUrl(
+        image
+      )
+    ) {
       continue;
     }
-
-    if (rejectedImageUrl(image)) {
-      continue;
-    }
-
-    if (unique.includes(image)) {
-      continue;
-    }
-
-    unique.push(image);
 
     if (
-      unique.length >= MAX_IMAGES
+      rejectedImageUrl(
+        image
+      )
+    ) {
+      continue;
+    }
+
+    if (
+      unique.includes(
+        image
+      )
+    ) {
+      continue;
+    }
+
+    unique.push(
+      image
+    );
+
+    if (
+      unique.length >=
+      MAX_IMAGES
     ) {
       break;
     }
@@ -926,8 +1387,10 @@ async function getImageCandidates(
    AI PROMPT
    ============================================================ */
 
-function buildPrompt(userQuery) {
-  return `You are CARMATCH AI, a precise automotive research assistant for a Slovak user.
+function buildPrompt(
+  userQuery
+) {
+  return `You are CARMATCH AI, an automotive research assistant for a Slovak user.
 
 USER REQUEST:
 ${userQuery}
@@ -1031,22 +1494,30 @@ async function callAI(
   };
 
   if (
-    provider.name === "groq" ||
-    provider.name === "groq-mini"
+    provider.name ===
+      "groq" ||
+    provider.name ===
+      "groq-mini"
   ) {
-    apiKey = GROQ_API_KEY;
+    apiKey =
+      GROQ_API_KEY;
   }
 
   if (
-    provider.name === "openrouter"
+    provider.name ===
+    "openrouter"
   ) {
     apiKey =
       OPENROUTER_API_KEY;
 
-    headers["HTTP-Referer"] =
+    headers[
+      "HTTP-Referer"
+    ] =
       "https://carmatchai.vercel.app";
 
-    headers["X-Title"] =
+    headers[
+      "X-Title"
+    ] =
       "CARMATCH AI";
   }
 
@@ -1059,51 +1530,70 @@ async function callAI(
   const controller =
     new AbortController();
 
-  const timer = setTimeout(
-    () => controller.abort(),
-    provider.timeout || 35000
-  );
+  const timer =
+    setTimeout(
+      () =>
+        controller.abort(),
+      provider.timeout ||
+        35000
+    );
 
   try {
     const response =
       await fetch(
         provider.url,
         {
-          method: "POST",
+          method:
+            "POST",
+
           headers: {
             ...headers,
+
             Authorization:
               `Bearer ${apiKey}`
           },
+
           signal:
             controller.signal,
-          body: JSON.stringify({
-            model:
-              provider.model,
 
-            messages: [
-              {
-                role: "system",
-                content:
-                  "You are a precise automotive research assistant. Return valid JSON only."
-              },
-              {
-                role: "user",
-                content: prompt
-              }
-            ],
+          body:
+            JSON.stringify({
+              model:
+                provider.model,
 
-            temperature: 0.1,
+              messages: [
+                {
+                  role:
+                    "system",
 
-            max_tokens: 7000
-          })
+                  content:
+                    "You are a precise automotive research assistant. Return valid JSON only."
+                },
+
+                {
+                  role:
+                    "user",
+
+                  content:
+                    prompt
+                }
+              ],
+
+              temperature:
+                0.1,
+
+              max_tokens:
+                7000
+            })
         }
       );
 
     const raw =
       await response.text();
 
-    if (!response.ok) {
+    if (
+      !response.ok
+    ) {
       throw new Error(
         `${provider.name}: HTTP ${response.status} ${raw.slice(0, 500)}`
       );
@@ -1113,7 +1603,9 @@ async function callAI(
 
     try {
       data =
-        JSON.parse(raw);
+        JSON.parse(
+          raw
+        );
     } catch (_) {
       throw new Error(
         `${provider.name}: invalid API JSON`
@@ -1121,7 +1613,8 @@ async function callAI(
     }
 
     const content =
-      data?.choices?.[0]
+      data
+        ?.choices?.[0]
         ?.message
         ?.content;
 
@@ -1133,15 +1626,19 @@ async function callAI(
 
     return content;
   } finally {
-    clearTimeout(timer);
+    clearTimeout(
+      timer
+    );
   }
 }
 
 /* ============================================================
-   JSON PARSING
+   EXTRACT JSON
    ============================================================ */
 
-function extractJson(value) {
+function extractJson(
+  value
+) {
   if (!value) {
     throw new Error(
       "Empty AI result"
@@ -1149,22 +1646,24 @@ function extractJson(value) {
   }
 
   let cleaned =
-    String(value).trim();
+    String(value)
+      .trim();
 
-  cleaned = cleaned
-    .replace(
-      /^```json\s*/i,
-      ""
-    )
-    .replace(
-      /^```\s*/i,
-      ""
-    )
-    .replace(
-      /\s*```$/i,
-      ""
-    )
-    .trim();
+  cleaned =
+    cleaned
+      .replace(
+        /^```json\s*/i,
+        ""
+      )
+      .replace(
+        /^```\s*/i,
+        ""
+      )
+      .replace(
+        /\s*```$/i,
+        ""
+      )
+      .trim();
 
   try {
     return JSON.parse(
@@ -1173,10 +1672,14 @@ function extractJson(value) {
   } catch (_) {}
 
   const first =
-    cleaned.indexOf("{");
+    cleaned.indexOf(
+      "{"
+    );
 
   const last =
-    cleaned.lastIndexOf("}");
+    cleaned.lastIndexOf(
+      "}"
+    );
 
   if (
     first >= 0 &&
@@ -1198,7 +1701,7 @@ function extractJson(value) {
 }
 
 /* ============================================================
-   CAR NORMALIZATION
+   NORMALIZE CAR
    ============================================================ */
 
 function normalizeCar(
@@ -1207,41 +1710,63 @@ function normalizeCar(
 ) {
   const result = {
     rank:
-      Number(car?.rank) ||
+      Number(
+        car?.rank
+      ) ||
       index + 1,
 
     brand:
-      clean(car?.brand) ||
+      clean(
+        car?.brand
+      ) ||
       "Unknown",
 
     model:
-      clean(car?.model) ||
+      clean(
+        car?.model
+      ) ||
       "Unknown model",
 
     modelYear:
       Number.isFinite(
-        Number(car?.modelYear)
+        Number(
+          car?.modelYear
+        )
       )
-        ? Number(car.modelYear)
+        ? Number(
+            car.modelYear
+          )
         : null,
 
     generation:
-      clean(car?.generation),
+      clean(
+        car?.generation
+      ),
 
     category:
-      clean(car?.category),
+      clean(
+        car?.category
+      ),
 
     body:
-      clean(car?.body),
+      clean(
+        car?.body
+      ),
 
     trim:
-      clean(car?.trim),
+      clean(
+        car?.trim
+      ),
 
     fuel:
-      clean(car?.fuel),
+      clean(
+        car?.fuel
+      ),
 
     drivetrain:
-      clean(car?.drivetrain),
+      clean(
+        car?.drivetrain
+      ),
 
     drive:
       clean(
@@ -1250,7 +1775,9 @@ function normalizeCar(
       ),
 
     transmission:
-      clean(car?.transmission),
+      clean(
+        car?.transmission
+      ),
 
     power: {
       kw: null,
@@ -1258,11 +1785,15 @@ function normalizeCar(
     },
 
     engine:
-      clean(car?.engine),
+      clean(
+        car?.engine
+      ),
 
     trunkLiters:
       Number.isFinite(
-        Number(car?.trunkLiters)
+        Number(
+          car?.trunkLiters
+        )
       )
         ? Number(
             car.trunkLiters
@@ -1271,7 +1802,9 @@ function normalizeCar(
 
     trunk:
       Number.isFinite(
-        Number(car?.trunkLiters)
+        Number(
+          car?.trunkLiters
+        )
       )
         ? Number(
             car.trunkLiters
@@ -1280,14 +1813,20 @@ function normalizeCar(
 
     seats:
       Number.isFinite(
-        Number(car?.seats)
+        Number(
+          car?.seats
+        )
       )
-        ? Number(car.seats)
+        ? Number(
+            car.seats
+          )
         : null,
 
     lengthMm:
       Number.isFinite(
-        Number(car?.lengthMm)
+        Number(
+          car?.lengthMm
+        )
       )
         ? Number(
             car.lengthMm
@@ -1321,28 +1860,52 @@ function normalizeCar(
       ),
 
     reason:
-      clean(car?.reason),
+      clean(
+        car?.reason
+      ),
 
     description:
-      clean(car?.description),
+      clean(
+        car?.description
+      ),
 
     maintenance:
-      clean(car?.maintenance),
+      clean(
+        car?.maintenance
+      ),
 
     pros:
-      Array.isArray(car?.pros)
+      Array.isArray(
+        car?.pros
+      )
         ? car.pros
-            .map(clean)
-            .filter(Boolean)
-            .slice(0, 5)
+            .map(
+              clean
+            )
+            .filter(
+              Boolean
+            )
+            .slice(
+              0,
+              5
+            )
         : [],
 
     cons:
-      Array.isArray(car?.cons)
+      Array.isArray(
+        car?.cons
+      )
         ? car.cons
-            .map(clean)
-            .filter(Boolean)
-            .slice(0, 5)
+            .map(
+              clean
+            )
+            .filter(
+              Boolean
+            )
+            .slice(
+              0,
+              5
+            )
         : [],
 
     score:
@@ -1351,7 +1914,9 @@ function normalizeCar(
         Math.min(
           100,
           Math.round(
-            Number(car?.score) || 0
+            Number(
+              car?.score
+            ) || 0
           )
         )
       ),
@@ -1368,7 +1933,9 @@ function normalizeCar(
 
     year:
       Number.isFinite(
-        Number(car?.modelYear)
+        Number(
+          car?.modelYear
+        )
       )
         ? Number(
             car.modelYear
@@ -1389,24 +1956,34 @@ function normalizeCar(
     );
 
   if (
-    Number.isFinite(kw) &&
+    Number.isFinite(
+      kw
+    ) &&
     kw > 0
   ) {
     result.power.kw =
-      Math.round(kw);
+      Math.round(
+        kw
+      );
   }
 
   if (
-    Number.isFinite(hp) &&
+    Number.isFinite(
+      hp
+    ) &&
     hp > 0
   ) {
     result.power.hp =
-      Math.round(hp);
+      Math.round(
+        hp
+      );
   }
 
   if (
-    result.power.kw === null &&
-    result.power.hp !== null
+    result.power.kw ===
+      null &&
+    result.power.hp !==
+      null
   ) {
     result.power.kw =
       kwFromHp(
@@ -1415,8 +1992,10 @@ function normalizeCar(
   }
 
   if (
-    result.power.hp === null &&
-    result.power.kw !== null
+    result.power.hp ===
+      null &&
+    result.power.kw !==
+      null
   ) {
     result.power.hp =
       hpFromKw(
@@ -1430,11 +2009,15 @@ function normalizeCar(
     );
 
   if (
-    Number.isFinite(amount) &&
+    Number.isFinite(
+      amount
+    ) &&
     amount > 0
   ) {
     result.price.amount =
-      Math.round(amount);
+      Math.round(
+        amount
+      );
   }
 
   const currency =
@@ -1460,12 +2043,19 @@ function normalizeCar(
   return result;
 }
 
-function validateCars(parsed) {
+/* ============================================================
+   VALIDATE CARS
+   ============================================================ */
+
+function validateCars(
+  parsed
+) {
   if (
     !Array.isArray(
       parsed?.cars
     ) ||
-    parsed.cars.length < MAX_CARS
+    parsed.cars.length <
+      MAX_CARS
   ) {
     throw new Error(
       "AI nevrátila aspoň 3 vozidlá."
@@ -1474,9 +2064,15 @@ function validateCars(parsed) {
 
   const cars =
     parsed.cars
-      .slice(0, MAX_CARS)
+      .slice(
+        0,
+        MAX_CARS
+      )
       .map(
-        (car, index) =>
+        (
+          car,
+          index
+        ) =>
           normalizeCar(
             car,
             index
@@ -1484,7 +2080,8 @@ function validateCars(parsed) {
       );
 
   if (
-    cars.length !== MAX_CARS
+    cars.length !==
+    MAX_CARS
   ) {
     throw new Error(
       "AI nevrátila presne 3 vozidlá."
@@ -1519,6 +2116,7 @@ async function callOpenRouter(
           timeout:
             35000
         },
+
         prompt
       );
     } catch (error) {
@@ -1535,6 +2133,10 @@ async function callOpenRouter(
   );
 }
 
+/* ============================================================
+   PROVIDER FALLBACK LOGIC
+   ============================================================ */
+
 async function getCarsFromProviders(
   prompt
 ) {
@@ -1542,7 +2144,7 @@ async function getCarsFromProviders(
 
   for (
     const provider
-    of GROQ_PROVIDERS
+    of PROVIDERS
   ) {
     try {
       const raw =
@@ -1552,13 +2154,17 @@ async function getCarsFromProviders(
         );
 
       return validateCars(
-        extractJson(raw)
+        extractJson(
+          raw
+        )
       );
     } catch (error) {
       const message =
         `${provider.name}: ${error?.message || error}`;
 
-      errors.push(message);
+      errors.push(
+        message
+      );
 
       console.error(
         "CARMATCH AI provider failed",
@@ -1574,7 +2180,9 @@ async function getCarsFromProviders(
       );
 
     return validateCars(
-      extractJson(raw)
+      extractJson(
+        raw
+      )
     );
   } catch (error) {
     errors.push(
@@ -1583,9 +2191,15 @@ async function getCarsFromProviders(
   }
 
   throw new Error(
-    errors.join(" | ")
-      .slice(0, 3000) ||
-    "AI providers failed"
+    errors
+      .join(
+        " | "
+      )
+      .slice(
+        0,
+        3000
+      ) ||
+      "AI providers failed"
   );
 }
 
@@ -1597,8 +2211,13 @@ export default async function handler(
   req,
   res
 ) {
+  /* ----------------------------------------------------------
+     METHOD CHECK
+     ---------------------------------------------------------- */
+
   if (
-    req.method !== "POST"
+    req.method !==
+    "POST"
   ) {
     return json(
       res,
@@ -1612,16 +2231,20 @@ export default async function handler(
   }
 
   /* ----------------------------------------------------------
-     1. Read current frontend request
+     USER REQUEST
      ---------------------------------------------------------- */
 
   const userQuery =
-    getUserQuery(req);
+    getUserQuery(
+      req
+    );
 
   if (!userQuery) {
     console.error(
-      "CARMATCH AI: missing naturalLanguage",
-      getRequestBody(req)
+      "CARMATCH AI: request without naturalLanguage",
+      getRequestBody(
+        req
+      )
     );
 
     return json(
@@ -1636,7 +2259,7 @@ export default async function handler(
   }
 
   /* ----------------------------------------------------------
-     2. Verify Supabase access token
+     SUPABASE AUTHENTICATION
      ---------------------------------------------------------- */
 
   const auth =
@@ -1644,8 +2267,11 @@ export default async function handler(
       req
     );
 
-  if (!auth.ok) {
-    let publicError;
+  if (
+    !auth.ok
+  ) {
+    let publicError =
+      "Supabase autentifikácia nie je správne nastavená na serveri.";
 
     if (
       auth.code ===
@@ -1653,19 +2279,18 @@ export default async function handler(
     ) {
       publicError =
         "Supabase relácia chýba. Obnov stránku a skús znova.";
-    } else if (
+    }
+
+    if (
       auth.code ===
       "invalid_token"
     ) {
       publicError =
         "Supabase relácia je neplatná alebo expirovaná. Obnov stránku a skús znova.";
-    } else {
-      publicError =
-        "Supabase autentifikácia nie je správne nastavená na serveri.";
     }
 
     console.error(
-      "CARMATCH AI authentication error",
+      "CARMATCH AI auth error",
       {
         code:
           auth.code,
@@ -1676,7 +2301,8 @@ export default async function handler(
 
     return json(
       res,
-      auth.status || 500,
+      auth.status ||
+        500,
       {
         ok: false,
         error:
@@ -1686,16 +2312,16 @@ export default async function handler(
   }
 
   /*
-   * IMPORTANT:
-   * We use ONLY the verified user ID.
-   * We do not trust x-user-id or body.userId.
+   * VERY IMPORTANT:
+   * Only the verified user ID from Supabase is used.
+   * We do NOT trust userId sent from the browser.
    */
 
   const userId =
     auth.userId;
 
   /* ----------------------------------------------------------
-     3. Charge one search
+     CHARGE ONE SEARCH
      ---------------------------------------------------------- */
 
   const charge =
@@ -1703,8 +2329,12 @@ export default async function handler(
       userId
     );
 
-  if (!charge.ok) {
-    if (charge.limited) {
+  if (
+    !charge.ok
+  ) {
+    if (
+      charge.limited
+    ) {
       return json(
         res,
         429,
@@ -1734,7 +2364,7 @@ export default async function handler(
   }
 
   /* ----------------------------------------------------------
-     4. AI search
+     AI SEARCH
      ---------------------------------------------------------- */
 
   try {
@@ -1749,7 +2379,7 @@ export default async function handler(
       );
 
     /* --------------------------------------------------------
-       5. Find images for all 3 cars
+       IMAGE SEARCH
        -------------------------------------------------------- */
 
     cars =
@@ -1768,22 +2398,31 @@ export default async function handler(
               images.map(
                 url => ({
                   url,
+
                   source:
                     "https://commons.wikimedia.org/"
                 })
               );
 
-            const dataSources = [
-              car.priceSource,
-              car.officialUrl
-            ]
-              .filter(Boolean)
-              .filter(
-                (value, index, array) =>
-                  array.indexOf(
-                    value
-                  ) === index
-              );
+            const dataSources =
+              [
+                car.priceSource,
+                car.officialUrl
+              ]
+                .filter(
+                  Boolean
+                )
+                .filter(
+                  (
+                    value,
+                    index,
+                    array
+                  ) =>
+                    array.indexOf(
+                      value
+                    ) ===
+                    index
+                );
 
             return {
               ...car,
@@ -1813,7 +2452,7 @@ export default async function handler(
       );
 
     /* --------------------------------------------------------
-       6. Successful response
+       SUCCESS
        -------------------------------------------------------- */
 
     return json(
@@ -1837,7 +2476,7 @@ export default async function handler(
     );
   } catch (error) {
     /* --------------------------------------------------------
-       7. Complete failure -> refund search
+       COMPLETE FAILURE -> REFUND
        -------------------------------------------------------- */
 
     console.error(
@@ -1851,7 +2490,9 @@ export default async function handler(
         userId
       );
 
-    if (!refund.ok) {
+    if (
+      !refund.ok
+    ) {
       console.error(
         "CARMATCH AI: refund failed"
       );
