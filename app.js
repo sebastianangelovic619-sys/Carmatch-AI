@@ -1,7 +1,7 @@
 "use strict";
 
 /* ============================================================
-   CARMATCH AI - FRONTEND v17
+   CARMATCH AI - FRONTEND v18
    ============================================================ */
 
 const CONFIG = window.CARMATCH_CONFIG || {};
@@ -454,7 +454,7 @@ function setButtonBusy(
 
   const arrow =
     button.querySelector(
-      ".search-button-arrow"
+      ".search-button-arrow, .button-arrow"
     );
 
 
@@ -776,7 +776,8 @@ async function getAccessToken() {
    ============================================================ */
 
 async function postSearch(
-  payload
+  payload,
+  authRetry = false
 ) {
 
   let token;
@@ -883,6 +884,108 @@ async function postSearch(
 
     };
 
+  }
+
+
+  /* ----------------------------------------------------------
+     AUTH RETRY
+     ---------------------------------------------------------- */
+
+  const serverErrorText =
+    text(
+      data?.message || data?.error,
+      ""
+    );
+
+  const invalidSessionResponse =
+    !response.ok && (
+      data?.code === "invalid_token" ||
+      /Supabase relácia je neplatná alebo expirovaná/i.test(serverErrorText) ||
+      /Supabase session is invalid or expired/i.test(serverErrorText) ||
+      (
+        response.status === 401 &&
+        /^Unauthorized$/i.test(serverErrorText)
+      )
+    );
+
+
+  if (invalidSessionResponse) {
+
+    if (!authRetry) {
+
+      const client =
+        await ensureSupabaseClient();
+
+      // Odstráni iba lokálnu reláciu v tomto prehliadači.
+      try {
+        await client.auth.signOut({
+          scope: "local"
+        });
+      } catch (_) {}
+
+      let freshSignIn;
+
+      try {
+        freshSignIn =
+          await client.auth.signInAnonymously();
+      } catch (error) {
+        throw Object.assign(
+          new Error(
+            `Obnovenie Supabase relácie zlyhalo: ${text(
+              error?.message,
+              "Anonymné prihlásenie sa nepodarilo."
+            )}`
+          ),
+          {
+            code: "AUTH_REFRESH_FAILED"
+          }
+        );
+      }
+
+      if (freshSignIn?.error) {
+        throw Object.assign(
+          new Error(
+            `Obnovenie Supabase relácie zlyhalo: ${text(
+              freshSignIn.error.message,
+              "Anonymné prihlásenie sa nepodarilo."
+            )}`
+          ),
+          {
+            code: "AUTH_REFRESH_FAILED"
+          }
+        );
+      }
+
+      const freshToken =
+        freshSignIn?.data?.session?.access_token;
+
+      if (!freshToken) {
+        throw Object.assign(
+          new Error(
+            "Supabase nevytvoril novú reláciu. Skontroluj, či je anonymné prihlasovanie zapnuté."
+          ),
+          {
+            code: "AUTH_REFRESH_FAILED"
+          }
+        );
+      }
+
+      return postSearch(
+        payload,
+        true
+      );
+    }
+
+    throw Object.assign(
+      new Error(
+        "Server odmietol aj novú Supabase reláciu. Skontroluj SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY a SUPABASE_ANON_KEY vo Verceli; musia patriť k rovnakému projektu. Potom spusti Redeploy."
+      ),
+      {
+        status: response.status,
+        code: "SUPABASE_BACKEND_CONFIG",
+        payload: data
+      }
+    );
   }
 
 
@@ -1684,8 +1787,6 @@ function renderCard(
     </article>
   `;
 }
-
-
 /* ============================================================
    RESULTS
    ============================================================ */
