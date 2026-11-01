@@ -17,6 +17,7 @@ const OPENROUTER_API_KEY =
 
 const MAX_SEARCHES = 5;
 const DAILY_LIMIT = 5;
+const MAX_QUERY_LENGTH = 1000;
 
 const GROQ_URL =
   "https://api.groq.com/openai/v1/chat/completions";
@@ -31,6 +32,7 @@ function send(res, status, data) {
 function getBearerToken(req) {
   const header = req.headers.authorization || "";
   const match = header.match(/^Bearer\s+(.+)$/i);
+
   return match ? match[1].trim() : "";
 }
 
@@ -42,9 +44,174 @@ async function readJson(response) {
   try {
     return JSON.parse(text);
   } catch {
-    return { message: text.slice(0, 1500) };
+    return {
+      message: text.slice(0, 1500),
+    };
   }
 }
+
+/* =========================================
+   VYTVORENIE ZADANIA Z APP.JS
+========================================= */
+
+function formatFilterValue(value) {
+  if (
+    value === undefined ||
+    value === null ||
+    value === false
+  ) {
+    return "";
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item).trim())
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  if (typeof value === "object") {
+    return "";
+  }
+
+  const formatted = String(value).trim();
+
+  const ignoredValues = [
+    "",
+    "any",
+    "all",
+    "none",
+    "null",
+    "undefined",
+    "nezáleží",
+    "všetky",
+    "všetko",
+  ];
+
+  if (ignoredValues.includes(formatted.toLowerCase())) {
+    return "";
+  }
+
+  return formatted;
+}
+
+function getFilterLines(filters) {
+  if (!filters || typeof filters !== "object") {
+    return [];
+  }
+
+  const definitions = [
+    {
+      keys: ["budget"],
+      label: "Maximálny rozpočet",
+    },
+    {
+      keys: ["seats"],
+      label: "Počet sedadiel",
+    },
+    {
+      keys: ["power"],
+      label: "Minimálny výkon",
+    },
+    {
+      keys: ["trunk"],
+      label: "Minimálny objem kufra",
+    },
+    {
+      keys: ["drive"],
+      label: "Pohon",
+    },
+    {
+      keys: ["fuel"],
+      label: "Palivo",
+    },
+    {
+      keys: ["body"],
+      label: "Karoséria",
+    },
+    {
+      keys: ["style"],
+      label: "Štýl",
+    },
+    {
+      keys: ["length"],
+      label: "Maximálna dĺžka",
+    },
+    {
+      keys: ["year"],
+      label: "Minimálny rok výroby",
+    },
+    {
+      keys: ["avoid", "avoidBrands"],
+      label: "Vylúčené značky",
+    },
+  ];
+
+  const lines = [];
+
+  for (const definition of definitions) {
+    let formattedValue = "";
+
+    for (const key of definition.keys) {
+      formattedValue = formatFilterValue(filters[key]);
+
+      if (formattedValue) break;
+    }
+
+    if (formattedValue) {
+      lines.push(
+        `${definition.label}: ${formattedValue}`
+      );
+    }
+  }
+
+  return lines;
+}
+
+function buildSearchQuery(body) {
+  // Podpora novších formátov.
+  const directCandidates = [
+    body.query,
+    body.prompt,
+    body.search,
+  ];
+
+  for (const candidate of directCandidates) {
+    if (
+      typeof candidate === "string" &&
+      candidate.trim()
+    ) {
+      return candidate.trim();
+    }
+  }
+
+  // Podpora pôvodného app.js.
+  // Ten posiela naturalLanguage a filters.
+  const naturalLanguage =
+    typeof body.naturalLanguage === "string"
+      ? body.naturalLanguage.trim()
+      : "";
+
+  const filterLines = getFilterLines(body.filters);
+
+  const parts = [];
+
+  if (naturalLanguage) {
+    parts.push(naturalLanguage);
+  }
+
+  if (filterLines.length > 0) {
+    parts.push(
+      "Požiadavky:\n" + filterLines.join("\n")
+    );
+  }
+
+  return parts.join("\n\n").trim();
+}
+
+/* =========================================
+   SUPABASE AUTENTIFIKÁCIA
+========================================= */
 
 async function verifyUser(accessToken) {
   const response = await fetch(
@@ -61,16 +228,23 @@ async function verifyUser(accessToken) {
   const data = await readJson(response);
 
   if (!response.ok || !data || !data.id) {
-    console.error("CARMATCH AI: Auth verification failed", {
-      status: response.status,
-      error: data,
-    });
+    console.error(
+      "CARMATCH AI: Auth verification failed",
+      {
+        status: response.status,
+        error: data,
+      }
+    );
 
     return null;
   }
 
   return data;
 }
+
+/* =========================================
+   SUPABASE RPC
+========================================= */
 
 async function supabaseRpc(
   functionName,
@@ -192,6 +366,10 @@ async function chargeSearch(accessToken) {
   };
 }
 
+/* =========================================
+   SPRACOVANIE ODPOVEDE AI
+========================================= */
+
 function extractMessageContent(data) {
   const content = data?.choices?.[0]?.message?.content;
 
@@ -232,7 +410,9 @@ function parseCarsResponse(content) {
       throw new Error("AI response is not valid JSON");
     }
 
-    parsed = JSON.parse(cleaned.slice(first, last + 1));
+    parsed = JSON.parse(
+      cleaned.slice(first, last + 1)
+    );
   }
 
   const cars = Array.isArray(parsed)
@@ -259,6 +439,10 @@ function parseCarsResponse(content) {
     specs: car.specs || {},
   }));
 }
+
+/* =========================================
+   AI PROMPT
+========================================= */
 
 function buildPrompt(query) {
   return `
@@ -307,6 +491,10 @@ Rules:
 `;
 }
 
+/* =========================================
+   GROQ
+========================================= */
+
 async function callGroq(query) {
   if (!GROQ_API_KEY) {
     throw new Error("GROQ_API_KEY is missing");
@@ -347,11 +535,17 @@ async function callGroq(query) {
       error: data,
     });
 
-    throw new Error(`Groq request failed: ${response.status}`);
+    throw new Error(
+      `Groq request failed: ${response.status}`
+    );
   }
 
   return extractMessageContent(data);
 }
+
+/* =========================================
+   OPENROUTER
+========================================= */
 
 async function callOpenRouter(query) {
   if (!OPENROUTER_API_KEY) {
@@ -364,7 +558,7 @@ async function callOpenRouter(query) {
       Authorization: `Bearer ${OPENROUTER_API_KEY}`,
       "Content-Type": "application/json",
       "HTTP-Referer":
-        process.env.APP_URL || "https://carmatch-ai.vercel.app",
+        process.env.APP_URL || "https://carmatchai.vercel.app",
       "X-Title": "CARMATCH AI",
     },
     body: JSON.stringify({
@@ -404,12 +598,17 @@ async function callOpenRouter(query) {
   return extractMessageContent(data);
 }
 
+/* =========================================
+   GENEROVANIE ÁUT
+========================================= */
+
 async function generateCars(query) {
   let firstError;
 
   if (GROQ_API_KEY) {
     try {
       const content = await callGroq(query);
+
       return parseCarsResponse(content);
     } catch (error) {
       firstError = error;
@@ -424,6 +623,7 @@ async function generateCars(query) {
   if (OPENROUTER_API_KEY) {
     try {
       const content = await callOpenRouter(query);
+
       return parseCarsResponse(content);
     } catch (error) {
       console.error(
@@ -439,6 +639,10 @@ async function generateCars(query) {
     "No AI provider is configured"
   );
 }
+
+/* =========================================
+   VYHĽADÁVANIE OBRÁZKOV
+========================================= */
 
 async function findCarImage(car) {
   const searchTerm = [
@@ -459,13 +663,15 @@ async function findCarImage(car) {
     url.searchParams.set("action", "query");
     url.searchParams.set("format", "json");
     url.searchParams.set("generator", "search");
-    url.searchParams.set("gsrsearch", searchTerm + " car");
+    url.searchParams.set(
+      "gsrsearch",
+      searchTerm + " car"
+    );
     url.searchParams.set("gsrnamespace", "6");
     url.searchParams.set("gsrlimit", "5");
     url.searchParams.set("prop", "imageinfo");
     url.searchParams.set("iiprop", "url");
     url.searchParams.set("iiurlwidth", "900");
-    url.searchParams.set("origin", "*");
 
     const response = await fetch(url.toString(), {
       headers: {
@@ -476,16 +682,23 @@ async function findCarImage(car) {
     if (!response.ok) return "";
 
     const data = await readJson(response);
+
     const pages = Object.values(
       data?.query?.pages || {}
     );
 
+    const modelName = String(
+      car.model || car.name || ""
+    ).toLowerCase();
+
     const page = pages.find((item) => {
-      const title = String(item.title || "").toLowerCase();
+      const title = String(
+        item.title || ""
+      ).toLowerCase();
 
       return (
         title.includes("car") ||
-        title.includes(String(car.model || car.name).toLowerCase())
+        (modelName && title.includes(modelName))
       );
     }) || pages[0];
 
@@ -509,7 +722,8 @@ async function findCarImage(car) {
 async function addImages(cars) {
   return Promise.all(
     cars.map(async (car) => {
-      const existingImage = car.imageUrl || car.image;
+      const existingImage =
+        car.imageUrl || car.image;
 
       if (existingImage) return car;
 
@@ -523,6 +737,10 @@ async function addImages(cars) {
     })
   );
 }
+
+/* =========================================
+   HLAVNÝ API HANDLER
+========================================= */
 
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
@@ -565,7 +783,20 @@ export default async function handler(req, res) {
     });
   }
 
-  const user = await verifyUser(accessToken);
+  let user;
+
+  try {
+    user = await verifyUser(accessToken);
+  } catch (error) {
+    console.error(
+      "CARMATCH AI: Auth request failed",
+      error.message
+    );
+
+    return send(res, 503, {
+      error: "Nepodarilo sa spojiť so Supabase Auth.",
+    });
+  }
 
   if (!user) {
     return send(res, 401, {
@@ -573,26 +804,39 @@ export default async function handler(req, res) {
     });
   }
 
-  const body = req.body || {};
+  const body =
+    req.body && typeof req.body === "object"
+      ? req.body
+      : {};
 
-  const query =
-    typeof body.query === "string"
-      ? body.query.trim()
-      : typeof body.prompt === "string"
-        ? body.prompt.trim()
-        : typeof body.search === "string"
-          ? body.search.trim()
-          : "";
+  // DÔLEŽITÁ OPRAVA:
+  // Podporuje naturalLanguage + filters
+  // aj query / prompt / search.
+  const query = buildSearchQuery(body);
+
+  console.log("CARMATCH AI: Search request received", {
+    userVerified: Boolean(user.id),
+    bodyFields: Object.keys(body),
+    queryLength: query.length,
+    hasNaturalLanguage:
+      typeof body.naturalLanguage === "string" &&
+      Boolean(body.naturalLanguage.trim()),
+    hasFilters:
+      Boolean(body.filters) &&
+      typeof body.filters === "object",
+  });
 
   if (!query) {
     return send(res, 400, {
       error: "Zadaj, aké auto hľadáš.",
+      code: "EMPTY_SEARCH_QUERY",
     });
   }
 
-  if (query.length > 1000) {
+  if (query.length > MAX_QUERY_LENGTH) {
     return send(res, 400, {
       error: "Vyhľadávanie je príliš dlhé.",
+      code: "SEARCH_QUERY_TOO_LONG",
     });
   }
 
@@ -606,9 +850,23 @@ export default async function handler(req, res) {
     });
   }
 
-  // Count the search only for a verified Supabase user.
-  // Fail closed if the database limit function is unavailable.
-  const usage = await chargeSearch(accessToken);
+  // Počíta vyhľadávanie iba pre overeného používateľa.
+  let usage;
+
+  try {
+    usage = await chargeSearch(accessToken);
+  } catch (error) {
+    console.error(
+      "CARMATCH AI: Usage request failed",
+      error.message
+    );
+
+    return send(res, 503, {
+      error:
+        "Nepodarilo sa overiť limit vyhľadávania. Skús to neskôr.",
+      code: "SEARCH_USAGE_UNAVAILABLE",
+    });
+  }
 
   if (!usage.ok && usage.limited) {
     return send(res, 429, {
@@ -628,6 +886,7 @@ export default async function handler(req, res) {
 
   try {
     const generatedCars = await generateCars(query);
+
     const cars = await addImages(generatedCars);
 
     return send(res, 200, {
