@@ -7,8 +7,12 @@
   <meta name="theme-color" content="#f7f8fb">
   <meta name="description" content="CARMATCH AI – nájdi svoje ideálne auto podľa svojich požiadaviek.">
   <title>CARMATCH AI — Nájdi svoje ideálne auto</title>
+
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-  <link rel="stylesheet" href="style.css?v=16">
+
+  <!-- NOVÁ VERZIA MOBILNÉHO DIZAJNU -->
+  <link rel="stylesheet" href="style.css?v=17">
+
   <script>
     window.CARMATCH_CONFIG = {
       supabaseUrl: "https://frmhjjzgvmitdgcvgfuk.supabase.co",
@@ -16,33 +20,74 @@
       apiEndpoint: "/api/search"
     };
   </script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js" defer></script>
+
+  <script
+    src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"
+    defer
+  ></script>
 </head>
+
 <body>
+
   <div class="page-shell">
+
+    <!-- HEADER -->
     <header class="site-header">
+
       <div class="brand-mark" aria-label="CARMATCH AI">
-        <span class="brand-main">CAR<span>MATCH</span></span><span class="brand-ai"> AI</span>
+        <span class="brand-main">
+          CAR<span>MATCH</span>
+        </span>
+        <span class="brand-ai"> AI</span>
       </div>
-      <div class="brand-subline">Inteligentné vyhľadávanie áut</div>
+
+      <div class="brand-subline">
+        Inteligentné vyhľadávanie áut
+      </div>
+
     </header>
 
+
     <main>
+
+      <!-- HERO / VYHĽADÁVANIE -->
       <section class="hero" aria-labelledby="hero-title">
+
         <div class="hero-glow hero-glow-one"></div>
         <div class="hero-glow hero-glow-two"></div>
+
         <div class="hero-content">
-          <div class="hero-kicker"><span></span> AI CAR SEARCH</div>
-          <h1 id="hero-title">Nájdi svoje<br><em>ideálne auto.</em></h1>
+
+          <div class="hero-kicker">
+            <span></span>
+            AI CAR SEARCH
+          </div>
+
+          <h1 id="hero-title">
+            Nájdi svoje<br>
+            <em>ideálne auto.</em>
+          </h1>
+
           <p class="hero-text">
             Napíš, čo od auta očakávaš. CARMATCH AI spojí tvoje požiadavky s konkrétnymi modelmi a pripraví 3 odporúčania.
           </p>
 
+
+          <!-- SEARCH CARD -->
           <div class="search-card">
+
             <div class="search-label-row">
-              <label for="aiRequest">Aké auto hľadáš?</label>
-              <span id="charCount">0 / 3000</span>
+
+              <label for="aiRequest">
+                Aké auto hľadáš?
+              </label>
+
+              <span id="charCount">
+                0 / 3000
+              </span>
+
             </div>
+
 
             <textarea
               id="aiRequest"
@@ -53,41 +98,100 @@
               spellcheck="true"
             ></textarea>
 
+
+            <!-- PRÍKLADY ZADANIA -->
             <div class="example-row" aria-label="Príklady zadania">
-              <button class="example-chip" type="button" data-example="Nové SUV do 60 000 €, 5 miest, 4x4 a veľký kufor.">SUV do 60k</button>
-              <button class="example-chip" type="button" data-example="Športové kombi do 70 000 €, minimálne 180 kW, pohodlné na dlhé cesty.">Športové kombi</button>
-              <button class="example-chip" type="button" data-example="Prémiové auto do 50 000 €, 5 miest, nízka údržba a kvalitný interiér.">Prémiové</button>
+
+              <button
+                class="example-chip"
+                type="button"
+                data-example="Nové SUV do 60 000 €, 5 miest, 4x4 a veľký kufor."
+              >
+                SUV do 60k
+              </button>
+
+              <button
+                class="example-chip"
+                type="button"
+                data-example="Športové kombi do 70 000 €, minimálne 180 kW, pohodlné na dlhé cesty."
+              >
+                Športové kombi
+              </button>
+
+              <button
+                class="example-chip"
+                type="button"
+                data-example="Prémiové auto do 50 000 €, 5 miest, nízka údržba a kvalitný interiér."
+              >
+                Prémiové
+              </button>
+
             </div>
 
+
+            <!-- ROZŠÍRENÉ FILTRE -->
             <details class="advanced-filters">
+
               <summary>
                 <span>Spresniť výber</span>
                 <span class="summary-note">voliteľné</span>
               </summary>
 
+
               <div class="filter-grid">
+
                 <label class="field">
                   <span>Rozpočet (€)</span>
-                  <input id="budget" type="number" min="0" inputmode="numeric" placeholder="napr. 60000">
+                  <input
+                    id="budget"
+                    type="number"
+                    min="0"
+                    inputmode="numeric"
+                    placeholder="napr. 60000"
+                  >
                 </label>
+
 
                 <label class="field">
                   <span>Počet miest</span>
-                  <input id="seats" type="number" min="1" max="9" inputmode="numeric" placeholder="napr. 5">
+                  <input
+                    id="seats"
+                    type="number"
+                    min="1"
+                    max="9"
+                    inputmode="numeric"
+                    placeholder="napr. 5"
+                  >
                 </label>
+
 
                 <label class="field">
                   <span>Min. výkon (kW)</span>
-                  <input id="power" type="number" min="0" inputmode="numeric" placeholder="napr. 180">
+                  <input
+                    id="power"
+                    type="number"
+                    min="0"
+                    inputmode="numeric"
+                    placeholder="napr. 180"
+                  >
                 </label>
+
 
                 <label class="field">
                   <span>Min. kufor (l)</span>
-                  <input id="trunk" type="number" min="0" inputmode="numeric" placeholder="napr. 600">
+                  <input
+                    id="trunk"
+                    type="number"
+                    min="0"
+                    inputmode="numeric"
+                    placeholder="napr. 600"
+                  >
                 </label>
+
 
                 <label class="field">
                   <span>Pohon</span>
+
                   <select id="drive">
                     <option value="">Ľubovoľný</option>
                     <option value="4x4">4x4</option>
@@ -95,8 +199,10 @@
                   </select>
                 </label>
 
+
                 <label class="field">
                   <span>Palivo</span>
+
                   <select id="fuel">
                     <option value="">Ľubovoľné</option>
                     <option value="Benzín">Benzín</option>
@@ -107,8 +213,10 @@
                   </select>
                 </label>
 
+
                 <label class="field">
                   <span>Karoséria</span>
+
                   <select id="body">
                     <option value="">Ľubovoľná</option>
                     <option value="SUV">SUV</option>
@@ -120,8 +228,10 @@
                   </select>
                 </label>
 
+
                 <label class="field">
                   <span>Vzhľad</span>
+
                   <select id="style">
                     <option value="">Ľubovoľný</option>
                     <option value="Športový">Športový</option>
@@ -130,59 +240,167 @@
                   </select>
                 </label>
 
+
                 <label class="field">
                   <span>Max. dĺžka (m)</span>
-                  <input id="length" type="number" min="0" step="0.01" inputmode="decimal" placeholder="napr. 5.0">
+
+                  <input
+                    id="length"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    inputmode="decimal"
+                    placeholder="napr. 5.0"
+                  >
                 </label>
+
 
                 <label class="field">
                   <span>Rok od</span>
-                  <input id="year" type="number" min="2000" max="2035" inputmode="numeric" placeholder="napr. 2026">
+
+                  <input
+                    id="year"
+                    type="number"
+                    min="2000"
+                    max="2035"
+                    inputmode="numeric"
+                    placeholder="napr. 2026"
+                  >
                 </label>
+
 
                 <label class="field field-wide">
                   <span>Nechcené značky</span>
-                  <input id="avoidBrands" type="text" maxlength="500" placeholder="napr. Dacia, BMW">
+
+                  <input
+                    id="avoidBrands"
+                    type="text"
+                    maxlength="500"
+                    placeholder="napr. Dacia, BMW"
+                  >
                 </label>
+
               </div>
+
             </details>
 
-            <button id="searchButton" class="search-button" type="button">
+
+            <!-- SEARCH BUTTON -->
+            <button
+              id="searchButton"
+              class="search-button"
+              type="button"
+            >
+
               <span class="button-icon">⌕</span>
-              <span class="button-label">Nájsť moje auto</span>
+
+              <span class="button-label">
+                Nájsť moje auto
+              </span>
+
               <span class="button-arrow">→</span>
+
             </button>
 
-            <div id="helperText" class="helper-text">Zjednoduš alebo oprav zadaný text.</div>
-            <div id="status" class="status" aria-live="polite"></div>
 
-            <div class="trust-row">
-              <span><i></i> 3 odporúčania</span>
-              <span><i></i> Aktuálne údaje</span>
-              <span><i></i> Oficiálne zdroje cien</span>
+            <!-- STATUS -->
+            <div id="helperText" class="helper-text">
+              Zjednoduš alebo oprav zadaný text.
             </div>
+
+            <div
+              id="status"
+              class="status"
+              aria-live="polite"
+            ></div>
+
+
+            <!-- TRUST INFORMATION -->
+            <div class="trust-row">
+
+              <span>
+                <i></i>
+                3 odporúčania
+              </span>
+
+              <span>
+                <i></i>
+                Aktuálne údaje
+              </span>
+
+              <span>
+                <i></i>
+                Oficiálne zdroje cien
+              </span>
+
+            </div>
+
           </div>
+
         </div>
+
       </section>
 
-      <section id="resultsSection" class="results-section" hidden aria-labelledby="resultsTitle">
+
+      <!-- RESULTS -->
+      <section
+        id="resultsSection"
+        class="results-section"
+        hidden
+        aria-labelledby="resultsTitle"
+      >
+
         <div class="section-heading">
+
           <div>
-            <div class="section-kicker">VÝSLEDOK VYHĽADÁVANIA</div>
-            <h2 id="resultsTitle">Autá pre teba</h2>
+
+            <div class="section-kicker">
+              VÝSLEDOK VYHĽADÁVANIA
+            </div>
+
+            <h2 id="resultsTitle">
+              Autá pre teba
+            </h2>
+
           </div>
-          <div id="resultsCount" class="result-count">3 odporúčania</div>
+
+
+          <div id="resultsCount" class="result-count">
+            3 odporúčania
+          </div>
+
         </div>
-        <div id="results" class="results-grid"></div>
+
+
+        <!-- AI VÝSLEDKY SA VYPĹŇAJÚ CEZ app.js -->
+        <div
+          id="results"
+          class="results-grid"
+        ></div>
+
       </section>
+
     </main>
 
+
+    <!-- FOOTER -->
     <footer class="site-footer">
-      <div>CARMATCH AI</div>
-      <div>Inteligentnejší spôsob, ako nájsť auto.</div>
+
+      <div>
+        CARMATCH AI
+      </div>
+
+      <div>
+        Inteligentnejší spôsob, ako nájsť auto.
+      </div>
+
     </footer>
+
   </div>
 
+
+  <!-- JAVASCRIPT – BEZ ZMENY FUNKČNOSTI -->
   <script src="app.js?v=18" defer></script>
+
 </body>
 </html>
