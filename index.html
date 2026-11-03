@@ -5,22 +5,26 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#f7f8fb">
-  <meta name="description" content="CARMATCH AI – nájdi svoje ideálne auto podľa svojich požiadaviek.">
+  <meta name="description" content="CARMATCH AI – inteligentné vyhľadávanie áut podľa tvojich požiadaviek.">
+  <meta name="robots" content="index,follow">
+
   <title>CARMATCH AI — Nájdi svoje ideálne auto</title>
 
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="preconnect" href="https://frmhjjzgvmitdgcvgfuk.supabase.co" crossorigin>
 
-  <!-- NOVÁ VERZIA MOBILNÉHO DIZAJNU -->
-  <link rel="stylesheet" href="style.css?v=17">
+  <link rel="stylesheet" href="style.css?v=18">
 
+  <!-- SUPABASE CONFIG -->
   <script>
     window.CARMATCH_CONFIG = {
       supabaseUrl: "https://frmhjjzgvmitdgcvgfuk.supabase.co",
-      supabaseAnonKey: "sb_publishable_53FDnkTuv2C6rhZIVDJVxQ_MOAg_80E",
+      supabasePublishableKey: "sb_publishable_53FDnkTuv2C6rhZIVDJVxQ_MOAg_80E",
       apiEndpoint: "/api/search"
     };
   </script>
 
+  <!-- SUPABASE LIBRARY -->
   <script
     src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"
     defer
@@ -47,10 +51,9 @@
 
     </header>
 
-
     <main>
 
-      <!-- HERO / VYHĽADÁVANIE -->
+      <!-- HERO -->
       <section class="hero" aria-labelledby="hero-title">
 
         <div class="hero-glow hero-glow-one"></div>
@@ -72,7 +75,6 @@
             Napíš, čo od auta očakávaš. CARMATCH AI spojí tvoje požiadavky s konkrétnymi modelmi a pripraví 3 odporúčania.
           </p>
 
-
           <!-- SEARCH CARD -->
           <div class="search-card">
 
@@ -82,12 +84,9 @@
                 Aké auto hľadáš?
               </label>
 
-              <span id="charCount">
-                0 / 3000
-              </span>
+              <span id="charCount">0 / 3000</span>
 
             </div>
-
 
             <textarea
               id="aiRequest"
@@ -98,8 +97,7 @@
               spellcheck="true"
             ></textarea>
 
-
-            <!-- PRÍKLADY ZADANIA -->
+            <!-- EXAMPLE SEARCHES -->
             <div class="example-row" aria-label="Príklady zadania">
 
               <button
@@ -128,15 +126,14 @@
 
             </div>
 
-
-            <!-- ROZŠÍRENÉ FILTRE -->
-            <details class="advanced-filters">
+            <!-- ADVANCED FILTERS -->
+            <details class="advanced-filters filters-details">
 
               <summary>
                 <span>Spresniť výber</span>
                 <span class="summary-note">voliteľné</span>
+                <span class="summary-arrow">+</span>
               </summary>
-
 
               <div class="filter-grid">
 
@@ -151,7 +148,6 @@
                   >
                 </label>
 
-
                 <label class="field">
                   <span>Počet miest</span>
                   <input
@@ -164,7 +160,6 @@
                   >
                 </label>
 
-
                 <label class="field">
                   <span>Min. výkon (kW)</span>
                   <input
@@ -175,7 +170,6 @@
                     placeholder="napr. 180"
                   >
                 </label>
-
 
                 <label class="field">
                   <span>Min. kufor (l)</span>
@@ -188,10 +182,8 @@
                   >
                 </label>
 
-
                 <label class="field">
                   <span>Pohon</span>
-
                   <select id="drive">
                     <option value="">Ľubovoľný</option>
                     <option value="4x4">4x4</option>
@@ -199,10 +191,8 @@
                   </select>
                 </label>
 
-
                 <label class="field">
                   <span>Palivo</span>
-
                   <select id="fuel">
                     <option value="">Ľubovoľné</option>
                     <option value="Benzín">Benzín</option>
@@ -213,10 +203,8 @@
                   </select>
                 </label>
 
-
                 <label class="field">
                   <span>Karoséria</span>
-
                   <select id="body">
                     <option value="">Ľubovoľná</option>
                     <option value="SUV">SUV</option>
@@ -228,10 +216,8 @@
                   </select>
                 </label>
 
-
                 <label class="field">
                   <span>Vzhľad</span>
-
                   <select id="style">
                     <option value="">Ľubovoľný</option>
                     <option value="Športový">Športový</option>
@@ -240,10 +226,8 @@
                   </select>
                 </label>
 
-
                 <label class="field">
                   <span>Max. dĺžka (m)</span>
-
                   <input
                     id="length"
                     type="number"
@@ -254,10 +238,8 @@
                   >
                 </label>
 
-
                 <label class="field">
                   <span>Rok od</span>
-
                   <input
                     id="year"
                     type="number"
@@ -268,10 +250,8 @@
                   >
                 </label>
 
-
                 <label class="field field-wide">
                   <span>Nechcené značky</span>
-
                   <input
                     id="avoidBrands"
                     type="text"
@@ -283,7 +263,6 @@
               </div>
 
             </details>
-
 
             <!-- SEARCH BUTTON -->
             <button
@@ -302,20 +281,31 @@
 
             </button>
 
-
-            <!-- STATUS -->
+            <!-- HELPER -->
             <div id="helperText" class="helper-text">
               Zjednoduš alebo oprav zadaný text.
             </div>
 
+            <!-- STATUS -->
             <div
               id="status"
               class="status"
               aria-live="polite"
+              role="status"
             ></div>
 
+            <!-- USAGE -->
+            <div class="usage-info">
+              <span>
+                <span id="usageCount">0 / 5 vyhľadávaní dnes</span>
+              </span>
+              <span>
+                Zostáva
+                <strong id="remainingSearches">5</strong>
+              </span>
+            </div>
 
-            <!-- TRUST INFORMATION -->
+            <!-- TRUST -->
             <div class="trust-row">
 
               <span>
@@ -341,7 +331,6 @@
 
       </section>
 
-
       <!-- RESULTS -->
       <section
         id="resultsSection"
@@ -364,24 +353,22 @@
 
           </div>
 
-
           <div id="resultsCount" class="result-count">
             3 odporúčania
           </div>
 
         </div>
 
-
-        <!-- AI VÝSLEDKY SA VYPĹŇAJÚ CEZ app.js -->
+        <!-- AI RESULTS -->
         <div
           id="results"
           class="results-grid"
+          aria-live="polite"
         ></div>
 
       </section>
 
     </main>
-
 
     <!-- FOOTER -->
     <footer class="site-footer">
@@ -398,8 +385,7 @@
 
   </div>
 
-
-  <!-- JAVASCRIPT – BEZ ZMENY FUNKČNOSTI -->
+  <!-- SCRIPTS -->
   <script src="app.js?v=18" defer></script>
 
 </body>
