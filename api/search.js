@@ -32,7 +32,6 @@ function send(res, status, data) {
 function getBearerToken(req) {
   const header = req.headers.authorization || "";
   const match = header.match(/^Bearer\s+(.+)$/i);
-
   return match ? match[1].trim() : "";
 }
 
@@ -44,14 +43,12 @@ async function readJson(response) {
   try {
     return JSON.parse(text);
   } catch {
-    return {
-      message: text.slice(0, 1500),
-    };
+    return { message: text.slice(0, 1500) };
   }
 }
 
 /* =========================================
-   VYTVORENIE ZADANIA Z APP.JS
+   VYTVORENIE ZADANIA
 ========================================= */
 
 function formatFilterValue(value) {
@@ -70,9 +67,7 @@ function formatFilterValue(value) {
       .join(", ");
   }
 
-  if (typeof value === "object") {
-    return "";
-  }
+  if (typeof value === "object") return "";
 
   const formatted = String(value).trim();
 
@@ -88,80 +83,40 @@ function formatFilterValue(value) {
     "všetko",
   ];
 
-  if (ignoredValues.includes(formatted.toLowerCase())) {
-    return "";
-  }
-
-  return formatted;
+  return ignoredValues.includes(formatted.toLowerCase())
+    ? ""
+    : formatted;
 }
 
 function getFilterLines(filters) {
-  if (!filters || typeof filters !== "object") {
-    return [];
-  }
+  if (!filters || typeof filters !== "object") return [];
 
   const definitions = [
-    {
-      keys: ["budget"],
-      label: "Maximálny rozpočet",
-    },
-    {
-      keys: ["seats"],
-      label: "Počet sedadiel",
-    },
-    {
-      keys: ["power"],
-      label: "Minimálny výkon",
-    },
-    {
-      keys: ["trunk"],
-      label: "Minimálny objem kufra",
-    },
-    {
-      keys: ["drive"],
-      label: "Pohon",
-    },
-    {
-      keys: ["fuel"],
-      label: "Palivo",
-    },
-    {
-      keys: ["body"],
-      label: "Karoséria",
-    },
-    {
-      keys: ["style"],
-      label: "Štýl",
-    },
-    {
-      keys: ["length"],
-      label: "Maximálna dĺžka",
-    },
-    {
-      keys: ["year"],
-      label: "Minimálny rok výroby",
-    },
-    {
-      keys: ["avoid", "avoidBrands"],
-      label: "Vylúčené značky",
-    },
+    { keys: ["budget"], label: "Maximálny rozpočet" },
+    { keys: ["seats"], label: "Počet sedadiel" },
+    { keys: ["power"], label: "Minimálny výkon" },
+    { keys: ["trunk"], label: "Minimálny objem kufra" },
+    { keys: ["drive"], label: "Pohon" },
+    { keys: ["fuel"], label: "Palivo" },
+    { keys: ["body"], label: "Karoséria" },
+    { keys: ["style"], label: "Štýl" },
+    { keys: ["length"], label: "Maximálna dĺžka" },
+    { keys: ["year"], label: "Minimálny rok výroby" },
+    { keys: ["avoid", "avoidBrands"], label: "Vylúčené značky" },
   ];
 
   const lines = [];
 
   for (const definition of definitions) {
-    let formattedValue = "";
+    let value = "";
 
     for (const key of definition.keys) {
-      formattedValue = formatFilterValue(filters[key]);
-
-      if (formattedValue) break;
+      value = formatFilterValue(filters[key]);
+      if (value) break;
     }
 
-    if (formattedValue) {
-      lines.push(
-        `${definition.label}: ${formattedValue}`
-      );
+    if (value) {
+      lines.push(`${definition.label}: ${value}`);
     }
   }
 
@@ -169,7 +124,6 @@ function getFilterLines(filters) {
 }
 
 function buildSearchQuery(body) {
-  // Podpora novších formátov.
   const directCandidates = [
     body.query,
     body.prompt,
@@ -185,25 +139,18 @@ function buildSearchQuery(body) {
     }
   }
 
-  // Podpora pôvodného app.js.
-  // Ten posiela naturalLanguage a filters.
   const naturalLanguage =
     typeof body.naturalLanguage === "string"
       ? body.naturalLanguage.trim()
       : "";
 
   const filterLines = getFilterLines(body.filters);
-
   const parts = [];
 
-  if (naturalLanguage) {
-    parts.push(naturalLanguage);
-  }
+  if (naturalLanguage) parts.push(naturalLanguage);
 
-  if (filterLines.length > 0) {
-    parts.push(
-      "Požiadavky:\n" + filterLines.join("\n")
-    );
+  if (filterLines.length) {
+    parts.push("Požiadavky:\n" + filterLines.join("\n"));
   }
 
   return parts.join("\n\n").trim();
@@ -228,13 +175,10 @@ async function verifyUser(accessToken) {
   const data = await readJson(response);
 
   if (!response.ok || !data || !data.id) {
-    console.error(
-      "CARMATCH AI: Auth verification failed",
-      {
-        status: response.status,
-        error: data,
-      }
-    );
+    console.error("CARMATCH AI: Auth verification failed", {
+      status: response.status,
+      error: data,
+    });
 
     return null;
   }
@@ -286,18 +230,14 @@ function normalizeRpcData(data) {
 }
 
 function extractRemaining(data) {
-  if (!data || typeof data !== "object") {
-    return null;
-  }
+  if (!data || typeof data !== "object") return null;
 
   const value =
     data.remaining ??
     data.searches_remaining ??
     data.remaining_searches;
 
-  if (value === undefined || value === null) {
-    return null;
-  }
+  if (value === undefined || value === null) return null;
 
   const number = Number(value);
 
@@ -305,6 +245,10 @@ function extractRemaining(data) {
     ? Math.max(0, number)
     : null;
 }
+
+/* =========================================
+   ODPOČÍTANIE VYHĽADÁVANIA
+========================================= */
 
 async function chargeSearch(accessToken) {
   const result = await supabaseRpc(
@@ -317,13 +261,10 @@ async function chargeSearch(accessToken) {
   );
 
   if (!result.ok) {
-    console.error(
-      "CARMATCH AI: increment_search failed",
-      {
-        status: result.status,
-        error: result.error,
-      }
-    );
+    console.error("CARMATCH AI: increment_search failed", {
+      status: result.status,
+      error: result.error,
+    });
 
     return {
       ok: false,
@@ -367,15 +308,63 @@ async function chargeSearch(accessToken) {
 }
 
 /* =========================================
+   VRÁTENIE VYHĽADÁVANIA
+========================================= */
+
+async function refundSearch(accessToken) {
+  const result = await supabaseRpc(
+    "refund_search",
+    {},
+    accessToken
+  );
+
+  if (!result.ok) {
+    console.error("CARMATCH AI: refund_search failed", {
+      status: result.status,
+      error: result.error,
+    });
+
+    return {
+      ok: false,
+      refunded: false,
+      remaining: null,
+    };
+  }
+
+  const data = normalizeRpcData(result.data);
+
+  if (
+    !data ||
+    typeof data !== "object" ||
+    typeof data.refunded !== "boolean"
+  ) {
+    console.error(
+      "CARMATCH AI: Unexpected refund_search response",
+      data
+    );
+
+    return {
+      ok: false,
+      refunded: false,
+      remaining: null,
+    };
+  }
+
+  return {
+    ok: true,
+    refunded: data.refunded,
+    remaining: extractRemaining(data),
+  };
+}
+
+/* =========================================
    SPRACOVANIE ODPOVEDE AI
 ========================================= */
 
 function extractMessageContent(data) {
   const content = data?.choices?.[0]?.message?.content;
 
-  if (typeof content === "string") {
-    return content;
-  }
+  if (typeof content === "string") return content;
 
   if (Array.isArray(content)) {
     return content
@@ -410,9 +399,7 @@ function parseCarsResponse(content) {
       throw new Error("AI response is not valid JSON");
     }
 
-    parsed = JSON.parse(
-      cleaned.slice(first, last + 1)
-    );
+    parsed = JSON.parse(cleaned.slice(first, last + 1));
   }
 
   const cars = Array.isArray(parsed)
@@ -423,7 +410,7 @@ function parseCarsResponse(content) {
     throw new Error("AI did not return three cars");
   }
 
-  return cars.slice(0, 3).map((car) => ({
+  const normalized = cars.slice(0, 3).map((car) => ({
     ...car,
     name: String(
       car.name || car.model || car.title || "Unknown car"
@@ -438,6 +425,16 @@ function parseCarsResponse(content) {
     description: String(car.description || ""),
     specs: car.specs || {},
   }));
+
+  const identities = normalized.map(
+    (car) => `${car.brand} ${car.model}`.toLowerCase().trim()
+  );
+
+  if (new Set(identities).size !== 3) {
+    throw new Error("AI returned duplicate cars");
+  }
+
+  return normalized;
 }
 
 /* =========================================
@@ -511,8 +508,7 @@ async function callGroq(query) {
       messages: [
         {
           role: "system",
-          content:
-            "Return only valid JSON. Do not use markdown.",
+          content: "Return only valid JSON. Do not use markdown.",
         },
         {
           role: "user",
@@ -535,9 +531,7 @@ async function callGroq(query) {
       error: data,
     });
 
-    throw new Error(
-      `Groq request failed: ${response.status}`
-    );
+    throw new Error(`Groq request failed: ${response.status}`);
   }
 
   return extractMessageContent(data);
@@ -566,8 +560,7 @@ async function callOpenRouter(query) {
       messages: [
         {
           role: "system",
-          content:
-            "Return only valid JSON. Do not use markdown.",
+          content: "Return only valid JSON. Do not use markdown.",
         },
         {
           role: "user",
@@ -608,7 +601,6 @@ async function generateCars(query) {
   if (GROQ_API_KEY) {
     try {
       const content = await callGroq(query);
-
       return parseCarsResponse(content);
     } catch (error) {
       firstError = error;
@@ -623,7 +615,6 @@ async function generateCars(query) {
   if (OPENROUTER_API_KEY) {
     try {
       const content = await callOpenRouter(query);
-
       return parseCarsResponse(content);
     } catch (error) {
       console.error(
@@ -682,19 +673,14 @@ async function findCarImage(car) {
     if (!response.ok) return "";
 
     const data = await readJson(response);
-
-    const pages = Object.values(
-      data?.query?.pages || {}
-    );
+    const pages = Object.values(data?.query?.pages || {});
 
     const modelName = String(
       car.model || car.name || ""
     ).toLowerCase();
 
     const page = pages.find((item) => {
-      const title = String(
-        item.title || ""
-      ).toLowerCase();
+      const title = String(item.title || "").toLowerCase();
 
       return (
         title.includes("car") ||
@@ -704,11 +690,7 @@ async function findCarImage(car) {
 
     const imageInfo = page?.imageinfo?.[0];
 
-    return (
-      imageInfo?.thumburl ||
-      imageInfo?.url ||
-      ""
-    );
+    return imageInfo?.thumburl || imageInfo?.url || "";
   } catch (error) {
     console.error(
       "CARMATCH AI: Image lookup failed",
@@ -722,8 +704,7 @@ async function findCarImage(car) {
 async function addImages(cars) {
   return Promise.all(
     cars.map(async (car) => {
-      const existingImage =
-        car.imageUrl || car.image;
+      const existingImage = car.imageUrl || car.image;
 
       if (existingImage) return car;
 
@@ -809,9 +790,6 @@ export default async function handler(req, res) {
       ? req.body
       : {};
 
-  // DÔLEŽITÁ OPRAVA:
-  // Podporuje naturalLanguage + filters
-  // aj query / prompt / search.
   const query = buildSearchQuery(body);
 
   console.log("CARMATCH AI: Search request received", {
@@ -850,7 +828,8 @@ export default async function handler(req, res) {
     });
   }
 
-  // Počíta vyhľadávanie iba pre overeného používateľa.
+  /* ODPOČÍTANIE VYHĽADÁVANIA */
+
   let usage;
 
   try {
@@ -884,9 +863,10 @@ export default async function handler(req, res) {
     });
   }
 
+  /* GENEROVANIE VÝSLEDKOV */
+
   try {
     const generatedCars = await generateCars(query);
-
     const cars = await addImages(generatedCars);
 
     return send(res, 200, {
@@ -900,11 +880,40 @@ export default async function handler(req, res) {
       error.message
     );
 
+    /* REFUND – jedno zavolanie v tejto chybovej vetve */
+
+    let refund = {
+      ok: false,
+      refunded: false,
+      remaining: null,
+    };
+
+    try {
+      refund = await refundSearch(accessToken);
+    } catch (refundError) {
+      console.error(
+        "CARMATCH AI: Refund request crashed",
+        refundError.message
+      );
+    }
+
+    const remaining =
+      refund.ok && refund.refunded
+        ? refund.remaining
+        : usage.remaining;
+
+    if (!refund.ok || !refund.refunded) {
+      console.error(
+        "CARMATCH AI: Search refund was not confirmed"
+      );
+    }
+
     return send(res, 502, {
       error:
         "AI momentálne nedokáže dokončiť vyhľadávanie. Skús to znova.",
       code: "AI_SEARCH_FAILED",
-      remaining: usage.remaining,
+      remaining,
+      refunded: refund.ok && refund.refunded,
     });
   }
 }
