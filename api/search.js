@@ -1,6 +1,11 @@
 
 "use strict";
 
+/* =========================================
+   CARMATCH AI - BACKEND
+   Frontend kompatibilita: app.js v19
+========================================= */
+
 const SUPABASE_URL = (
   process.env.SUPABASE_URL || ""
 ).replace(/\/+$/, "");
@@ -15,7 +20,6 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
 const OPENROUTER_API_KEY =
   process.env.OPENROUTER_API_KEY || "";
 
-const MAX_SEARCHES = 5;
 const DAILY_LIMIT = 5;
 const MAX_QUERY_LENGTH = 1000;
 
@@ -25,6 +29,11 @@ const GROQ_URL =
 const OPENROUTER_URL =
   "https://openrouter.ai/api/v1/chat/completions";
 
+
+/* =========================================
+   ZÁKLADNÉ FUNKCIE
+========================================= */
+
 function send(res, status, data) {
   return res.status(status).json(data);
 }
@@ -32,23 +41,67 @@ function send(res, status, data) {
 function getBearerToken(req) {
   const header = req.headers.authorization || "";
   const match = header.match(/^Bearer\s+(.+)$/i);
+
   return match ? match[1].trim() : "";
 }
 
 async function readJson(response) {
-  const text = await response.text();
+  const raw = await response.text();
 
-  if (!text) return null;
+  if (!raw) return null;
 
   try {
-    return JSON.parse(text);
+    return JSON.parse(raw);
   } catch {
-    return { message: text.slice(0, 1500) };
+    return {
+      message: raw.slice(0, 1500),
+    };
   }
 }
 
+function firstValue(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && !value.trim()) continue;
+    return value;
+  }
+
+  return null;
+}
+
+function cleanString(value, fallback = "") {
+  if (value === null || value === undefined) {
+    return fallback;
+  }
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number"
+  ) {
+    return String(value).trim() || fallback;
+  }
+
+  return fallback;
+}
+
+function cleanList(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map(item => cleanString(item))
+      .filter(Boolean)
+      .slice(0, 6);
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    return [value.trim()];
+  }
+
+  return [];
+}
+
+
 /* =========================================
-   VYTVORENIE ZADANIA
+   FILTRE A VYTVORENIE ZADANIA
 ========================================= */
 
 function formatFilterValue(value) {
@@ -62,16 +115,18 @@ function formatFilterValue(value) {
 
   if (Array.isArray(value)) {
     return value
-      .map((item) => String(item).trim())
+      .map(item => String(item).trim())
       .filter(Boolean)
       .join(", ");
   }
 
-  if (typeof value === "object") return "";
+  if (typeof value === "object") {
+    return "";
+  }
 
   const formatted = String(value).trim();
 
-  const ignoredValues = [
+  const ignored = [
     "",
     "any",
     "all",
@@ -83,13 +138,15 @@ function formatFilterValue(value) {
     "všetko",
   ];
 
-  return ignoredValues.includes(formatted.toLowerCase())
+  return ignored.includes(formatted.toLowerCase())
     ? ""
     : formatted;
 }
 
 function getFilterLines(filters) {
-  if (!filters || typeof filters !== "object") return [];
+  if (!filters || typeof filters !== "object") {
+    return [];
+  }
 
   const definitions = [
     { keys: ["budget"], label: "Maximálny rozpočet" },
@@ -112,6 +169,7 @@ function getFilterLines(filters) {
 
     for (const key of definition.keys) {
       value = formatFilterValue(filters[key]);
+
       if (value) break;
     }
 
@@ -145,16 +203,23 @@ function buildSearchQuery(body) {
       : "";
 
   const filterLines = getFilterLines(body.filters);
+
   const parts = [];
 
-  if (naturalLanguage) parts.push(naturalLanguage);
+  if (naturalLanguage) {
+    parts.push(naturalLanguage);
+  }
 
   if (filterLines.length) {
-    parts.push("Požiadavky:\n" + filterLines.join("\n"));
+    parts.push(
+      "POŽIADAVKY POUŽÍVATEĽA:\n" +
+      filterLines.join("\n")
+    );
   }
 
   return parts.join("\n\n").trim();
 }
+
 
 /* =========================================
    SUPABASE AUTENTIFIKÁCIA
@@ -174,17 +239,21 @@ async function verifyUser(accessToken) {
 
   const data = await readJson(response);
 
-  if (!response.ok || !data || !data.id) {
-    console.error("CARMATCH AI: Auth verification failed", {
-      status: response.status,
-      error: data,
-    });
+  if (!response.ok || !data?.id) {
+    console.error(
+      "CARMATCH AI: Auth verification failed",
+      {
+        status: response.status,
+        error: data,
+      }
+    );
 
     return null;
   }
 
   return data;
 }
+
 
 /* =========================================
    SUPABASE RPC
@@ -230,14 +299,18 @@ function normalizeRpcData(data) {
 }
 
 function extractRemaining(data) {
-  if (!data || typeof data !== "object") return null;
+  if (!data || typeof data !== "object") {
+    return null;
+  }
 
   const value =
     data.remaining ??
     data.searches_remaining ??
     data.remaining_searches;
 
-  if (value === undefined || value === null) return null;
+  if (value === undefined || value === null) {
+    return null;
+  }
 
   const number = Number(value);
 
@@ -245,6 +318,7 @@ function extractRemaining(data) {
     ? Math.max(0, number)
     : null;
 }
+
 
 /* =========================================
    ODPOČÍTANIE VYHĽADÁVANIA
@@ -255,21 +329,23 @@ async function chargeSearch(accessToken) {
     "increment_search",
     {
       daily_limit: DAILY_LIMIT,
-      max_searches: MAX_SEARCHES,
+      max_searches: DAILY_LIMIT,
     },
     accessToken
   );
 
   if (!result.ok) {
-    console.error("CARMATCH AI: increment_search failed", {
-      status: result.status,
-      error: result.error,
-    });
+    console.error(
+      "CARMATCH AI: increment_search failed",
+      {
+        status: result.status,
+        error: result.error,
+      }
+    );
 
     return {
       ok: false,
       limited: false,
-      error: "Search usage function unavailable",
     };
   }
 
@@ -281,14 +357,13 @@ async function chargeSearch(accessToken) {
     typeof data.allowed !== "boolean"
   ) {
     console.error(
-      "CARMATCH AI: Unexpected increment_search response",
+      "CARMATCH AI: Unexpected increment response",
       data
     );
 
     return {
       ok: false,
       limited: false,
-      error: "Unexpected usage function response",
     };
   }
 
@@ -307,8 +382,9 @@ async function chargeSearch(accessToken) {
   };
 }
 
+
 /* =========================================
-   VRÁTENIE VYHĽADÁVANIA
+   VRÁTENIE VYHĽADÁVANIA PRI CHYBE
 ========================================= */
 
 async function refundSearch(accessToken) {
@@ -319,10 +395,13 @@ async function refundSearch(accessToken) {
   );
 
   if (!result.ok) {
-    console.error("CARMATCH AI: refund_search failed", {
-      status: result.status,
-      error: result.error,
-    });
+    console.error(
+      "CARMATCH AI: refund_search failed",
+      {
+        status: result.status,
+        error: result.error,
+      }
+    );
 
     return {
       ok: false,
@@ -339,7 +418,7 @@ async function refundSearch(accessToken) {
     typeof data.refunded !== "boolean"
   ) {
     console.error(
-      "CARMATCH AI: Unexpected refund_search response",
+      "CARMATCH AI: Unexpected refund response",
       data
     );
 
@@ -357,18 +436,21 @@ async function refundSearch(accessToken) {
   };
 }
 
+
 /* =========================================
-   SPRACOVANIE ODPOVEDE AI
+   AI JSON PARSING
 ========================================= */
 
 function extractMessageContent(data) {
   const content = data?.choices?.[0]?.message?.content;
 
-  if (typeof content === "string") return content;
+  if (typeof content === "string") {
+    return content;
+  }
 
   if (Array.isArray(content)) {
     return content
-      .map((item) => item.text || "")
+      .map(item => item.text || "")
       .join("\n");
   }
 
@@ -399,94 +481,280 @@ function parseCarsResponse(content) {
       throw new Error("AI response is not valid JSON");
     }
 
-    parsed = JSON.parse(cleaned.slice(first, last + 1));
+    parsed = JSON.parse(
+      cleaned.slice(first, last + 1)
+    );
   }
 
-  const cars = Array.isArray(parsed)
+  const rawCars = Array.isArray(parsed)
     ? parsed
     : parsed?.cars;
 
-  if (!Array.isArray(cars) || cars.length < 3) {
+  if (!Array.isArray(rawCars) || rawCars.length < 3) {
     throw new Error("AI did not return three cars");
   }
 
-  const normalized = cars.slice(0, 3).map((car) => ({
-    ...car,
-    name: String(
-      car.name || car.model || car.title || "Unknown car"
-    ),
-    brand: String(car.brand || ""),
-    model: String(car.model || car.name || ""),
-    year: car.year ?? null,
-    price: car.price ?? null,
-    currency: car.currency || "EUR",
-    image: car.image || car.imageUrl || "",
-    imageUrl: car.imageUrl || car.image || "",
-    description: String(car.description || ""),
-    specs: car.specs || {},
-  }));
+  const cars = rawCars.slice(0, 3).map(rawCar => {
+    const car = rawCar && typeof rawCar === "object"
+      ? rawCar
+      : {};
 
-  const identities = normalized.map(
-    (car) => `${car.brand} ${car.model}`.toLowerCase().trim()
+    const specs = car.specs || {};
+    const technical = car.technicalData || {};
+
+    /*
+      Prevod pôvodného objektu specs
+      do samostatných polí app.js v19.
+    */
+
+    const power = firstValue(
+      car.power,
+      car.enginePower,
+      specs.power,
+      technical.power
+    );
+
+    const engine = firstValue(
+      car.engine,
+      car.engineVersion,
+      specs.engine,
+      technical.engine
+    );
+
+    const consumptionWltp = firstValue(
+      car.consumptionWltp,
+      car.wltpConsumption,
+      specs.consumptionWltp,
+      specs.wltp,
+      specs.consumption,
+      technical.consumptionWltp
+    );
+
+    const seats = firstValue(
+      car.seats,
+      car.seatCount,
+      specs.seats,
+      technical.seats
+    );
+
+    const trunkLiters = firstValue(
+      car.trunkLiters,
+      car.trunk,
+      car.boot,
+      specs.trunkLiters,
+      specs.trunk,
+      technical.trunkLiters
+    );
+
+    const drivetrain = firstValue(
+      car.drivetrain,
+      car.drive,
+      specs.drivetrain,
+      specs.drive,
+      technical.drivetrain
+    );
+
+    const fuel = firstValue(
+      car.fuel,
+      car.fuelType,
+      specs.fuel,
+      technical.fuel
+    );
+
+    const transmission = firstValue(
+      car.transmission,
+      car.gearbox,
+      specs.transmission,
+      technical.transmission
+    );
+
+    const lengthMm = firstValue(
+      car.lengthMm,
+      car.lengthMM,
+      specs.lengthMm,
+      specs.length,
+      technical.lengthMm
+    );
+
+    const price = firstValue(
+      car.price,
+      specs.price
+    );
+
+    return {
+      brand: cleanString(car.brand),
+      name: cleanString(
+        firstValue(car.name, car.model, car.title),
+        "Neznáme vozidlo"
+      ),
+      model: cleanString(
+        firstValue(car.model, car.name, car.title)
+      ),
+
+      generation: cleanString(car.generation),
+      trim: cleanString(
+        firstValue(car.trim, car.version, car.variant)
+      ),
+
+      year: firstValue(
+        car.year,
+        car.modelYear
+      ),
+
+      modelYear: firstValue(
+        car.modelYear,
+        car.year
+      ),
+
+      /*
+        Ceny bez dôveryhodného zdroja
+        nesmú byť prezentované ako overené.
+      */
+
+      price: price ?? null,
+      currency: cleanString(car.currency, "EUR"),
+
+      /*
+        AI nesmie vytvárať vymyslené odkazy.
+        Oficiálne odkazy doplníme až cez
+        overiteľný zdroj dát.
+      */
+
+      priceSource: "",
+      configurator: "",
+      officialUrl: "",
+
+      /*
+        Nepoužívame automaticky vybraný
+        obrázok z backendu. Frontend v19
+        sa pokúsi nájsť vhodnejšiu fotografiu.
+      */
+
+      image: "",
+      imageUrl: "",
+      images: [],
+      imageCandidates: [],
+
+      power,
+      engine,
+      consumptionWltp,
+
+      seats,
+      trunkLiters,
+      drivetrain,
+      fuel,
+      transmission,
+      lengthMm,
+
+      body: cleanString(
+        firstValue(car.body, car.bodyType, specs.body)
+      ),
+
+      score: null,
+
+      reason: cleanString(
+        firstValue(car.reason, car.description)
+      ),
+
+      pros: cleanList(car.pros),
+      cons: cleanList(car.cons),
+
+      maintenance: cleanString(car.maintenance),
+    };
+  });
+
+  const identities = cars.map(car =>
+    `${car.brand} ${car.model}`
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim()
   );
 
   if (new Set(identities).size !== 3) {
-    throw new Error("AI returned duplicate cars");
+    throw new Error(
+      "AI returned duplicate car models"
+    );
   }
 
-  return normalized;
+  return cars;
 }
 
+
 /* =========================================
-   AI PROMPT
+   PROMPT PRE AI
 ========================================= */
 
 function buildPrompt(query) {
   return `
-You are CARMATCH AI, a car research assistant.
+You are CARMATCH AI, a careful automotive research assistant.
 
-User request:
+USER REQUEST:
 ${query}
 
-Return ONLY a valid JSON object with this structure:
+Return ONLY valid JSON in this exact general structure:
+
 {
   "cars": [
     {
-      "brand": "Car manufacturer",
-      "name": "Full model name",
-      "model": "Model and version",
+      "brand": "Manufacturer",
+      "name": "Full vehicle name",
+      "model": "Exact model and version",
+      "generation": "Generation if known",
+      "trim": "Trim if known",
       "year": 2026,
-      "price": 50000,
+
+      "price": null,
       "currency": "EUR",
-      "description": "Useful short description",
-      "image": "",
-      "imageUrl": "",
-      "specs": {
-        "power": "Power and units",
-        "acceleration": "0-100 km/h",
-        "topSpeed": "Top speed",
-        "fuel": "Fuel or powertrain",
-        "transmission": "Transmission",
-        "drive": "Drive type"
-      }
+
+      "body": "SUV",
+      "power": "200 kW / 272 HP",
+      "engine": "Engine or motor description",
+      "consumptionWltp": "WLTP consumption if known",
+
+      "seats": 5,
+      "trunkLiters": 600,
+      "drivetrain": "AWD",
+      "fuel": "Petrol / diesel / hybrid / electric",
+      "transmission": "Automatic",
+      "lengthMm": 4800,
+
+      "reason": "Why this car matches the request",
+      "pros": [
+        "Advantage"
+      ],
+      "cons": [
+        "Disadvantage"
+      ],
+      "maintenance": "Maintenance information if known"
     }
   ]
 }
 
-Rules:
-- Return exactly three distinct cars matching the user's request.
-- Use realistic, defensible specifications and prices.
-- Price must be a number in EUR when a reliable price is known.
-- If the price cannot be verified, use null. Never invent an exact price.
-- Use the requested currency if the user clearly requests another currency.
-- Do not invent image URLs. Leave image and imageUrl as empty strings.
-- Do not include markdown, comments, or text outside the JSON.
-- Keep descriptions concise and helpful.
-- If the user gives a budget, prioritize cars within that budget.
-- If the user asks for used cars, distinguish used prices from new-car prices.
-- If a model year is uncertain, use null.
+CRITICAL RULES:
+
+1. Return exactly three DIFFERENT vehicle models.
+2. Follow every user requirement and filter.
+3. Do not recommend a model that violates a clearly specified mandatory requirement.
+4. Respect the budget. Do not treat an unknown price as proof that a car is within budget.
+5. Do not confuse a model generation with an older generation.
+6. Do not confuse a petrol, diesel, mild-hybrid, plug-in hybrid or electric version.
+7. Never invent engine specifications, power, seating, trunk capacity or dimensions.
+8. If a value is not reliably known, return null.
+9. Never invent an exact current price. Return null if it is uncertain.
+10. Do not invent official URLs or image URLs.
+11. Use kW and HP for power.
+12. Use litres for trunk capacity.
+13. Use millimetres for vehicle length.
+14. Use WLTP values only when known. Do not invent consumption.
+15. Keep pros and cons specific to the actual model.
+16. Do not return explanations outside JSON.
+17. Do not return markdown or code fences.
+18. Do not invent a matching percentage.
+
+Be conservative. Correct unknown values are better than fabricated values.
 `;
 }
+
 
 /* =========================================
    GROQ
@@ -508,15 +776,16 @@ async function callGroq(query) {
       messages: [
         {
           role: "system",
-          content: "Return only valid JSON. Do not use markdown.",
+          content:
+            "Return only valid JSON. Do not use markdown.",
         },
         {
           role: "user",
           content: buildPrompt(query),
         },
       ],
-      temperature: 0.2,
-      max_tokens: 3500,
+      temperature: 0.1,
+      max_tokens: 4500,
       response_format: {
         type: "json_object",
       },
@@ -531,11 +800,14 @@ async function callGroq(query) {
       error: data,
     });
 
-    throw new Error(`Groq request failed: ${response.status}`);
+    throw new Error(
+      `Groq request failed: ${response.status}`
+    );
   }
 
   return extractMessageContent(data);
 }
+
 
 /* =========================================
    OPENROUTER
@@ -552,7 +824,8 @@ async function callOpenRouter(query) {
       Authorization: `Bearer ${OPENROUTER_API_KEY}`,
       "Content-Type": "application/json",
       "HTTP-Referer":
-        process.env.APP_URL || "https://carmatchai.vercel.app",
+        process.env.APP_URL ||
+        "https://carmatchai.vercel.app",
       "X-Title": "CARMATCH AI",
     },
     body: JSON.stringify({
@@ -560,15 +833,16 @@ async function callOpenRouter(query) {
       messages: [
         {
           role: "system",
-          content: "Return only valid JSON. Do not use markdown.",
+          content:
+            "Return only valid JSON. Do not use markdown.",
         },
         {
           role: "user",
           content: buildPrompt(query),
         },
       ],
-      temperature: 0.2,
-      max_tokens: 3500,
+      temperature: 0.1,
+      max_tokens: 4500,
       response_format: {
         type: "json_object",
       },
@@ -591,6 +865,7 @@ async function callOpenRouter(query) {
   return extractMessageContent(data);
 }
 
+
 /* =========================================
    GENEROVANIE ÁUT
 ========================================= */
@@ -601,7 +876,9 @@ async function generateCars(query) {
   if (GROQ_API_KEY) {
     try {
       const content = await callGroq(query);
+
       return parseCarsResponse(content);
+
     } catch (error) {
       firstError = error;
 
@@ -615,7 +892,9 @@ async function generateCars(query) {
   if (OPENROUTER_API_KEY) {
     try {
       const content = await callOpenRouter(query);
+
       return parseCarsResponse(content);
+
     } catch (error) {
       console.error(
         "CARMATCH AI: OpenRouter attempt failed",
@@ -631,93 +910,6 @@ async function generateCars(query) {
   );
 }
 
-/* =========================================
-   VYHĽADÁVANIE OBRÁZKOV
-========================================= */
-
-async function findCarImage(car) {
-  const searchTerm = [
-    car.brand,
-    car.model || car.name,
-    car.year,
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  if (!searchTerm) return "";
-
-  try {
-    const url = new URL(
-      "https://commons.wikimedia.org/w/api.php"
-    );
-
-    url.searchParams.set("action", "query");
-    url.searchParams.set("format", "json");
-    url.searchParams.set("generator", "search");
-    url.searchParams.set(
-      "gsrsearch",
-      searchTerm + " car"
-    );
-    url.searchParams.set("gsrnamespace", "6");
-    url.searchParams.set("gsrlimit", "5");
-    url.searchParams.set("prop", "imageinfo");
-    url.searchParams.set("iiprop", "url");
-    url.searchParams.set("iiurlwidth", "900");
-
-    const response = await fetch(url.toString(), {
-      headers: {
-        "User-Agent": "CARMATCH-AI/1.0",
-      },
-    });
-
-    if (!response.ok) return "";
-
-    const data = await readJson(response);
-    const pages = Object.values(data?.query?.pages || {});
-
-    const modelName = String(
-      car.model || car.name || ""
-    ).toLowerCase();
-
-    const page = pages.find((item) => {
-      const title = String(item.title || "").toLowerCase();
-
-      return (
-        title.includes("car") ||
-        (modelName && title.includes(modelName))
-      );
-    }) || pages[0];
-
-    const imageInfo = page?.imageinfo?.[0];
-
-    return imageInfo?.thumburl || imageInfo?.url || "";
-  } catch (error) {
-    console.error(
-      "CARMATCH AI: Image lookup failed",
-      error.message
-    );
-
-    return "";
-  }
-}
-
-async function addImages(cars) {
-  return Promise.all(
-    cars.map(async (car) => {
-      const existingImage = car.imageUrl || car.image;
-
-      if (existingImage) return car;
-
-      const imageUrl = await findCarImage(car);
-
-      return {
-        ...car,
-        image: imageUrl,
-        imageUrl,
-      };
-    })
-  );
-}
 
 /* =========================================
    HLAVNÝ API HANDLER
@@ -753,6 +945,12 @@ export default async function handler(req, res) {
 
     return send(res, 500, {
       error: "Supabase is not configured on the server.",
+    });
+  }
+
+  if (!GROQ_API_KEY && !OPENROUTER_API_KEY) {
+    return send(res, 500, {
+      error: "AI provider is not configured on the server.",
     });
   }
 
@@ -792,17 +990,15 @@ export default async function handler(req, res) {
 
   const query = buildSearchQuery(body);
 
-  console.log("CARMATCH AI: Search request received", {
-    userVerified: Boolean(user.id),
-    bodyFields: Object.keys(body),
-    queryLength: query.length,
-    hasNaturalLanguage:
-      typeof body.naturalLanguage === "string" &&
-      Boolean(body.naturalLanguage.trim()),
-    hasFilters:
-      Boolean(body.filters) &&
-      typeof body.filters === "object",
-  });
+  console.log(
+    "CARMATCH AI: Search request received",
+    {
+      userVerified: Boolean(user.id),
+      bodyFields: Object.keys(body),
+      queryLength: query.length,
+      hasFilters: Boolean(body.filters),
+    }
+  );
 
   if (!query) {
     return send(res, 400, {
@@ -818,15 +1014,6 @@ export default async function handler(req, res) {
     });
   }
 
-  if (!GROQ_API_KEY && !OPENROUTER_API_KEY) {
-    console.error(
-      "CARMATCH AI: No AI provider API key configured"
-    );
-
-    return send(res, 500, {
-      error: "AI provider is not configured on the server.",
-    });
-  }
 
   /* ODPOČÍTANIE VYHĽADÁVANIA */
 
@@ -834,6 +1021,7 @@ export default async function handler(req, res) {
 
   try {
     usage = await chargeSearch(accessToken);
+
   } catch (error) {
     console.error(
       "CARMATCH AI: Usage request failed",
@@ -842,7 +1030,7 @@ export default async function handler(req, res) {
 
     return send(res, 503, {
       error:
-        "Nepodarilo sa overiť limit vyhľadávania. Skús to neskôr.",
+        "Nepodarilo sa overiť limit vyhľadávania.",
       code: "SEARCH_USAGE_UNAVAILABLE",
     });
   }
@@ -858,29 +1046,30 @@ export default async function handler(req, res) {
   if (!usage.ok) {
     return send(res, 503, {
       error:
-        "Nepodarilo sa overiť limit vyhľadávania. Skús to neskôr.",
+        "Nepodarilo sa overiť limit vyhľadávania.",
       code: "SEARCH_USAGE_UNAVAILABLE",
     });
   }
 
+
   /* GENEROVANIE VÝSLEDKOV */
 
   try {
-    const generatedCars = await generateCars(query);
-    const cars = await addImages(generatedCars);
+    const cars = await generateCars(query);
 
     return send(res, 200, {
       cars,
       remaining: usage.remaining,
       ai: "CARMATCH AI",
     });
+
   } catch (error) {
     console.error(
       "CARMATCH AI: Search generation failed",
       error.message
     );
 
-    /* REFUND – jedno zavolanie v tejto chybovej vetve */
+    /* REFUND PRI NEÚSPEŠNOM VYHĽADÁVANÍ */
 
     let refund = {
       ok: false,
@@ -890,9 +1079,10 @@ export default async function handler(req, res) {
 
     try {
       refund = await refundSearch(accessToken);
+
     } catch (refundError) {
       console.error(
-        "CARMATCH AI: Refund request crashed",
+        "CARMATCH AI: Refund request failed",
         refundError.message
       );
     }
@@ -901,12 +1091,6 @@ export default async function handler(req, res) {
       refund.ok && refund.refunded
         ? refund.remaining
         : usage.remaining;
-
-    if (!refund.ok || !refund.refunded) {
-      console.error(
-        "CARMATCH AI: Search refund was not confirmed"
-      );
-    }
 
     return send(res, 502, {
       error:
