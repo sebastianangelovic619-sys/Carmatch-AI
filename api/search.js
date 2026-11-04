@@ -2,11 +2,12 @@
 "use strict";
 
 /* ============================================================
-   CARMATCH AI - BACKEND v21
-   - Slovenský výstup vrátane opisov a technických údajov
-   - Samostatný AI prekladový krok
-   - Kompatibilita s app.js v19
+   CARMATCH AI - BACKEND v22
+   - Slovenský výstup a jazyková kontrola
+   - Identifikácia skutočného modelu auta
+   - Kompatibilita s app.js v20
    - Presne 3 rozdielne automobily
+   - Normalizácia technických údajov
    - Supabase autentifikácia
    - Denný limit 5 vyhľadávaní
    - Refund pri chybe generovania alebo prekladu
@@ -28,6 +29,7 @@ const OPENROUTER_API_KEY =
 
 const DAILY_LIMIT = 5;
 const MAX_QUERY_LENGTH = 1000;
+const AI_TIMEOUT = 22000;
 
 const GROQ_URL =
   "https://api.groq.com/openai/v1/chat/completions";
@@ -117,15 +119,106 @@ function cleanList(value) {
 
 function normalizeText(value) {
   return cleanString(value)
-    .trim()
-    .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 
 /* ============================================================
-   PREKLAD TECHNICKÝCH OZNAČENÍ
+   IDENTIFIKÁCIA SKUTOČNÉHO MODELU
+   ============================================================ */
+
+function extractBaseModel(value, brand) {
+  let model = cleanString(value);
+
+  if (!model) return "";
+
+  const normalizedModel = normalizeText(model);
+  const normalizedBrand = normalizeText(brand);
+
+  if (
+    normalizedBrand &&
+    normalizedModel.startsWith(normalizedBrand + " ")
+  ) {
+    model = model.slice(brand.length).trim();
+  }
+
+  model = model
+    // Označenia motorov, nie základný názov auta.
+    .replace(
+      /\b\d+(?:[.,]\d+)?\s*(?:tsi|tdi|tfsi|tdci|tce|dci|ecoboost|hdi|bluehdi|gdi|mpi|fsi)\b/gi,
+      " "
+    )
+    .replace(
+      /\b\d{2,3}\s*tfsi\b/gi,
+      " "
+    )
+    // Označenia pohonu a motorovej verzie.
+    .replace(
+      /\bxdrive\s*\d+[a-z]*\b/gi,
+      " "
+    )
+    .replace(
+      /\bsdrive\s*\d+[a-z]*\b/gi,
+      " "
+    )
+    .replace(
+      /\b(?:4motion|quattro|4matic|4x4|awd|fwd|rwd)\b/gi,
+      " "
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return model;
+}
+
+function isValidVehicleModel(model) {
+  const value = cleanString(model);
+
+  if (value.length < 2) return false;
+
+  const normalized = normalizeText(value);
+
+  const invalidNames = [
+    "tsi",
+    "tdi",
+    "tfsi",
+    "quattro",
+    "4motion",
+    "xdrive",
+    "4matic",
+    "awd",
+    "4x4",
+    "suv",
+    "sedan",
+    "estate",
+    "diesel",
+    "petrol",
+    "automatic",
+    "manual"
+  ];
+
+  if (invalidNames.includes(normalized)) {
+    return false;
+  }
+
+  // Samotné označenie motora nesmie byť model.
+  if (
+    /^\d+(?:[.,]\d+)?\s*(?:tsi|tdi|tfsi|tdci|tce|dci)$/i.test(value)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+
+/* ============================================================
+   LOKALIZÁCIA TECHNICKÝCH OZNAČENÍ
    ============================================================ */
 
 function localizeFuel(value) {
@@ -145,9 +238,7 @@ function localizeFuel(value) {
     .replace(/\bdiesel\b/gi, "Nafta")
     .replace(/\belectricity\b/gi, "Elektrina")
     .replace(/\belectric\b/gi, "Elektrický pohon")
-    .replace(/\bhydrogen\b/gi, "Vodík")
-    .replace(/\bLPG\b/gi, "LPG")
-    .replace(/\bCNG\b/gi, "CNG");
+    .replace(/\bhydrogen\b/gi, "Vodík");
 
   return result.trim();
 }
@@ -157,10 +248,10 @@ function localizeDrive(value) {
 
   if (!original) return null;
 
-  const s = normalizeText(original);
+  const normalized = normalizeText(original);
 
   if (
-    /\b(awd|4wd|4x4|all wheel drive|four wheel drive|4motion|quattro|xdrive)\b/i.test(s)
+    /\b(awd|4wd|4x4|all wheel drive|four wheel drive|4motion|quattro|xdrive)\b/.test(normalized)
   ) {
     if (/\bxdrive\b/i.test(original)) {
       return "Pohon všetkých kolies (xDrive)";
@@ -178,13 +269,13 @@ function localizeDrive(value) {
   }
 
   if (
-    /\b(fwd|front wheel drive|predny pohon)\b/i.test(s)
+    /\b(fwd|front wheel drive)\b/.test(normalized)
   ) {
     return "Pohon predných kolies";
   }
 
   if (
-    /\b(rwd|rear wheel drive|zadny pohon)\b/i.test(s)
+    /\b(rwd|rear wheel drive)\b/.test(normalized)
   ) {
     return "Pohon zadných kolies";
   }
@@ -193,51 +284,51 @@ function localizeDrive(value) {
 }
 
 function localizeTransmission(value) {
-  let original = cleanString(value);
+  const original = cleanString(value);
 
   if (!original) return null;
 
-  const s = normalizeText(original);
+  const normalized = normalizeText(original);
 
-  const speedMatch = s.match(
-    /\b(\d+)[ -]?speed\b/i
+  const speedMatch = normalized.match(
+    /\b(\d+)\s*speed\b/
   );
 
   const speeds = speedMatch
     ? Number(speedMatch[1])
     : null;
 
-  if (/\b(cvt)\b/i.test(s)) {
+  if (/\bcvt\b/.test(normalized)) {
     return speeds
       ? `${speeds}-stupňová automatická prevodovka CVT`
       : "Automatická prevodovka CVT";
   }
 
-  if (/\b(dct|dual clutch)\b/i.test(s)) {
+  if (/\b(dct|dual clutch)\b/.test(normalized)) {
     return speeds
       ? `${speeds}-stupňová dvojspojková prevodovka`
       : "Dvojspojková automatická prevodovka";
   }
 
-  if (/\b(dsg)\b/i.test(s)) {
+  if (/\bdsg\b/.test(normalized)) {
     return speeds
       ? `${speeds}-stupňová automatická prevodovka DSG`
       : "Automatická prevodovka DSG";
   }
 
-  if (/\b(manual|manual transmission)\b/i.test(s)) {
+  if (/\bmanual\b/.test(normalized)) {
     return speeds
       ? `${speeds}-stupňová manuálna prevodovka`
       : "Manuálna prevodovka";
   }
 
-  if (/\b(automatic|automatic transmission)\b/i.test(s)) {
+  if (/\bautomatic\b/.test(normalized)) {
     return speeds
       ? `${speeds}-stupňová automatická prevodovka`
       : "Automatická prevodovka";
   }
 
-  if (/\bsingle speed\b/i.test(s)) {
+  if (/\bsingle speed\b/.test(normalized)) {
     return "Jednostupňová prevodovka";
   }
 
@@ -249,20 +340,20 @@ function localizeBody(value) {
 
   if (!original) return null;
 
-  const s = normalizeText(original);
+  const normalized = normalizeText(original);
 
-  if (/\bsuv\b/i.test(s)) return "SUV";
-  if (/\b(coupe|coupe)\b/i.test(s)) return "Kupé";
-  if (/\b(sedan|saloon)\b/i.test(s)) return "Sedan";
-  if (/\b(estate|wagon|station wagon)\b/i.test(s)) return "Kombi";
-  if (/\bhatchback\b/i.test(s)) return "Hatchback";
-  if (/\b(convertible|cabriolet)\b/i.test(s)) return "Kabriolet";
-  if (/\broadster\b/i.test(s)) return "Roadster";
-  if (/\b(pickup|pick-up)\b/i.test(s)) return "Pick-up";
-  if (/\b(crossover)\b/i.test(s)) return "Crossover";
-  if (/\b(minivan|mpv)\b/i.test(s)) return "Rodinné MPV";
-  if (/\bliftback\b/i.test(s)) return "Liftback";
-  if (/\bfastback\b/i.test(s)) return "Fastback";
+  if (/\bsuv\b/.test(normalized)) return "SUV";
+  if (/\b(coupe|coupe)\b/.test(normalized)) return "Kupé";
+  if (/\b(sedan|saloon)\b/.test(normalized)) return "Sedan";
+  if (/\b(estate|wagon|station wagon)\b/.test(normalized)) return "Kombi";
+  if (/\bhatchback\b/.test(normalized)) return "Hatchback";
+  if (/\b(convertible|cabriolet)\b/.test(normalized)) return "Kabriolet";
+  if (/\broadster\b/.test(normalized)) return "Roadster";
+  if (/\b(pickup|pick up)\b/.test(normalized)) return "Pick-up";
+  if (/\bcrossover\b/.test(normalized)) return "Crossover";
+  if (/\b(minivan|mpv)\b/.test(normalized)) return "Rodinné MPV";
+  if (/\bliftback\b/.test(normalized)) return "Liftback";
+  if (/\bfastback\b/.test(normalized)) return "Fastback";
 
   return original;
 }
@@ -274,20 +365,25 @@ function localizeEngine(value) {
 
   result = result
     .replace(/\binline[- ]?six\b/gi, "radový šesťvalec")
+    .replace(/\binline[- ]?6\b/gi, "radový šesťvalec")
+    .replace(/\binline[- ]?four\b/gi, "radový štvorvalec")
     .replace(/\binline[- ]?4\b/gi, "radový štvorvalec")
     .replace(/\binline[- ]?3\b/gi, "radový trojvalec")
     .replace(/\bV[- ]?6\b/gi, "vidlicový šesťvalec")
     .replace(/\bV[- ]?8\b/gi, "vidlicový osemvalec")
     .replace(/\bV[- ]?12\b/gi, "vidlicový dvanásťvalec")
     .replace(/\bturbocharged\b/gi, "prepĺňaný turbodúchadlom")
-    .replace(/\btwin turbo\b/gi, "prepĺňaný dvoma turbodúchadlami")
-    .replace(/\btwin-turbo\b/gi, "prepĺňaný dvoma turbodúchadlami")
+    .replace(/\btwin[- ]?turbo\b/gi, "prepĺňaný dvoma turbodúchadlami")
     .replace(/\bsupercharged\b/gi, "mechanicky prepĺňaný")
     .replace(/\belectric motor\b/gi, "elektromotor")
     .replace(/\bpetrol engine\b/gi, "benzínový motor")
-    .replace(/\bdiesel engine\b/gi, "naftový motor");
+    .replace(/\bdiesel engine\b/gi, "naftový motor")
+    .replace(/\bpetrol\b/gi, "benzínový")
+    .replace(/\bdiesel\b/gi, "naftový")
+    .replace(/\b(\d+)\.(\d+)\s*L\b/gi, "$1,$2 l")
+    .replace(/\b(\d+)\s*L\b/gi, "$1 l");
 
-  return result;
+  return result.trim();
 }
 
 function localizeConsumption(value) {
@@ -301,9 +397,10 @@ function localizeConsumption(value) {
     .replace(/\belectric consumption\b/gi, "Spotreba elektrickej energie")
     .replace(/\bWLTP consumption\b/gi, "Spotreba podľa WLTP")
     .replace(/\bcombined\b/gi, "kombinovaná")
-    .replace(/\bconsumption\b/gi, "spotreba");
+    .replace(/\bconsumption\b/gi, "spotreba")
+    .replace(/(\d+)\.(\d+)(?=\s*(?:l\/|kWh|km))/gi, "$1,$2");
 
-  return result;
+  return result.trim();
 }
 
 
@@ -362,7 +459,7 @@ function getFilterLines(filters) {
     { keys: ["fuel"], label: "Požadované palivo" },
     { keys: ["body"], label: "Typ karosérie" },
     { keys: ["style"], label: "Požadovaný štýl" },
-    { keys: ["length"], label: "Maximálna dĺžka" },
+    { keys: ["length"], label: "Maximálna dĺžka (m)" },
     { keys: ["year"], label: "Minimálny rok výroby" },
     { keys: ["avoid", "avoidBrands"], label: "Vylúčené značky" }
   ];
@@ -645,7 +742,7 @@ async function refundSearch(accessToken) {
 
 
 /* ============================================================
-   AI JSON PARSING
+   JSON A AI POMOCNÉ FUNKCIE
    ============================================================ */
 
 function parseJsonContent(content) {
@@ -692,47 +789,72 @@ function extractMessageContent(data) {
   return "";
 }
 
+async function fetchWithTimeout(url, options, timeout = AI_TIMEOUT) {
+  const controller = new AbortController();
+
+  const timer = setTimeout(
+    () => controller.abort(),
+    timeout
+  );
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 
 /* ============================================================
    SPOLOČNÁ AI POŽIADAVKA
    ============================================================ */
 
-async function callAI(systemPrompt, userPrompt, maxTokens = 4500) {
+async function callAI(
+  systemPrompt,
+  userPrompt,
+  maxTokens = 4500
+) {
   let firstError = null;
 
   if (GROQ_API_KEY) {
     try {
-      const response = await fetch(GROQ_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${GROQ_API_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
-          messages: [
-            {
-              role: "system",
-              content: systemPrompt
-            },
-            {
-              role: "user",
-              content: userPrompt
+      const response = await fetchWithTimeout(
+        GROQ_URL,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${GROQ_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "llama-3.3-70b-versatile",
+            messages: [
+              {
+                role: "system",
+                content: systemPrompt
+              },
+              {
+                role: "user",
+                content: userPrompt
+              }
+            ],
+            temperature: 0.1,
+            max_tokens: maxTokens,
+            response_format: {
+              type: "json_object"
             }
-          ],
-          temperature: 0.1,
-          max_tokens: maxTokens,
-          response_format: {
-            type: "json_object"
-          }
-        })
-      });
+          })
+        }
+      );
 
       const data = await readJson(response);
 
       if (!response.ok) {
         throw new Error(
-          `Groq chyba ${response.status}: ${JSON.stringify(data).slice(0, 500)}`
+          `Groq chyba ${response.status}`
         );
       }
 
@@ -756,41 +878,44 @@ async function callAI(systemPrompt, userPrompt, maxTokens = 4500) {
 
   if (OPENROUTER_API_KEY) {
     try {
-      const response = await fetch(OPENROUTER_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer":
-            process.env.APP_URL ||
-            "https://carmatchai.vercel.app",
-          "X-Title": "CARMATCH AI"
-        },
-        body: JSON.stringify({
-          model: "openai/gpt-4o-mini",
-          messages: [
-            {
-              role: "system",
-              content: systemPrompt
-            },
-            {
-              role: "user",
-              content: userPrompt
+      const response = await fetchWithTimeout(
+        OPENROUTER_URL,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer":
+              process.env.APP_URL ||
+              "https://carmatchai.vercel.app",
+            "X-Title": "CARMATCH AI"
+          },
+          body: JSON.stringify({
+            model: "openai/gpt-4o-mini",
+            messages: [
+              {
+                role: "system",
+                content: systemPrompt
+              },
+              {
+                role: "user",
+                content: userPrompt
+              }
+            ],
+            temperature: 0.1,
+            max_tokens: maxTokens,
+            response_format: {
+              type: "json_object"
             }
-          ],
-          temperature: 0.1,
-          max_tokens: maxTokens,
-          response_format: {
-            type: "json_object"
-          }
-        })
-      });
+          })
+        }
+      );
 
       const data = await readJson(response);
 
       if (!response.ok) {
         throw new Error(
-          `OpenRouter chyba ${response.status}: ${JSON.stringify(data).slice(0, 500)}`
+          `OpenRouter chyba ${response.status}`
         );
       }
 
@@ -819,19 +944,31 @@ async function callAI(systemPrompt, userPrompt, maxTokens = 4500) {
 
 
 /* ============================================================
-   SLOVENSKÝ PROMPT NA VÝBER ÁUT
+   PROMPT NA VÝBER ÁUT
    ============================================================ */
 
 function buildCarPrompt(query) {
   return `
 Si CARMATCH AI – odborný automobilový poradca.
 
-Komunikuješ výhradne v slovenskom jazyku.
+Odpovedáš výhradne po slovensky.
 
 POŽIADAVKA ZÁKAZNÍKA:
 ${query}
 
 Vyber presne TRI rozdielne skutočné automobily.
+
+DÔLEŽITÉ ROZDELENIE:
+- brand = značka, napr. Volkswagen
+- model = skutočný základný obchodný názov, napr. Tiguan
+- engine = motor, napr. 2.0 TSI
+- drivetrain = pohon, napr. 4MOTION
+- trim = výbava, napr. R-Line
+
+Nikdy nepouži názov motora ako názov modelu.
+Napríklad model je "Tiguan", nie "2.0 TSI 4MOTION".
+Napríklad model je "Q7", nie "55 TFSI quattro".
+Napríklad model je "X7", nie "xDrive40i".
 
 VÝSTUP MUSÍ BYŤ IBA PLATNÝ JSON.
 
@@ -840,72 +977,60 @@ Použi túto štruktúru:
 {
   "cars": [
     {
-      "brand": "Značka",
-      "name": "Úplný názov automobilu",
-      "model": "Presný model a verzia",
-      "generation": "Generácia",
-      "trim": "Výbava",
+      "brand": "Volkswagen",
+      "name": "Volkswagen Tiguan",
+      "model": "Tiguan",
+      "generation": "Generácia vozidla",
+      "trim": "R-Line",
       "year": 2026,
       "body": "SUV",
-      "power": "200 kW / 272 HP",
-      "engine": "Benzínový motor 2,0 l",
-      "consumptionWltp": "7,5 l/100 km",
+      "power": "195 kW / 265 HP",
+      "engine": "Benzínový motor 2,0 l TSI",
+      "consumptionWltp": null,
       "seats": 5,
-      "trunkLiters": 600,
-      "drivetrain": "Pohon všetkých kolies (4×4)",
+      "trunkLiters": null,
+      "drivetrain": "Pohon všetkých kolies (4MOTION)",
       "fuel": "Benzín",
       "transmission": "Automatická prevodovka",
-      "lengthMm": 4800,
+      "lengthMm": null,
       "reason": "Slovenský dôvod odporúčania.",
-      "pros": [
-        "Prvá výhoda.",
-        "Druhá výhoda."
-      ],
-      "cons": [
-        "Prvá nevýhoda."
-      ],
+      "pros": ["Výhoda v slovenčine."],
+      "cons": ["Nevýhoda v slovenčine."],
       "maintenance": "Informácie o údržbe v slovenčine."
     }
   ]
 }
 
 JAZYKOVÉ PRAVIDLÁ:
-
-1. VŠETKY textové hodnoty musia byť po slovensky.
-2. Žiadne anglické vety, odseky ani opisy.
-3. Dôvody odporúčania píš po slovensky.
-4. Výhody a nevýhody píš po slovensky.
-5. Údržbu opisuj po slovensky.
-6. Technické údaje uvádzaj po slovensky.
-7. Namiesto Petrol používaj Benzín.
-8. Namiesto Diesel používaj Nafta.
-9. Namiesto AWD používaj Pohon všetkých kolies.
-10. Namiesto FWD používaj Pohon predných kolies.
-11. Namiesto RWD používaj Pohon zadných kolies.
-12. Namiesto Automatic používaj Automatická prevodovka.
-13. Namiesto Manual používaj Manuálna prevodovka.
-14. Názvy značiek, modelov a oficiálnych výbav neprekladaj.
+1. Všetky opisné texty píš po slovensky.
+2. Nepoužívaj anglické vety.
+3. Dôvody odporúčania, výhody, nevýhody a údržbu píš po slovensky.
+4. Namiesto Petrol používaj Benzín.
+5. Namiesto Diesel používaj Nafta.
+6. Namiesto AWD používaj Pohon všetkých kolies.
+7. Namiesto FWD používaj Pohon predných kolies.
+8. Namiesto RWD používaj Pohon zadných kolies.
+9. Namiesto Automatic používaj Automatická prevodovka.
+10. Zachovaj originálne obchodné názvy značiek, modelov a výbav.
 
 PRAVIDLÁ PRESNOSTI:
-
 1. Vráť presne tri rozdielne modely.
 2. Vozidlá musia skutočne existovať.
 3. Dodrž všetky povinné požiadavky zákazníka.
-4. Neprekračuj stanovený rozpočet.
-5. Nezamieňaj jednotlivé generácie vozidiel.
-6. Nezamieňaj benzín, naftu, hybrid a elektromobil.
-7. Nevymýšľaj výkon, motor, sedadlá, kufor ani rozmery.
+4. Neprekračuj rozpočet.
+5. Rozlišuj jednotlivé generácie vozidiel.
+6. Nezamieňaj rôzne druhy pohonu a paliva.
+7. Nevymýšľaj technické údaje.
 8. Ak údaj nepoznáš, použi null.
-9. Nevymýšľaj presnú aktuálnu cenu.
-10. Nevymýšľaj oficiálne internetové adresy.
+9. Nevymýšľaj aktuálnu cenu.
+10. Nevymýšľaj internetové adresy.
 11. Výkon uvádzaj v kW a HP.
 12. Objem kufra uvádzaj v litroch.
 13. Dĺžku uvádzaj v milimetroch.
-14. Spotrebu uvádzaj podľa WLTP, iba ak ju poznáš.
+14. Spotrebu uvádzaj podľa WLTP iba vtedy, ak je známa.
 15. Nevymýšľaj percentuálnu zhodu.
 16. Nevkladaj text mimo JSON.
 
-Odpoveď musí byť prirodzená, gramaticky správna slovenčina.
 Presnosť je dôležitejšia ako množstvo údajov.
 `;
 }
@@ -939,7 +1064,7 @@ function parseCarsResponse(content) {
 
     const brand = cleanString(car.brand);
 
-    const model = cleanString(
+    const rawModel = cleanString(
       firstValue(
         car.model,
         car.name,
@@ -947,19 +1072,21 @@ function parseCarsResponse(content) {
       )
     );
 
-    const name = cleanString(
-      firstValue(
-        car.name,
-        car.model,
-        car.title
-      ),
-      "Neznáme vozidlo"
+    const model = extractBaseModel(
+      rawModel,
+      brand
     );
+
+    if (!brand || !isValidVehicleModel(model)) {
+      throw new Error(
+        `AI neuviedla skutočný názov modelu: ${brand} ${rawModel}`
+      );
+    }
 
     return {
       brand,
-      name,
       model,
+      name: `${brand} ${model}`,
 
       generation: cleanString(car.generation),
       trim: cleanString(
@@ -981,8 +1108,8 @@ function parseCarsResponse(content) {
       ),
 
       /*
-       * Bez spoľahlivého externého cenového zdroja
-       * sa cena nezobrazuje ako overená.
+       * Cena ostáva neoverená, kým nebude pripojený
+       * dôveryhodný aktuálny cenový zdroj.
        */
 
       price: null,
@@ -993,7 +1120,7 @@ function parseCarsResponse(content) {
       officialUrl: "",
 
       /*
-       * Obrázky dopĺňa frontend samostatne.
+       * Fotografie vyhľadá frontend samostatne.
        */
 
       image: "",
@@ -1091,10 +1218,7 @@ function parseCarsResponse(content) {
       score: null,
 
       reason: cleanString(
-        firstValue(
-          car.reason,
-          car.description
-        )
+        firstValue(car.reason, car.description)
       ),
 
       pros: cleanList(car.pros),
@@ -1106,7 +1230,6 @@ function parseCarsResponse(content) {
 
   const identities = cars.map(car =>
     `${normalizeText(car.brand)} ${normalizeText(car.model)}`
-      .replace(/\s+/g, " ")
       .trim()
   );
 
@@ -1124,7 +1247,7 @@ function parseCarsResponse(content) {
 
 
 /* ============================================================
-   DRUHÝ KROK: PREKLAD VŠETKÝCH TEXTOV DO SLOVENČINY
+   PREKLAD VŠETKÝCH OPISOV DO SLOVENČINY
    ============================================================ */
 
 function buildTranslationPrompt(cars) {
@@ -1142,36 +1265,33 @@ function buildTranslationPrompt(cars) {
   }));
 
   return `
-Prelož všetky textové hodnoty v nasledujúcom JSON do
-prirodzenej, gramaticky správnej SLOVENČINY.
+Prelož všetky textové hodnoty v nasledujúcom JSON
+do prirodzenej, gramaticky správnej SLOVENČINY.
 
 VSTUP:
 ${JSON.stringify({ cars: translatableCars })}
 
 PRAVIDLÁ:
+1. Prelož všetky anglické vety a opisy.
+2. Používaj správne slovenské automobilové názvoslovie.
+3. "Petrol" prelož ako "Benzín".
+4. "Diesel" prelož ako "Nafta".
+5. "AWD" prelož ako "Pohon všetkých kolies".
+6. "FWD" prelož ako "Pohon predných kolies".
+7. "RWD" prelož ako "Pohon zadných kolies".
+8. "Automatic" prelož ako "Automatická prevodovka".
+9. "Manual" prelož ako "Manuálna prevodovka".
+10. "Inline-6" prelož ako "radový šesťvalec".
+11. "V6" prelož ako "vidlicový šesťvalec".
+12. "Turbocharged" prelož ako "prepĺňaný turbodúchadlom".
+13. Zachovaj názvy xDrive, quattro, DSG a 4MOTION.
+14. Zachovaj všetky číselné hodnoty a technické fakty.
+15. Nevymýšľaj nové údaje.
+16. Nemeň význam pôvodného textu.
+17. Zachovaj poradie troch áut.
+18. Vráť výhradne JSON.
 
-1. Prelož každý anglický opis a technický údaj.
-2. Neponechávaj anglické vety ani anglické vysvetlenia.
-3. Používaj správne slovenské odborné automobilové názvoslovie.
-4. "Petrol" prelož ako "Benzín".
-5. "Diesel" prelož ako "Nafta".
-6. "AWD" prelož ako "Pohon všetkých kolies".
-7. "FWD" prelož ako "Pohon predných kolies".
-8. "RWD" prelož ako "Pohon zadných kolies".
-9. "Automatic" prelož ako "Automatická prevodovka".
-10. "Manual" prelož ako "Manuálna prevodovka".
-11. "Inline-6" prelož ako "radový šesťvalec".
-12. "V6" prelož ako "vidlicový šesťvalec".
-13. "Turbocharged" prelož ako "prepĺňaný turbodúchadlom".
-14. Zachovaj názvy xDrive, quattro, DSG a 4MOTION.
-15. Zachovaj všetky číselné hodnoty, jednotky a technické fakty.
-16. Nevymýšľaj nové technické údaje.
-17. Nemeň význam pôvodných textov.
-18. Ak je hodnota null alebo prázdna, ponechaj ju tak.
-19. Výhody a nevýhody musia zostať po slovensky.
-20. Vráť presne tri autá v rovnakom poradí.
-
-Vráť výhradne JSON v tejto štruktúre:
+ŠTRUKTÚRA:
 
 {
   "cars": [
@@ -1180,35 +1300,77 @@ Vráť výhradne JSON v tejto štruktúre:
       "consumptionWltp": "Slovenská spotreba",
       "drivetrain": "Slovenský názov pohonu",
       "fuel": "Slovenský názov paliva",
-      "transmission": "Slovenský názov prevodovky",
+      "transmission": "Slovenská prevodovka",
       "body": "Slovenská karoséria",
       "reason": "Slovenský dôvod odporúčania",
       "pros": ["Slovenská výhoda"],
       "cons": ["Slovenská nevýhoda"],
-      "maintenance": "Slovenské informácie o údržbe"
+      "maintenance": "Slovenská údržba"
     }
   ]
 }
 
-Nevkladaj žiadny text mimo JSON.
+Nepridávaj žiadny text mimo JSON.
 `;
+}
+
+function containsEnglishText(value) {
+  const textValue = cleanString(value);
+
+  if (!textValue) return false;
+
+  const markers =
+    /\b(the|with|for|and|from|offers|provides|features|excellent|spacious|powerful|comfortable|reliable|maintenance|consumption|diesel|petrol|automatic|manual|inline[- ]?6|turbocharged|all wheel drive|front wheel drive|rear wheel drive)\b/i;
+
+  return markers.test(textValue);
+}
+
+function validateSlovakDescriptions(cars) {
+  const fields = [
+    "engine",
+    "consumptionWltp",
+    "drivetrain",
+    "fuel",
+    "transmission",
+    "body",
+    "reason",
+    "maintenance"
+  ];
+
+  for (const car of cars) {
+    for (const field of fields) {
+      if (containsEnglishText(car[field])) {
+        throw new Error(
+          `Preklad nebol dokončený v poli ${field}.`
+        );
+      }
+    }
+
+    for (const item of [
+      ...car.pros,
+      ...car.cons
+    ]) {
+      if (containsEnglishText(item)) {
+        throw new Error(
+          "Niektorý opis výhod alebo nevýhod zostal v angličtine."
+        );
+      }
+    }
+  }
 }
 
 async function translateCarsToSlovak(cars) {
   const systemPrompt = `
 Si profesionálny slovenský automobilový prekladateľ.
-
-Všetky texty prekladáš do prirodzenej slovenčiny.
-Zachovávaš čísla, jednotky, technické fakty a význam.
-Nevytváraš nové údaje.
+Prekladáš všetky opisy do prirodzenej slovenčiny.
+Zachovávaš číselné údaje, jednotky a technický význam.
+Nevytváraš nové fakty.
 Vrátiš iba platný JSON.
 `;
 
-  const prompt = buildTranslationPrompt(cars);
-
   const content = await callAI(
     systemPrompt,
-    prompt,
+    buildTranslationPrompt(cars),
     3500
   );
 
@@ -1223,10 +1385,10 @@ Vrátiš iba platný JSON.
     );
   }
 
-  return cars.map((car, index) => {
+  const translatedCars = cars.map((car, index) => {
     const translated = parsed.cars[index] || {};
 
-    const translatedCar = {
+    const result = {
       ...car,
 
       engine: cleanString(
@@ -1278,36 +1440,19 @@ Vrátiš iba platný JSON.
       )
     };
 
-    /*
-     * Dodatočná technická kontrola po preklade.
-     */
+    result.engine = localizeEngine(result.engine);
+    result.consumptionWltp = localizeConsumption(result.consumptionWltp);
+    result.drivetrain = localizeDrive(result.drivetrain);
+    result.fuel = localizeFuel(result.fuel);
+    result.transmission = localizeTransmission(result.transmission);
+    result.body = localizeBody(result.body);
 
-    translatedCar.engine = localizeEngine(
-      translatedCar.engine
-    );
-
-    translatedCar.consumptionWltp = localizeConsumption(
-      translatedCar.consumptionWltp
-    );
-
-    translatedCar.fuel = localizeFuel(
-      translatedCar.fuel
-    );
-
-    translatedCar.drivetrain = localizeDrive(
-      translatedCar.drivetrain
-    );
-
-    translatedCar.transmission = localizeTransmission(
-      translatedCar.transmission
-    );
-
-    translatedCar.body = localizeBody(
-      translatedCar.body
-    );
-
-    return translatedCar;
+    return result;
   });
+
+  validateSlovakDescriptions(translatedCars);
+
+  return translatedCars;
 }
 
 
@@ -1322,16 +1467,9 @@ Odpovedáš výhradne po slovensky.
 Vrátiš iba platný JSON.
 `;
 
-  const generationPrompt = buildCarPrompt(query);
-
-  /*
-   * Prvá požiadavka:
-   * výber troch automobilov.
-   */
-
   const generatedContent = await callAI(
     generationSystem,
-    generationPrompt,
+    buildCarPrompt(query),
     4500
   );
 
@@ -1339,16 +1477,7 @@ Vrátiš iba platný JSON.
     generatedContent
   );
 
-  /*
-   * Druhá požiadavka:
-   * jazyková korektúra a preklad.
-   */
-
-  const translatedCars = await translateCarsToSlovak(
-    cars
-  );
-
-  return translatedCars;
+  return translateCarsToSlovak(cars);
 }
 
 
@@ -1407,7 +1536,6 @@ export default async function handler(req, res) {
 
   try {
     user = await verifyUser(accessToken);
-
   } catch (error) {
     console.error(
       "CARMATCH AI: Auth request failed",
@@ -1456,15 +1584,12 @@ export default async function handler(req, res) {
   }
 
 
-  /* ----------------------------------------------------------
-     ODPOČÍTANIE VYHĽADÁVANIA
-     ---------------------------------------------------------- */
+  /* ODPOČÍTANIE VYHĽADÁVANIA */
 
   let usage;
 
   try {
     usage = await chargeSearch(accessToken);
-
   } catch (error) {
     console.error(
       "CARMATCH AI: Usage request failed",
@@ -1493,9 +1618,7 @@ export default async function handler(req, res) {
   }
 
 
-  /* ----------------------------------------------------------
-     GENEROVANIE A PREKLAD VÝSLEDKOV
-     ---------------------------------------------------------- */
+  /* GENEROVANIE A PREKLAD VÝSLEDKOV */
 
   try {
     const cars = await generateCars(query);
@@ -1513,10 +1636,6 @@ export default async function handler(req, res) {
       error.message
     );
 
-    /* --------------------------------------------------------
-       REFUND PRI CHYBE
-       -------------------------------------------------------- */
-
     let refund = {
       ok: false,
       refunded: false,
@@ -1525,7 +1644,6 @@ export default async function handler(req, res) {
 
     try {
       refund = await refundSearch(accessToken);
-
     } catch (refundError) {
       console.error(
         "CARMATCH AI: Refund request failed",
