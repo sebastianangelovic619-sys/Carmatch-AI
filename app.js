@@ -2,24 +2,27 @@
 "use strict";
 
 /* ============================================================
-   CARMATCH AI - FRONTEND v19
-   - kompatibilita s backendom api/search.js
-   - výkon v textovom aj objektovom formáte
-   - bezpečnejšie čítanie technických parametrov
-   - viacero možností načítania fotografií
-   - doplnkové hľadanie fotografií cez Wikimedia Commons
-   - zachovaná Supabase anonymná autentifikácia a API kontrakt
+   CARMATCH AI - FRONTEND v20
+   - Kompatibilita s api/search.js v22
+   - Bez falošného skóre zhody
+   - Presné názvy značiek a modelov
+   - Prísnejšie vyhľadávanie fotografií
+   - Kontrola karosérie a interiérových fotografií
+   - Slovenské zobrazovanie technických údajov
+   - Supabase anonymná autentifikácia
    ============================================================ */
 
 const CONFIG = window.CARMATCH_CONFIG || {};
 const API_ENDPOINT = CONFIG.apiEndpoint || "/api/search";
 
-const MAX_SEARCH_TEXT = 3000;
+const MAX_SEARCH_TEXT = 1000;
 const MAX_FILTER_TEXT = 500;
 const MAX_IMAGES_PER_CAR = 8;
 const IMAGE_SEARCH_TIMEOUT = 9000;
 const API_TIMEOUT = 70000;
-const WIKIMEDIA_API = "https://commons.wikimedia.org/w/api.php";
+
+const WIKIMEDIA_API =
+  "https://commons.wikimedia.org/w/api.php";
 
 let supabaseClient = null;
 let searching = false;
@@ -30,22 +33,26 @@ const imageSearchCache = new Map();
 
 
 /* ============================================================
-   BASIC HELPERS
+   ZÁKLADNÉ FUNKCIE
    ============================================================ */
 
 function $(id) {
   return document.getElementById(id);
 }
 
-
 function text(value, fallback = "") {
-  if (value === null || value === undefined) return fallback;
+  if (value === null || value === undefined) {
+    return fallback;
+  }
 
   if (typeof value === "string") {
     return value.trim() || fallback;
   }
 
-  if (typeof value === "number" || typeof value === "boolean") {
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
     return String(value);
   }
 
@@ -71,6 +78,7 @@ function text(value, fallback = "") {
     ]) {
       if (value[key] !== undefined && value[key] !== null) {
         const result = text(value[key]);
+
         if (result) return result;
       }
     }
@@ -85,18 +93,29 @@ function text(value, fallback = "") {
   return fallback;
 }
 
-
 function firstValue(...values) {
   for (const value of values) {
     if (value === null || value === undefined) continue;
-    if (typeof value === "string" && !value.trim()) continue;
-    if (typeof value === "number" && !Number.isFinite(value)) continue;
+
+    if (
+      typeof value === "string" &&
+      !value.trim()
+    ) {
+      continue;
+    }
+
+    if (
+      typeof value === "number" &&
+      !Number.isFinite(value)
+    ) {
+      continue;
+    }
+
     return value;
   }
 
   return "";
 }
-
 
 function esc(value) {
   return text(value).replace(/[&<>"']/g, char => ({
@@ -108,16 +127,19 @@ function esc(value) {
   }[char]));
 }
 
-
 function safeUrl(value) {
   try {
-    const url = new URL(String(value || "").trim());
-    return url.protocol === "https:" ? url.href : "";
+    const url = new URL(
+      String(value || "").trim()
+    );
+
+    return url.protocol === "https:"
+      ? url.href
+      : "";
   } catch (_) {
     return "";
   }
 }
-
 
 function isPlainObject(value) {
   return Boolean(value) &&
@@ -125,9 +147,19 @@ function isPlainObject(value) {
     !Array.isArray(value);
 }
 
+function normalizedSearchText(value) {
+  return text(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
 
 /* ============================================================
-   NUMBER PARSING
+   ČÍSELNÉ ÚDAJE
    ============================================================ */
 
 function parseNumber(value) {
@@ -155,12 +187,18 @@ function parseNumber(value) {
     ""
   );
 
-  // Tisícové oddeľovače a desatinná čiarka.
   if (/^\d{1,3}(?:\.\d{3})+(?:,\d+)?$/.test(raw)) {
-    raw = raw.replace(/\./g, "").replace(",", ".");
-  } else if (/^\d{1,3}(?:,\d{3})+(?:\.\d+)?$/.test(raw)) {
+    raw = raw
+      .replace(/\./g, "")
+      .replace(",", ".");
+  } else if (
+    /^\d{1,3}(?:,\d{3})+(?:\.\d+)?$/.test(raw)
+  ) {
     raw = raw.replace(/,/g, "");
-  } else if (raw.includes(",") && !raw.includes(".")) {
+  } else if (
+    raw.includes(",") &&
+    !raw.includes(".")
+  ) {
     raw = raw.replace(",", ".");
   }
 
@@ -170,9 +208,10 @@ function parseNumber(value) {
 
   const number = Number(match[0]);
 
-  return Number.isFinite(number) ? number : "";
+  return Number.isFinite(number)
+    ? number
+    : "";
 }
-
 
 function getValue(id) {
   const element = $(id);
@@ -181,7 +220,6 @@ function getValue(id) {
     ? String(element.value || "").trim()
     : "";
 }
-
 
 function getNumber(id) {
   const raw = getValue(id);
@@ -197,8 +235,7 @@ function getNumber(id) {
 
 
 /* ============================================================
-   POWER
-   BACKEND VRACIA TEXTOVÝ FORMÁT AJ OBJEKTY
+   VÝKON MOTORA
    ============================================================ */
 
 function formatPowerDisplay(power) {
@@ -220,14 +257,17 @@ function formatPowerDisplay(power) {
     );
 
     if (kwMatch) {
-      kw = Number(kwMatch[1].replace(",", "."));
+      kw = Number(
+        kwMatch[1].replace(",", ".")
+      );
     }
 
     if (hpMatch) {
-      hp = Number(hpMatch[1].replace(",", "."));
+      hp = Number(
+        hpMatch[1].replace(",", ".")
+      );
     }
 
-    // Prevod PS / ks na kW a následne na mechanické HP.
     if (
       (!Number.isFinite(kw) || kw <= 0) &&
       (!Number.isFinite(hp) || hp <= 0)
@@ -241,15 +281,19 @@ function formatPowerDisplay(power) {
           metricMatch[1].replace(",", ".")
         );
 
-        if (Number.isFinite(metric) && metric > 0) {
-          kw = Math.round(metric * 0.73549875);
+        if (
+          Number.isFinite(metric) &&
+          metric > 0
+        ) {
+          kw = Math.round(
+            metric * 0.73549875
+          );
         }
       }
     }
 
   } else if (typeof power === "number") {
 
-    // Číslo bez jednotky je nejednoznačné.
     return "Neoverené";
 
   } else if (isPlainObject(power)) {
@@ -283,7 +327,10 @@ function formatPowerDisplay(power) {
     }
   }
 
-  if (Number.isFinite(kw) && kw > 0) {
+  if (
+    Number.isFinite(kw) &&
+    kw > 0
+  ) {
     const finalHp =
       Number.isFinite(hp) && hp > 0
         ? Math.round(hp)
@@ -292,7 +339,10 @@ function formatPowerDisplay(power) {
     return `${Math.round(kw)} kW / ${finalHp} HP`;
   }
 
-  if (Number.isFinite(hp) && hp > 0) {
+  if (
+    Number.isFinite(hp) &&
+    hp > 0
+  ) {
     return `${Math.round(hp * HP_TO_KW)} kW / ${Math.round(hp)} HP`;
   }
 
@@ -301,7 +351,7 @@ function formatPowerDisplay(power) {
 
 
 /* ============================================================
-   PRICE
+   CENA
    ============================================================ */
 
 function formatPrice(price) {
@@ -331,7 +381,10 @@ function formatPrice(price) {
       price.from ? "from" : ""
     )).toLowerCase();
 
-    if (Number.isFinite(amount) && amount > 0) {
+    if (
+      Number.isFinite(amount) &&
+      amount > 0
+    ) {
       const formatted = new Intl.NumberFormat(
         "sk-SK",
         {
@@ -344,7 +397,9 @@ function formatPrice(price) {
           ? "od "
           : ""
       }${formatted}${
-        currency === "EUR" ? " €" : ` ${currency}`
+        currency === "EUR"
+          ? " €"
+          : ` ${currency}`
       }`;
     }
 
@@ -359,7 +414,10 @@ function formatPrice(price) {
   }
 
   if (typeof price === "number") {
-    if (!Number.isFinite(price) || price <= 0) {
+    if (
+      !Number.isFinite(price) ||
+      price <= 0
+    ) {
       return "Cena neoverená";
     }
 
@@ -381,7 +439,9 @@ function formatPrice(price) {
     return "Cena na vyžiadanie";
   }
 
-  if (/neoveren|nedostupn|unknown|n\/a/i.test(raw)) {
+  if (
+    /neoveren|nedostupn|unknown|n\/a/i.test(raw)
+  ) {
     return "Cena neoverená";
   }
 
@@ -424,15 +484,17 @@ function formatPrice(price) {
 
 
 /* ============================================================
-   DISPLAY HELPERS
+   ZOBRAZENIE TECHNICKÝCH ÚDAJOV
    ============================================================ */
 
-function displayText(value, fallback = "Neoverené") {
+function displayText(
+  value,
+  fallback = "Neoverené"
+) {
   const result = text(value);
 
   return result || fallback;
 }
-
 
 function displayTrunk(value) {
   if (
@@ -443,7 +505,10 @@ function displayTrunk(value) {
     return "Neoverené";
   }
 
-  if (typeof value === "number" && Number.isFinite(value)) {
+  if (
+    typeof value === "number" &&
+    Number.isFinite(value)
+  ) {
     return `${Math.round(value)} l`;
   }
 
@@ -451,7 +516,9 @@ function displayTrunk(value) {
 
   if (!raw) return "Neoverené";
 
-  if (/\b(l|litrov|liter|litres)\b/i.test(raw)) {
+  if (
+    /\b(l|litrov|liter|litres)\b/i.test(raw)
+  ) {
     return raw;
   }
 
@@ -461,7 +528,6 @@ function displayTrunk(value) {
     ? `${Math.round(number)} l`
     : raw;
 }
-
 
 function displayLength(car) {
   const raw = firstValue(
@@ -479,7 +545,10 @@ function displayLength(car) {
     return text(raw, "Neoverené");
   }
 
-  if (/mm/i.test(String(raw)) || number > 1000) {
+  if (
+    /mm/i.test(String(raw)) ||
+    number > 1000
+  ) {
     return `${Math.round(number)} mm`;
   }
 
@@ -490,7 +559,6 @@ function displayLength(car) {
   return `${number} m`;
 }
 
-
 function displaySeats(value) {
   const number = parseNumber(value);
 
@@ -499,12 +567,11 @@ function displaySeats(value) {
     number > 0 &&
     number <= 20
   ) {
-    return `${Math.round(number)}`;
+    return String(Math.round(number));
   }
 
   return text(value, "Neoverené");
 }
-
 
 function getCarPower(car) {
   return firstValue(
@@ -516,7 +583,6 @@ function getCarPower(car) {
     car?.technicalData?.power
   );
 }
-
 
 function getCarConsumption(car) {
   return firstValue(
@@ -530,7 +596,6 @@ function getCarConsumption(car) {
   );
 }
 
-
 function getCarEngine(car) {
   return firstValue(
     car?.engine,
@@ -543,7 +608,7 @@ function getCarEngine(car) {
 
 
 /* ============================================================
-   STATUS
+   STATUS A POČÍTADLO
    ============================================================ */
 
 function setStatus(message = "", type = "") {
@@ -551,10 +616,11 @@ function setStatus(message = "", type = "") {
 
   if (!el) return;
 
-  el.className = `status${type ? ` ${type}` : ""}`;
+  el.className =
+    `status${type ? ` ${type}` : ""}`;
+
   el.textContent = message;
 }
-
 
 function updateCharCount() {
   const input = $("aiRequest");
@@ -568,7 +634,7 @@ function updateCharCount() {
 
 
 /* ============================================================
-   SEARCH BUTTON
+   TLAČIDLO VYHĽADÁVANIA
    ============================================================ */
 
 function setButtonBusy(isBusy) {
@@ -595,17 +661,21 @@ function setButtonBusy(isBusy) {
   }
 
   if (arrow) {
-    arrow.textContent = isBusy ? "•••" : "→";
+    arrow.textContent = isBusy
+      ? "•••"
+      : "→";
   }
 
   if (oldIcon) {
-    oldIcon.textContent = isBusy ? "•" : "⌕";
+    oldIcon.textContent = isBusy
+      ? "•"
+      : "⌕";
   }
 }
 
 
 /* ============================================================
-   PAYLOAD
+   FILTRE A PAYLOAD
    ============================================================ */
 
 function buildPayload() {
@@ -633,7 +703,6 @@ function buildPayload() {
     }
   };
 }
-
 
 function hasSearchInput(payload) {
   return Boolean(payload.naturalLanguage) ||
@@ -733,10 +802,13 @@ async function getAccessToken() {
   }
 
   if (signIn?.error) {
-    throw new Error(`Supabase: ${signIn.error.message}`);
+    throw new Error(
+      `Supabase: ${signIn.error.message}`
+    );
   }
 
-  const token = signIn?.data?.session?.access_token;
+  const token =
+    signIn?.data?.session?.access_token;
 
   if (!token) {
     throw new Error(
@@ -782,13 +854,11 @@ async function postSearch(payload, authRetry = false) {
       API_ENDPOINT,
       {
         method: "POST",
-
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${token}`,
           "Accept": "application/json"
         },
-
         body: JSON.stringify(payload),
         cache: "no-store",
         signal: controller.signal
@@ -796,7 +866,6 @@ async function postSearch(payload, authRetry = false) {
     );
 
   } catch (error) {
-
     if (error?.name === "AbortError") {
       throw Object.assign(
         new Error(
@@ -818,9 +887,7 @@ async function postSearch(payload, authRetry = false) {
     );
 
   } finally {
-
     window.clearTimeout(timeoutId);
-
   }
 
   const raw = await response.text();
@@ -852,9 +919,7 @@ async function postSearch(payload, authRetry = false) {
     );
 
   if (invalidSessionResponse) {
-
     if (!authRetry) {
-
       const client = await ensureSupabaseClient();
 
       try {
@@ -902,7 +967,7 @@ async function postSearch(payload, authRetry = false) {
       if (!freshToken) {
         throw Object.assign(
           new Error(
-            "Supabase nevytvoril novú reláciu. Skontroluj, či je anonymné prihlasovanie zapnuté."
+            "Supabase nevytvoril novú reláciu. Skontroluj anonymné prihlasovanie."
           ),
           {
             code: "AUTH_REFRESH_FAILED"
@@ -915,7 +980,7 @@ async function postSearch(payload, authRetry = false) {
 
     throw Object.assign(
       new Error(
-        "Server odmietol aj novú Supabase reláciu. Skontroluj SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY a SUPABASE_ANON_KEY vo Verceli; musia patriť k rovnakému projektu."
+        "Server odmietol aj novú Supabase reláciu. Skontroluj nastavenie Supabase vo Verceli."
       ),
       {
         status: response.status,
@@ -939,16 +1004,14 @@ async function postSearch(payload, authRetry = false) {
     throw error;
   }
 
-  // Podpora oboch odpovedí:
-  // {cars:[...]} aj {data:{cars:[...]}}.
-
   const result = Array.isArray(data?.cars)
     ? data
     : (
         Array.isArray(data?.data?.cars)
           ? {
               ...data.data,
-              remaining: data.remaining ?? data.data.remaining
+              remaining:
+                data.remaining ?? data.data.remaining
             }
           : data
       );
@@ -959,7 +1022,7 @@ async function postSearch(payload, authRetry = false) {
   ) {
     throw Object.assign(
       new Error(
-        "Server nevrátil presne 3 vozidlá."
+        "Server nevrátil presne tri vozidlá."
       ),
       {
         code: "BAD_RESULT",
@@ -973,7 +1036,7 @@ async function postSearch(payload, authRetry = false) {
 
 
 /* ============================================================
-   IMAGE URL HANDLING
+   SPRACOVANIE FOTOGRAFIÍ
    ============================================================ */
 
 function imageUrls(car) {
@@ -1022,7 +1085,6 @@ function imageUrls(car) {
   return urls;
 }
 
-
 function sourceUrl(car) {
   for (const value of [
     car?.photoSource,
@@ -1059,7 +1121,6 @@ function sourceUrl(car) {
   return "";
 }
 
-
 function imagePlaceholder(message, index) {
   return `
     <div
@@ -1070,7 +1131,6 @@ function imagePlaceholder(message, index) {
     </div>
   `;
 }
-
 
 function renderImage(car, index) {
   const urls = imageUrls(car);
@@ -1105,7 +1165,6 @@ function renderImage(car, index) {
   `;
 }
 
-
 function setPhotoSourceLinks(card, source) {
   const url = safeUrl(source);
 
@@ -1124,7 +1183,7 @@ function setPhotoSourceLinks(card, source) {
     a.href = url;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
-    a.textContent = "Zdroj foto";
+    a.textContent = "Zdroj fotografie";
     a.dataset.dynamicPhotoSource = "true";
 
     actions.appendChild(a);
@@ -1139,16 +1198,17 @@ function setPhotoSourceLinks(card, source) {
     a.href = url;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
-    a.textContent = "Foto";
+    a.textContent = "Fotografia";
     a.dataset.dynamicPhotoSource = "true";
 
     links.appendChild(a);
   }
 }
 
-
 function setCarImage(card, candidates) {
-  const wrap = card?.querySelector(".carmatch-photo-wrap");
+  const wrap = card?.querySelector(
+    ".carmatch-photo-wrap"
+  );
 
   if (
     !wrap ||
@@ -1161,10 +1221,14 @@ function setCarImage(card, candidates) {
   const clean = candidates
     .map(item => ({
       url: safeUrl(
-        typeof item === "string" ? item : item?.url
+        typeof item === "string"
+          ? item
+          : item?.url
       ),
       source: safeUrl(
-        typeof item === "object" ? item?.source : ""
+        typeof item === "object"
+          ? item?.source
+          : ""
       )
     }))
     .filter(item => item.url)
@@ -1184,11 +1248,14 @@ function setCarImage(card, candidates) {
   img.loading = "lazy";
   img.decoding = "async";
   img.referrerPolicy = "no-referrer";
+
   img.dataset.candidates = JSON.stringify(
     clean.map(item => item.url)
   );
+
   img.dataset.imageIndex = "0";
-  img.dataset.carIndex = card.dataset.carIndex || "0";
+  img.dataset.carIndex =
+    card.dataset.carIndex || "0";
 
   img.onerror = function () {
     window.carmatchImageError(this);
@@ -1199,32 +1266,54 @@ function setCarImage(card, candidates) {
   wrap.appendChild(img);
 
   if (clean[0].source) {
-    setPhotoSourceLinks(card, clean[0].source);
+    setPhotoSourceLinks(
+      card,
+      clean[0].source
+    );
   }
 }
 
 
 /* ============================================================
-   WIKIMEDIA IMAGE FALLBACK
+   PRÍSNE ODMIETANIE NESPRÁVNYCH FOTOGRAFIÍ
    ============================================================ */
 
-function normalizedSearchText(value) {
-  return text(value)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
-}
-
-
-function imageTitleIsRejected(title) {
+function imageTitleIsRejected(title, car = {}) {
   const value = normalizedSearchText(title);
 
-  return /\b(logo|emblem|badge|interior|dashboard|engine|steering|wheel|rim|brochure|manual|diagram|drawing|illustration|render|toy|model kit|scale model|miniature|poster|screenshot|crash|accident|parts|spare part|technical drawing)\b/.test(value);
+  const rejected =
+    /\b(logo|emblem|badge|interior|dashboard|cockpit|steering|brochure|manual|diagram|drawing|illustration|render|toy|model kit|scale model|miniature|poster|screenshot|crash|accident|spare part|technical drawing)\b/;
+
+  if (rejected.test(value)) {
+    return true;
+  }
+
+  const body = normalizedSearchText(car?.body);
+
+  if (
+    body === "suv" ||
+    body.includes("crossover")
+  ) {
+    if (
+      /\b(wagon|estate|touring|avant|sedan|saloon|hatchback|limousine|coupe|cabriolet|convertible)\b/.test(value)
+    ) {
+      return true;
+    }
+  }
+
+  if (
+    /\b(interior|cockpit|dashboard|salon interior)\b/.test(value)
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
+
+/* ============================================================
+   PRESNÁ ZHODA ZNAČKY A MODELU PRI FOTOGRAFII
+   ============================================================ */
 
 function modelTokens(car) {
   const model = normalizedSearchText(
@@ -1240,7 +1329,8 @@ function modelTokens(car) {
     "new",
     "all",
     "series",
-    "generation"
+    "generation",
+    "vehicle"
   ]);
 
   return model
@@ -1251,13 +1341,13 @@ function modelTokens(car) {
     );
 }
 
-
 function scoreImageTitle(title, car) {
-  const normalizedTitle = normalizedSearchText(title);
+  const normalizedTitle =
+    normalizedSearchText(title);
 
   if (
     !normalizedTitle ||
-    imageTitleIsRejected(title)
+    imageTitleIsRejected(title, car)
   ) {
     return -1;
   }
@@ -1268,25 +1358,37 @@ function scoreImageTitle(title, car) {
     .split(" ")
     .filter(token => token.length >= 3);
 
-  const model = normalizedSearchText(car?.model);
   const tokens = modelTokens(car);
 
-  if (!tokens.length) return -1;
-
-  const modelHits = tokens.filter(
-    token => normalizedTitle.includes(token)
-  ).length;
-
-  if (
-    modelHits === 0 &&
-    !(model && normalizedTitle.includes(model))
-  ) {
+  if (!brandTokens.length || !tokens.length) {
     return -1;
   }
 
+  const titleTokens = new Set(
+    normalizedTitle.split(" ")
+  );
+
+  // Aspoň jedna časť značky musí byť presne v názve súboru.
   const brandHits = brandTokens.filter(
-    token => normalizedTitle.includes(token)
+    token => titleTokens.has(token)
   ).length;
+
+  if (brandHits === 0) {
+    return -1;
+  }
+
+  // Všetky významné časti modelu musia byť v názve súboru.
+  const modelHits = tokens.filter(
+    token => titleTokens.has(token)
+  ).length;
+
+  if (modelHits !== tokens.length) {
+    return -1;
+  }
+
+  let score =
+    brandHits * 5 +
+    modelHits * 10;
 
   const generationTokens = normalizedSearchText(
     car?.generation
@@ -1295,29 +1397,24 @@ function scoreImageTitle(title, car) {
     .filter(token => token.length >= 3);
 
   const generationHits = generationTokens.filter(
-    token => normalizedTitle.includes(token)
+    token => titleTokens.has(token)
   ).length;
 
-  let score =
-    modelHits * 5 +
-    brandHits * 3 +
-    generationHits * 2;
+  score += generationHits * 2;
 
-  if (model && normalizedTitle.includes(model)) {
-    score += 5;
-  }
-
-  if (/\b(car|automobile|vehicle|front|exterior|road|fahrzeug)\b/.test(normalizedTitle)) {
-    score += 1;
-  }
-
-  if (tokens.length >= 2 && modelHits < 1) {
-    return -1;
+  if (
+    /\b(exterior|front|side|rear|road|fahrzeug|automobile)\b/.test(normalizedTitle)
+  ) {
+    score += 2;
   }
 
   return score;
 }
 
+
+/* ============================================================
+   VYHĽADÁVANIE FOTOGRAFIÍ NA WIKIMEDIA
+   ============================================================ */
 
 async function fetchWithTimeout(
   url,
@@ -1348,16 +1445,16 @@ async function fetchWithTimeout(
   }
 }
 
-
 async function searchCommonsForCar(car) {
   const brand = text(car?.brand);
-  const model = text(car?.model || car?.name);
+  const model = text(car?.model);
   const generation = text(car?.generation);
+  const body = text(car?.body);
 
-  if (!model) return [];
+  if (!brand || !model) return [];
 
   const cacheKey = normalizedSearchText(
-    `${brand} ${model} ${generation}`
+    `${brand} ${model} ${generation} ${body}`
   );
 
   if (imageSearchCache.has(cacheKey)) {
@@ -1365,32 +1462,15 @@ async function searchCommonsForCar(car) {
   }
 
   const queries = [
-    [
-      brand,
-      model,
-      generation,
-      "car"
-    ].filter(Boolean).join(" "),
-
-    [
-      brand,
-      model,
-      "car exterior"
-    ].filter(Boolean).join(" "),
-
-    [
-      model,
-      brand,
-      "automobile"
-    ].filter(Boolean).join(" ")
-  ];
+    `${brand} ${model} ${generation} ${body} exterior`,
+    `${brand} ${model} ${body} car`,
+    `${brand} ${model} automobile exterior`
+  ]
+    .map(q => q.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
 
   const uniqueQueries = [
-    ...new Set(
-      queries
-        .map(q => q.trim())
-        .filter(Boolean)
-    )
+    ...new Set(queries)
   ];
 
   const all = [];
@@ -1402,7 +1482,7 @@ async function searchCommonsForCar(car) {
       generator: "search",
       gsrsearch: query,
       gsrnamespace: "6",
-      gsrlimit: "18",
+      gsrlimit: "20",
       prop: "imageinfo",
       iiprop: "url",
       iiurlwidth: "1400",
@@ -1434,7 +1514,7 @@ async function searchCommonsForCar(car) {
           car
         );
 
-        if (score < 5) continue;
+        if (score < 15) continue;
 
         const info = page?.imageinfo?.[0] || {};
 
@@ -1456,7 +1536,8 @@ async function searchCommonsForCar(car) {
         all.push({
           url,
           source: safeUrl(
-            info.descriptionurl || page?.canonicalurl
+            info.descriptionurl ||
+            page?.canonicalurl
           ),
           title,
           score
@@ -1464,15 +1545,10 @@ async function searchCommonsForCar(car) {
       }
 
     } catch (error) {
-
-      // Zlyhanie doplnkového zdroja nesmie zrušiť
-      // hlavné AI vyhľadávanie.
-
       console.warn(
         "CARMATCH AI: Wikimedia fallback failed",
         error?.message || error
       );
-
     }
 
     if (all.length >= 4) break;
@@ -1480,7 +1556,10 @@ async function searchCommonsForCar(car) {
 
   all.sort((a, b) => b.score - a.score);
 
-  const result = all.slice(0, 4);
+  const result = all.slice(
+    0,
+    MAX_IMAGES_PER_CAR
+  );
 
   imageSearchCache.set(cacheKey, result);
 
@@ -1516,16 +1595,17 @@ async function fillMissingImage(index) {
 
   if (placeholder) {
     placeholder.textContent =
-      "Hľadám fotografiu v ďalšom obrazovom zdroji…";
+      "Hľadám presnú fotografiu modelu…";
   }
 
   const candidates = await searchCommonsForCar(car);
 
   if (candidates.length) {
     setCarImage(card, candidates);
+
   } else if (placeholder) {
     placeholder.textContent =
-      "Nepodarilo sa nájsť dostatočne presvedčivú fotografiu tohto modelu.";
+      "Nepodarilo sa nájsť dostatočne presvedčivú fotografiu. Nechceme zobraziť nesprávne auto.";
   }
 }
 
@@ -1558,9 +1638,10 @@ window.carmatchImageError = function (img) {
 
   img.style.display = "none";
 
-  const placeholder = img.parentElement?.querySelector(
-    ".photo-placeholder"
-  );
+  const placeholder =
+    img.parentElement?.querySelector(
+      ".photo-placeholder"
+    );
 
   if (placeholder) {
     placeholder.hidden = false;
@@ -1571,13 +1652,12 @@ window.carmatchImageError = function (img) {
   ).catch(() => {});
 };
 
-
 window.carmatchNextImage =
   window.carmatchImageError;
 
 
 /* ============================================================
-   LIST HELPERS
+   ZOZNAMY VÝHOD A NEVÝHOD
    ============================================================ */
 
 function renderList(
@@ -1602,7 +1682,7 @@ function renderList(
 
 
 /* ============================================================
-   CAR CARD
+   KARTA AUTOMOBILU
    ============================================================ */
 
 function renderCard(car, index) {
@@ -1610,13 +1690,19 @@ function renderCard(car, index) {
     ? car
     : {};
 
-  const score = Math.max(
-    0,
-    Math.min(
-      100,
-      Math.round(Number(safeCar.score) || 0)
-    )
-  );
+  const scoreValue = Number(safeCar.score);
+
+  const hasScore =
+    safeCar.score !== null &&
+    safeCar.score !== undefined &&
+    safeCar.score !== "" &&
+    Number.isFinite(scoreValue) &&
+    scoreValue >= 0 &&
+    scoreValue <= 100;
+
+  const score = hasScore
+    ? Math.round(scoreValue)
+    : null;
 
   const imageSource = sourceUrl(safeCar);
 
@@ -1692,9 +1778,7 @@ function renderCard(car, index) {
     getCarEngine(safeCar)
   );
 
-  const trunk = displayTrunk(
-    trunkValue
-  );
+  const trunk = displayTrunk(trunkValue);
 
   return `
     <article
@@ -1710,7 +1794,7 @@ function renderCard(car, index) {
       <div class="card-body">
 
         <div class="card-rank">
-          #${index + 1} najlepšia zhoda
+          Odporúčanie č. ${index + 1}
         </div>
 
         <h3 class="card-title">
@@ -1745,9 +1829,15 @@ function renderCard(car, index) {
 
         </div>
 
-        <div class="score-pill">
-          Zhoda ${score}%
-        </div>
+        ${
+          hasScore
+            ? `
+              <div class="score-pill">
+                Zhoda ${score}%
+              </div>
+            `
+            : ""
+        }
 
         <div class="spec-grid">
 
@@ -1905,7 +1995,7 @@ function renderCard(car, index) {
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  Zdroj foto
+                  Zdroj fotografie
                 </a>
               `
               : ""
@@ -1951,7 +2041,7 @@ function renderCard(car, index) {
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  Foto
+                  Fotografia
                 </a>
               `
               : ""
@@ -1967,7 +2057,7 @@ function renderCard(car, index) {
 
 
 /* ============================================================
-   RESULTS
+   ZOBRAZENIE VÝSLEDKOV
    ============================================================ */
 
 function renderResults(data) {
@@ -1983,7 +2073,9 @@ function renderResults(data) {
   imageSearchCache.clear();
 
   results.innerHTML = currentCars
-    .map((car, index) => renderCard(car, index))
+    .map((car, index) =>
+      renderCard(car, index)
+    )
     .join("");
 
   section.hidden = false;
@@ -1996,9 +2088,6 @@ function renderResults(data) {
   }
 
   updateUsage(data);
-
-  // Ak backend neposlal fotografiu,
-  // frontend skúsi doplnkový obrazový zdroj.
 
   currentCars.forEach((car, index) => {
     if (!imageUrls(car).length) {
@@ -2016,11 +2105,21 @@ function renderResults(data) {
 
 
 /* ============================================================
-   USAGE
+   DENNÝ LIMIT
    ============================================================ */
 
 function updateUsage(data) {
-  const remaining = Number(data?.remaining);
+  const rawRemaining = data?.remaining;
+
+  if (
+    rawRemaining === null ||
+    rawRemaining === undefined ||
+    rawRemaining === ""
+  ) {
+    return;
+  }
+
+  const remaining = Number(rawRemaining);
 
   if (!Number.isFinite(remaining)) return;
 
@@ -2056,7 +2155,7 @@ function updateUsage(data) {
 
 
 /* ============================================================
-   ERROR
+   CHYBOVÉ HLÁSENIA
    ============================================================ */
 
 function renderError(error) {
@@ -2100,7 +2199,7 @@ function renderError(error) {
 
 
 /* ============================================================
-   SUCCESS FEEDBACK
+   SPÄTNÁ VÄZBA
    ============================================================ */
 
 function successFeedback() {
@@ -2118,7 +2217,6 @@ function successFeedback() {
     if (!AudioContextClass) return;
 
     const ctx = new AudioContextClass();
-
     const now = ctx.currentTime;
 
     const osc = ctx.createOscillator();
@@ -2157,7 +2255,7 @@ function successFeedback() {
 
 
 /* ============================================================
-   MAIN SEARCH
+   HLAVNÉ VYHĽADÁVANIE
    ============================================================ */
 
 async function findCars() {
@@ -2181,7 +2279,7 @@ async function findCars() {
   setButtonBusy(true);
 
   setStatus(
-    "Hľadám aktuálne modely, ceny, WLTP a konfigurátory…"
+    "Hľadám vhodné modely a technické údaje…"
   );
 
   const results = $("results");
@@ -2236,7 +2334,7 @@ async function findCars() {
 
     setStatus(
       error?.code === "FETCH_FAILED"
-        ? "Server sa neozval. Skús to znova; vyhľadávanie sa nemuselo započítať do limitu."
+        ? "Server sa neozval. Vyhľadávanie sa nemuselo započítať do limitu."
         : text(
             error?.message,
             "Vyhľadávanie sa nepodarilo dokončiť."
@@ -2253,7 +2351,7 @@ async function findCars() {
 
 
 /* ============================================================
-   EXAMPLE CHIPS
+   UKÁŽKOVÉ POŽIADAVKY
    ============================================================ */
 
 function setupExampleChips() {
@@ -2262,7 +2360,6 @@ function setupExampleChips() {
   document
     .querySelectorAll(".example-chip")
     .forEach(chip => {
-
       chip.addEventListener("click", () => {
         if (!input) return;
 
@@ -2273,20 +2370,18 @@ function setupExampleChips() {
 
         input.focus();
       });
-
     });
 }
 
 
 /* ============================================================
-   FILTERS
+   FILTRE
    ============================================================ */
 
 function setupFilters() {
   document
     .querySelectorAll(".filters-details")
     .forEach(details => {
-
       details.addEventListener("toggle", () => {
         const arrow = details.querySelector(
           ".summary-arrow"
@@ -2297,13 +2392,12 @@ function setupFilters() {
             details.open ? "−" : "+";
         }
       });
-
     });
 }
 
 
 /* ============================================================
-   SETUP
+   INICIALIZÁCIA
    ============================================================ */
 
 function setup() {
@@ -2322,7 +2416,6 @@ function setup() {
   input?.addEventListener(
     "keydown",
     event => {
-
       if (
         (event.ctrlKey || event.metaKey) &&
         event.key === "Enter"
@@ -2330,7 +2423,6 @@ function setup() {
         event.preventDefault();
         findCars();
       }
-
     }
   );
 
@@ -2345,7 +2437,6 @@ function setup() {
   document
     .querySelectorAll("form")
     .forEach(form => {
-
       if (button && form.contains(button)) {
         form.addEventListener(
           "submit",
@@ -2355,23 +2446,18 @@ function setup() {
           }
         );
       }
-
     });
 
   setupExampleChips();
-
   setupFilters();
-
   updateCharCount();
 
-  setStatus(
-    "Pripravené na vyhľadávanie."
-  );
+  setStatus("Pripravené na vyhľadávanie.");
 }
 
 
 /* ============================================================
-   START
+   SPUSTENIE
    ============================================================ */
 
 if (document.readyState === "loading") {
@@ -2388,7 +2474,7 @@ if (document.readyState === "loading") {
 
 
 /* ============================================================
-   GLOBAL
+   GLOBÁLNE FUNKCIE
    ============================================================ */
 
 window.findCars = findCars;
