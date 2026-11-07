@@ -1,7 +1,8 @@
+
 "use strict";
 
 /* ============================================================
-   CARMATCH AI - BACKEND v25
+   CARMATCH AI - BACKEND v26
 
    OPRAVY:
    1. AI používa ID zdrojov S1, S2, S3 namiesto URL.
@@ -9,9 +10,12 @@
    3. Groq používa openai/gpt-oss-120b.
    4. Znížený maximálny počet výstupných tokenov.
    5. Odstránený samostatný AI prekladový request.
-   6. Overovanie citácií je tolerantnejšie k formátovaniu,
-      ale stále kontroluje zhodu s obsahom zdroja.
-   7. Zachované Supabase, Tavily, filtre, limit a refund.
+   6. Overovanie citácií kontroluje zhodu s obsahom zdroja.
+   7. Opravené rozpoznávanie cien v EUR.
+   8. Groq používa max_completion_tokens.
+   9. Groq používa reasoning_effort: low.
+   10. Groq nevracia interné uvažovanie.
+   11. Zachované Supabase, Tavily, filtre, limit a refund.
 
    Vercel premenné:
    SUPABASE_URL
@@ -628,15 +632,6 @@ function isOfficialSourceForBrand(url, brand) {
    SKRÁTENIE TEXTU ZDROJOV PRE AI
    ============================================================ */
 
-/*
-  Dôležité:
-  Plný obsah stránky zostáva na serveri na kontrolu citácií.
-  AI dostane iba krátky výber relevantných viet.
-
-  Takto sa vyhneme posielaniu desiatok tisíc tokenov
-  do Groq modelu.
-*/
-
 function compactSourceText(source) {
   const fullText = [
     source.content,
@@ -820,11 +815,6 @@ async function searchOfficialSources(query, constraints) {
     throw error;
   }
 
-  /*
-    AI nikdy nedostane URL.
-    Dostane iba ID zdroja a krátky text.
-  */
-
   return unique.map((item, index) => ({
     id: `S${index + 1}`,
     title: cleanString(item.title),
@@ -871,7 +861,6 @@ function quoteMatchesSource(quote, source) {
 
   if (quoteTokens.length < 3) return false;
 
-  // Čísla musia byť prítomné v zdroji.
   const numericTokens = quoteTokens.filter(
     token => /^\d+(?:[.,]\d+)?$/.test(token)
   );
@@ -882,7 +871,6 @@ function quoteMatchesSource(quote, source) {
     }
   }
 
-  // Kontrola slov v rovnakom poradí.
   let sourceIndex = 0;
   let matched = 0;
 
@@ -953,17 +941,33 @@ function findEvidenceSource(evidence, sources, brand) {
    ČÍTANIE ČÍSEL Z DÔKAZOV
    ============================================================ */
 
+/*
+  OPRAVA v26:
+  Pôvodný regulárny výraz používal \b aj za symbolom €.
+  Symbol € nie je znak slova, preto tam hranica slova
+  nemusela fungovať správne.
+
+  Nová verzia rozpoznáva:
+  39 990 €
+  39.990 EUR
+  39 990,00 €
+  €39 990
+*/
+
 function parseMoneyAmounts(value) {
-  const raw = String(value || "");
-  const amounts = [];
+  const raw = String(value || "")
+    .replace(/[\u00A0\u202F]/g, " ")
+    .replace(/\s+/g, " ");
 
   const regex =
-    /(?:€\s*)?(\d{1,3}(?:[\s.]\d{3})+|\d{4,7})(?:[,.]\d{1,2})?\s*(?:€|EUR)\b/gi;
+    /(?:€\s*)?(\d{1,3}(?:[\s.]\d{3})+|\d{4,7})([,.]\d{1,2})?\s*(?:€|EUR)(?![A-Z])/gi;
 
+  const amounts = [];
   let match;
 
   while ((match = regex.exec(raw)) !== null) {
-    const amount = parseLocalizedNumber(match[1]);
+    const numberText = `${match[1]}${match[2] || ""}`;
+    const amount = parseLocalizedNumber(numberText);
 
     if (
       amount !== null &&
@@ -1029,7 +1033,7 @@ function parseLengthMm(value) {
   if (mmMatch) return Number(mmMatch[1]);
 
   const meterMatch = raw.match(
-    /(\d(?:[.,]\d{1,3})?)\s*m(?:eter|etre|eters|etres)?\b/i
+    /(\d(?:[.,]\d{1,3})?)\s*m(?:eter|etre|meters|etres)?\b/i
   );
 
   if (meterMatch) {
@@ -1891,6 +1895,11 @@ function getProviders() {
   return providers;
 }
 
+
+/* ============================================================
+   VOLANIE AI PROVIDEROV
+   ============================================================ */
+
 async function callProvider(
   provider,
   systemPrompt,
@@ -1909,21 +1918,30 @@ async function callProvider(
     headers["X-Title"] = "CARMATCH AI";
   }
 
+  const requestBody = {
+    model: provider.model,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt }
+    ],
+    temperature: 0.1,
+    response_format: { type: "json_object" }
+  };
+
+  if (provider.name === "Groq") {
+    requestBody.max_completion_tokens = AI_MAX_TOKENS;
+    requestBody.reasoning_effort = "low";
+    requestBody.include_reasoning = false;
+  } else {
+    requestBody.max_tokens = AI_MAX_TOKENS;
+  }
+
   const response = await fetchWithTimeout(
     provider.url,
     {
       method: "POST",
       headers,
-      body: JSON.stringify({
-        model: provider.model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
-        temperature: 0.1,
-        max_tokens: AI_MAX_TOKENS,
-        response_format: { type: "json_object" }
-      })
+      body: JSON.stringify(requestBody)
     },
     AI_TIMEOUT
   );
@@ -2192,7 +2210,6 @@ Všetky textové opisy píšeš po slovensky.
         constraints
       );
 
-      // Slovenská lokalizácia bez druhého AI volania.
       for (const car of cars) {
         car.engine = localizeEngine(car.engine);
         car.consumptionWltp = localizeConsumption(car.consumptionWltp);
