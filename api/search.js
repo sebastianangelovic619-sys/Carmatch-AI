@@ -1,12 +1,12 @@
 "use strict";
 
 /* ============================================================
-   CARMATCH AI — BACKEND v31
+   CARMATCH AI — BACKEND v32
    Kompatibilita: frontend app.js v20
    Endpoint: POST /api/search
    package.json: { "type": "module" }
 
-   OPRAVY v31:
+   OPRAVY v32:
    - Groq GPT-OSS používa prísny JSON Schema režim (strict: true).
    - Kandidátsky a finálny výstup majú samostatné validné schémy.
    - GPT-OSS používa reasoning_effort low na zníženie TPM spotreby.
@@ -14,16 +14,20 @@
      Nemotron 3.5 Super VL free; staré nefunkčné modely sú odstránené.
    - OpenRouter vyžaduje endpoint podporujúci odoslané parametre.
    - Lepšie spracovanie prázdnych, odmietnutých a skrátených odpovedí.
+   - Opravené aliasy značiek, napr. Mercedes-Benz aj Mercedes.
+   - Rozšírené a zoradené zdroje; pri chýbajúcej identite sa vykoná doplňujúci rešerš.
+   - Generácia a prvý modelový/výrobný rok sa deterministicky odvodia iba z konkrétneho dôkazu.
    - Zdroje, generácia, modelový rok a fotografie sa kontrolujú oddelene.
-   - Fotografia musí zodpovedať značke, modelu, generácii aj modelovému roku.
+   - Fotografia musí zodpovedať značke, modelu a presnému modelovému roku.
    - Zachováva Supabase kvótu/refund, presne 3 autá, filtre a zdroje.
    ============================================================ */
 
 const DAILY_LIMIT = 5;
 const MAX_QUERY_LENGTH = 1000;
-const MAX_SOURCES_PER_CAR = 4;
-const MAX_TOTAL_SOURCES = 16;
-const MAX_SOURCE_SNIPPET = 520;
+const MAX_SOURCES_PER_CAR = 6;
+const MAX_TOTAL_SOURCES = 36;
+const MAX_SOURCE_SNIPPET = 700;
+const MAX_IDENTITY_RESEARCH_SOURCES_PER_CAR = 2;
 const AUTH_TIMEOUT_MS = 8000;
 const RPC_TIMEOUT_MS = 8000;
 const SEARCH_TIMEOUT_MS = 9000;
@@ -794,32 +798,98 @@ function modelResearchQueries(candidate) {
   const model = cleanString(candidate.model, 100);
   const currentYear = new Date().getUTCFullYear();
   const nextYear = currentYear + 1;
+
+  // Oddelené otázky hľadajú generáciu, modelový/produkčný rok a konkrétny
+  // typový kód. Vyhľadávač tak nedostáva iba všeobecné otázky na špecifikácie.
+  const aliases = brandAliases(brand);
+  const shortBrand = aliases.length > 1 ? aliases[1] : brand;
   return [
-    `"${brand} ${model}" "model year ${currentYear}" OR "MY${currentYear}" official Europe`,
-    `"${brand} ${model}" generation code current generation launch year official manufacturer`,
-    `"${brand} ${model}" ${currentYear} ${nextYear} model year technical specifications Europe official`
+    `"${brand}" "${model}" current generation generation code chassis code Europe`,
+    `"${shortBrand}" "${model}" generation code chassis code production period ${currentYear}`,
+    `"${brand}" "${model}" "${currentYear}" "${nextYear}" model years production period`,
+    `"${brand}" "${model}" model year ${currentYear} manufacturer Europe specifications`
   ];
+}
+
+function brandAliases(brand) {
+  const key = normalized(brand);
+  const aliases = {
+    "mercedes benz": ["mercedes benz", "mercedes"],
+    "land rover": ["land rover", "landrover"],
+    "alfa romeo": ["alfa romeo"],
+    "aston martin": ["aston martin"],
+    "rolls royce": ["rolls royce", "rolls-royce"],
+    "volkswagen": ["volkswagen", "vw"],
+    "vw": ["vw", "volkswagen"],
+    "ds automobiles": ["ds automobiles", "ds"],
+    "citroen": ["citroen", "citroën"],
+    "škoda": ["skoda", "škoda"],
+    "skoda": ["skoda", "škoda"]
+  };
+  return aliases[key] || [key];
+}
+
+function phrasePresent(haystack, phrase) {
+  const hay = ` ${normalized(haystack)} `;
+  const needle = ` ${normalized(phrase)} `;
+  return needle.trim().length > 2 && hay.includes(needle);
+}
+
+function brandMatchesText(brand, text) {
+  return brandAliases(brand).some(alias => phrasePresent(text, alias));
+}
+
+function vehicleMatchesSource(car, source) {
+  const haystack = `${source.title || ""} ${source.snippet || ""} ${source.url || ""}`;
+  const modelTokens = tokens(car.model);
+  return brandMatchesText(car.brand, haystack) &&
+    modelTokens.length > 0 &&
+    modelTokens.every(token => normalized(haystack).includes(token));
+}
+
+function sourceIdentityScore(car, source) {
+  const title = `${source.title || ""}`;
+  const body = `${source.title || ""} ${source.snippet || ""}`;
+  const titleNorm = normalized(title);
+  const bodyNorm = normalized(body);
+  let score = 0;
+  if (brandMatchesText(car.brand, title)) score += 5;
+  else if (brandMatchesText(car.brand, body)) score += 2;
+  for (const token of tokens(car.model)) {
+    if (titleNorm.includes(token)) score += 5;
+    else if (bodyNorm.includes(token)) score += 2;
+  }
+  if (/\b(?:x\d{2,4}|w\d{2,4}|g\d{2,4}|f\d{2,4})\b/i.test(body)) score += 3;
+  if (/generation|generat|generaci|generatie|klasse\s+(?:ii|iii|iv)|\b(?:1st|2nd|3rd|4th)\b/i.test(body)) score += 3;
+  if (/model\s*year|model-year|modeljaar|model years|production period|productieperiode|looptijd|20\d{2}\s*[-–]\s*(?:present|heden)/i.test(body)) score += 3;
+  try {
+    const host = new URL(source.url).hostname.toLowerCase();
+    if (/mercedes-benz|bmw|audi|volkswagen|toyota|ford|porsche|hyundai|kia|skoda|renault|stellantis|volvocars/.test(host)) score += 2;
+  } catch (_) {}
+  return score;
 }
 
 async function collectModelSources(candidates, firstSourceId = 1) {
   const results = await Promise.all(candidates.map(async candidate => {
     const queries = modelResearchQueries(candidate);
-    const pair = await Promise.all(queries.map(query =>
+    const groups = await Promise.all(queries.map(query =>
       searchSources(query).catch(error => {
         console.warn(`CARMATCH AI: model source search failed for ${candidate.brand} ${candidate.model}:`, error.message);
         return [];
       })
     ));
 
-    const seen = new Set();
-    const rows = [];
-    for (const item of pair.flat()) {
-      if (seen.has(item.url)) continue;
-      seen.add(item.url);
-      rows.push(item);
-      if (rows.length >= MAX_SOURCES_PER_CAR) break;
+    const byUrl = new Map();
+    for (const item of groups.flat()) {
+      if (!item?.url) continue;
+      const old = byUrl.get(item.url);
+      if (!old || (item.snippet || "").length > (old.snippet || "").length) byUrl.set(item.url, item);
     }
-    return rows;
+
+    return [...byUrl.values()]
+      .filter(item => vehicleMatchesSource(candidate, item))
+      .sort((a, b) => sourceIdentityScore(candidate, b) - sourceIdentityScore(candidate, a))
+      .slice(0, MAX_SOURCES_PER_CAR);
   }));
 
   const all = [];
@@ -876,15 +946,6 @@ PRAVIDLÁ:
 
 function tokens(value) {
   return normalized(value).split(" ").filter(token => token.length >= 2);
-}
-
-function vehicleMatchesSource(car, source) {
-  const haystack = normalized(`${source.title} ${source.snippet} ${source.url}`);
-  const brandTokens = tokens(car.brand);
-  const modelTokens = tokens(car.model);
-  return brandTokens.length > 0 && modelTokens.length > 0 &&
-    brandTokens.every(token => haystack.includes(token)) &&
-    modelTokens.every(token => haystack.includes(token));
 }
 
 function relevantSourcesForCar(car, sources) {
@@ -952,67 +1013,126 @@ function verifyText(value, evidence, minimumTokens = 1) {
 }
 
 function verifyGeneration(value, evidence) {
-  const candidate = cleanString(value, 100);
+  const candidate = cleanString(value, 120);
   if (!candidate || !evidence) return false;
   const candidateNorm = normalized(candidate);
   const evidenceNorm = normalized(evidence);
   if (candidateNorm && evidenceNorm.includes(candidateNorm)) return true;
 
+  // Konkrétne typové/chassis kódy musia byť v dôkaze doslova.
   const codes = candidate.match(/\b[A-Z]{1,3}\d{2,4}\b/gi) || [];
   if (codes.length) return codes.every(code => evidenceNorm.includes(normalized(code)));
 
   const ordinalMatch = candidate.match(/\b(1|2|3|4|first|second|third|fourth|1st|2nd|3rd|4th|prv[aáy]?|druh[aáy]?|tret[ií]a?|štvrt[aáy]?)\b/i);
-  if (ordinalMatch && /generat|generation|generaci|generac/i.test(candidate)) {
+  if (ordinalMatch && /generat|generation|generaci|generac/i.test(candidateNorm)) {
     const ordinal = ordinalMatch[1].toLowerCase();
     const variants = {
-      "1": ["first generation", "1st generation", "1 generation", "1 generacia", "prva generacia"],
+      "1": ["first generation", "1st generation", "1 generation", "1 generacia", "prva generacia", "i generation", "klasse i"],
       first: ["first generation", "1st generation", "1 generacia", "prva generacia"],
       "1st": ["first generation", "1st generation", "1 generacia", "prva generacia"],
-      "2": ["second generation", "2nd generation", "2 generation", "2 generacia", "druha generacia"],
-      second: ["second generation", "2nd generation", "2 generacia", "druha generacia"],
-      "2nd": ["second generation", "2nd generation", "2 generacia", "druha generacia"],
-      "3": ["third generation", "3rd generation", "3 generation", "3 generacia", "tretia generacia"],
-      third: ["third generation", "3rd generation", "3 generacia", "tretia generacia"],
-      "3rd": ["third generation", "3rd generation", "3 generacia", "tretia generacia"],
-      "4": ["fourth generation", "4th generation", "4 generation", "4 generacia", "stvrta generacia"],
-      fourth: ["fourth generation", "4th generation", "4 generacia", "stvrta generacia"],
-      "4th": ["fourth generation", "4th generation", "4 generacia", "stvrta generacia"]
+      "2": ["second generation", "2nd generation", "2 generation", "2 generacia", "druha generacia", "ii generation", "klasse ii"],
+      second: ["second generation", "2nd generation", "2 generacia", "druha generacia", "ii generation", "klasse ii"],
+      "2nd": ["second generation", "2nd generation", "2 generacia", "druha generacia", "ii generation", "klasse ii"],
+      "3": ["third generation", "3rd generation", "3 generation", "3 generacia", "tretia generacia", "iii generation", "klasse iii"],
+      third: ["third generation", "3rd generation", "3 generacia", "tretia generacia", "iii generation", "klasse iii"],
+      "3rd": ["third generation", "3rd generation", "3 generacia", "tretia generacia", "iii generation", "klasse iii"],
+      "4": ["fourth generation", "4th generation", "4 generation", "4 generacia", "stvrta generacia", "iv generation", "klasse iv"],
+      fourth: ["fourth generation", "4th generation", "4 generacia", "stvrta generacia", "iv generation", "klasse iv"],
+      "4th": ["fourth generation", "4th generation", "4 generacia", "stvrta generacia", "iv generation", "klasse iv"]
     };
     return (variants[ordinal] || []).some(variant => evidenceNorm.includes(normalized(variant)));
   }
   return verifyText(candidate, evidence, 1);
 }
 
+function sourceModelYearFact(car, source) {
+  if (!vehicleMatchesSource(car, source)) return null;
+  const text = `${source.title || ""} ${source.snippet || ""} ${source.url || ""}`;
+  const norm = normalized(text);
+
+  // 1. Najvyššia istota: zdroj výslovne označuje modelový rok.
+  const explicitPatterns = [
+    /\bmodel\s*year\s*(20\d{2})\b/i,
+    /\bmodel\s*yr\s*(20\d{2})\b/i,
+    /\bmy\s*(20\d{2})\b/i,
+    /\b(20\d{2})\s*model\s*year\b/i,
+    /\bmodelovy\s*rok\s*(20\d{2})\b/i,
+    /\bmodeljaar\s*(20\d{2})\b/i,
+    /\bmodel years?\s*(20\d{2})\b/i
+  ];
+  for (const pattern of explicitPatterns) {
+    const match = norm.match(pattern);
+    if (match) return { year: Number(match[1]), kind: "explicit_model_year" };
+  }
+
+  // 2. Ak stránka výslovne uvádza obdobie výroby/produkcie, rok začiatku
+  //    je možné použiť ako prvý výrobný/modelový rok generácie. Samotný
+  //    dátum publikovania článku sa nikdy nepovažuje za modelový rok.
+  const productionContext = /production|productie|bouwjaar|bouwperiode|looptijd|model years?/i.test(norm);
+  if (productionContext) {
+    const patterns = [
+      /(?:production\s*period|production|productieperiode|productie\s*periode|bouwperiode|looptijd)\s*(20\d{2})\s*(?:present|current|heden|now|ongoing)/i,
+      /(?:model years?|modeljaar|modeljaren)\s*[:\-]?\s*(20\d{2})\s*(?:-|–|—|to)?/i,
+      /(?:production\s*started|production\s*from|in production since|productie gestart|looptijd)\s*(?:in\s*)?(20\d{2})/i
+    ];
+    for (const pattern of patterns) {
+      const match = norm.match(pattern);
+      if (match) return { year: Number(match[1]), kind: "production_start_year" };
+    }
+  }
+  return null;
+}
+
 function verifyModelYear(value, car, sources) {
   const year = parseNumeric(value);
   if (!Number.isInteger(year) || year < 1990 || year > 2035) return false;
-  const brandTokens = tokens(car.brand);
-  const modelTokens = tokens(car.model);
-  const yearText = String(year);
+  return sources.some(source => sourceModelYearFact(car, source)?.year === year);
+}
 
-  return sources.some(source => {
-    const title = normalized(source.title);
-    const snippet = normalized(source.snippet);
-    const url = normalized(source.url);
-    const all = `${title} ${snippet} ${url}`;
-    if (!all.includes(yearText)) return false;
-    if (!brandTokens.every(token => all.includes(token))) return false;
-    if (!modelTokens.every(token => all.includes(token))) return false;
+function inferModelYearFromSources(car, sources) {
+  const facts = sources
+    .map(source => sourceModelYearFact(car, source))
+    .filter(Boolean);
+  if (!facts.length) return null;
 
-    // Nesta fáze sa neprijíma samotný rok v titulku: môže ísť o rok článku.
-    // Vyžadujeme kontext modelového roka v tom istom konkrétnom zdroji.
-    const combined = normalized(`${source.title} ${source.snippet} ${source.url}`);
-    const shortYear = yearText.slice(-2);
-    const explicitPatterns = [
-      new RegExp(`\\bmodel\\s+year\\s+${yearText}\\b`, "i"),
-      new RegExp(`\\bmodel\\s+yr\\s+${yearText}\\b`, "i"),
-      new RegExp(`\\bmy\\s*${yearText}\\b`, "i"),
-      new RegExp(`\\bmy\\s*${shortYear}\\b`, "i"),
-      new RegExp(`\\b${yearText}\\s+model(?:\\s+year)?\\b`, "i"),
-      new RegExp(`\\bmodelovy\\s+rok\\s+${yearText}\\b`, "i")
-    ];
-    return explicitPatterns.some(pattern => pattern.test(combined));
-  });
+  const explicit = facts.filter(fact => fact.kind === "explicit_model_year");
+  const pool = explicit.length ? explicit : facts;
+  const years = [...new Set(pool.map(fact => fact.year))].sort((a, b) => b - a);
+  const currentYear = new Date().getUTCFullYear();
+  if (years.includes(currentYear)) return currentYear;
+  if (years.includes(currentYear + 1)) return currentYear + 1;
+  return years[0] || null;
+}
+
+function inferGenerationFromSources(car, sources) {
+  const relevant = sources
+    .filter(source => vehicleMatchesSource(car, source))
+    .sort((a, b) => sourceIdentityScore(car, b) - sourceIdentityScore(car, a));
+
+  for (const source of relevant) {
+    const title = cleanString(source.title, 350);
+    const text = `${title} ${source.snippet || ""}`;
+    // Titulok typu „Mercedes GLB-Klasse II (X248)“ priamo zväzuje
+    // rímske číslo generácie s typovým kódom.
+    const romanCode = title.match(/\b(II|III|IV|I)\s*\(\s*([A-Z]{1,3}\d{2,4})\s*\)/i);
+    if (romanCode) {
+      const roman = romanCode[1].toUpperCase();
+      const number = { I: 1, II: 2, III: 3, IV: 4 }[roman];
+      // Pri modelovom rade môže mať rovnaká generácia viac interných kódov
+      // podľa pohonu (napr. GLB elektrický/hybrid). Do názvu generácie preto
+      // uvádzame bezpečné poradové označenie, nie variantový chassis kód.
+      return `${number}. generácia`;
+    }
+
+    const phraseMatch = text.match(/\b(first|second|third|fourth|1st|2nd|3rd|4th|prv[aáy]?|druh[aáy]?|tret[ií]a?|štvrt[aáy]?)\s*(?:generation|gen\.?|generácia|generacia|generatie)\b/i);
+    if (phraseMatch) return phraseMatch[0];
+
+    // Typový kód prijímame iba v titulku konkrétneho vozidla, nie z náhodného
+    // čísla motora alebo výbavy v tele stránky.
+    const code = title.match(/\b([A-Z]{1,3}\d{2,4})\b/i);
+    if (code) return code[1].toUpperCase();
+  }
+  return null;
 }
 
 function verifyOfficialUrl(value, sourceIds, sources) {
@@ -1057,26 +1177,44 @@ function normalizeCar(rawCar, allSources, filters) {
     throw new HttpError(`Pre ${identity.brand} ${identity.model} neexistuje priradený relevantný zdroj.`, 502, "MODEL_SOURCES_MISSING");
   }
 
-  const generation = cleanString(raw.generation, 100);
-  const yearValue = parseNumeric(raw.modelYear ?? raw.year);
-  const generationVerified = verifyGeneration(generation, evidence);
-  const yearVerified = verifyModelYear(yearValue, identity, carSources);
+  const rawGeneration = cleanString(raw.generation, 120);
+  const rawYear = parseNumeric(raw.modelYear ?? raw.year);
+
+  // AI môže vrátiť null, aj keď samotný zdroj obsahuje identifikáciu.
+  // V takom prípade generáciu/rok vyberie deterministicky backend zo zdrojov.
+  const inferredGeneration = inferGenerationFromSources(identity, carSources);
+  const generation = rawGeneration && verifyGeneration(rawGeneration, evidence)
+    ? rawGeneration
+    : inferredGeneration;
+
+  const inferredYear = inferModelYearFromSources(identity, carSources);
+  const modelYear = rawYear !== null && verifyModelYear(rawYear, identity, carSources)
+    ? Math.round(rawYear)
+    : inferredYear;
+
+  const generationVerified = Boolean(generation) && verifyGeneration(generation, evidence);
+  const yearVerified = Number.isInteger(modelYear) && verifyModelYear(modelYear, identity, carSources);
 
   if (!generationVerified || !yearVerified) {
     const missing = [!generationVerified ? "generáciu" : "", !yearVerified ? "modelový rok" : ""].filter(Boolean).join(" a ");
     throw new HttpError(
-      `Pri modeli ${identity.brand} ${identity.model} sa v jeho zdrojoch nepodarilo dostatočne potvrdiť ${missing}. Výsledok sa nezobrazí bez overenia.`,
+      `Pri modeli ${identity.brand} ${identity.model} sa ani po doplňujúcom overení nepodarilo potvrdiť ${missing}. Výsledok sa nezobrazí bez dôkazu.`,
       502,
       "MODEL_IDENTITY_NOT_VERIFIED",
       {
-        generationReceived: generation || null,
-        modelYearReceived: yearValue || null,
-        checkedSources: carSources.map(source => ({ id: source.id, title: source.title }))
+        generationReceived: rawGeneration || null,
+        generationInferred: inferredGeneration || null,
+        modelYearReceived: rawYear || null,
+        modelYearInferred: inferredYear || null,
+        checkedSources: carSources.map(source => ({
+          id: source.id,
+          title: source.title,
+          url: source.url,
+          excerpt: cleanString(source.snippet, 240)
+        }))
       }
     );
   }
-
-  const modelYear = Math.round(yearValue);
   const rawPower = cleanString(raw.power, 80);
   const power = verifyPower(rawPower, evidence) ? rawPower : "Neoverené";
   const rawPrice = cleanString(raw.price, 100);
@@ -1212,16 +1350,14 @@ function photoMetadataMatches(item, car) {
   const haystack = normalized(`${title} ${sourceUrl}`);
   if (!haystack || rejectedPhotoText(title)) return false;
 
-  const brandTokens = tokens(car.brand);
   const modelTokens = tokens(car.model);
-  if (!brandTokens.length || !modelTokens.length) return false;
-  if (!brandTokens.every(token => haystack.includes(token))) return false;
+  if (!modelTokens.length) return false;
+  if (!brandMatchesText(car.brand, `${title} ${sourceUrl}`)) return false;
   if (!modelTokens.every(token => haystack.includes(token))) return false;
 
-  // Fotografia musí potvrdzovať konkrétny modelový rok AJ generáciu.
-  const yearMatch = new RegExp(`\\b${car.modelYear}\\b`).test(haystack);
-  const generationMatch = generationPhotoMatch(`${title} ${sourceUrl}`, car);
-  return yearMatch && generationMatch;
+  // Rok je povinný, pretože fotografia musí zodpovedať konkrétnemu ročníku.
+  // Interný chassis kód v názve fotografie nie je povinný: bežné titulky ho neuvádzajú.
+  return new RegExp(`\\b${car.modelYear}\\b`).test(haystack);
 }
 
 async function searchSerperPhotos(car) {
@@ -1309,7 +1445,7 @@ async function findPhotosForCar(car) {
   }
   if (!photos.length) {
     throw new HttpError(
-      `Pre ${car.name} sa nepodarilo nájsť fotografiu potvrdzujúcu konkrétnu generáciu aj modelový rok ${car.modelYear}. Výsledok bez presnej fotografie nezobrazíme.`,
+      `Pre ${car.name} sa nepodarilo nájsť fotografiu so zhodou značky, modelu a modelového roku ${car.modelYear}. Výsledok bez presnej fotografie nezobrazíme.`,
       502,
       "PHOTO_VERIFICATION_FAILED"
     );
@@ -1322,6 +1458,78 @@ async function findPhotosForCar(car) {
     imageCandidates: photos,
     images: photos
   };
+}
+
+async function supplementIdentitySources(candidates, rawCars, existingSources) {
+  const seen = new Set(existingSources.map(source => source.url));
+
+  // Doplňujúce vyhľadávania pre všetky chýbajúce autá prebiehajú paralelne.
+  // Tak sa čas požiadavky nezvyšuje o 2 × timeout pre každé auto postupne.
+  const additionsByCandidate = await Promise.all(candidates.map(async candidate => {
+    const raw = rawCars.find(item =>
+      normalized(`${item?.brand || ""} ${item?.model || ""}`) ===
+      normalized(`${candidate.brand} ${candidate.model}`)
+    ) || {};
+
+    const existingForCar = relevantSourcesForCar(candidate, existingSources);
+    const evidence = existingForCar.map(source => `${source.title}\n${source.snippet}\n${source.url}`).join("\n\n");
+    const hasGeneration = (raw.generation && verifyGeneration(raw.generation, evidence)) || inferGenerationFromSources(candidate, existingForCar);
+    const rawYear = parseNumeric(raw.modelYear ?? raw.year);
+    const hasYear = (rawYear !== null && verifyModelYear(rawYear, candidate, existingForCar)) || inferModelYearFromSources(candidate, existingForCar);
+
+    if (hasGeneration && hasYear) return [];
+
+    const year = new Date().getUTCFullYear();
+    const aliases = brandAliases(candidate.brand);
+    const shortBrand = aliases.length > 1 ? aliases[1] : candidate.brand;
+    const queries = [
+      `"${candidate.brand}" "${candidate.model}" generation code model years production period ${year} Europe`,
+      `"${shortBrand}" "${candidate.model}" chassis code "${year}" OR "${year + 1}" model range`
+    ];
+
+    const groups = await Promise.all(queries.map(async query => {
+      try {
+        return await searchSources(query);
+      } catch (error) {
+        console.warn(`CARMATCH AI: identity follow-up search failed for ${candidate.brand} ${candidate.model}:`, error.message);
+        return [];
+      }
+    }));
+
+    const byUrl = new Map();
+    for (const source of groups.flat()) {
+      if (!source?.url || !vehicleMatchesSource(candidate, source)) continue;
+      const old = byUrl.get(source.url);
+      if (!old || (source.snippet || "").length > (old.snippet || "").length) byUrl.set(source.url, source);
+    }
+
+    return [...byUrl.values()]
+      .filter(source => !seen.has(source.url))
+      .sort((a, b) => sourceIdentityScore(candidate, b) - sourceIdentityScore(candidate, a))
+      .slice(0, MAX_IDENTITY_RESEARCH_SOURCES_PER_CAR);
+  }));
+
+  const combined = [...existingSources];
+  const addedUrls = new Set();
+  let nextId = combined.reduce((max, source) => {
+    const n = Number(String(source.id || "").replace(/^S/i, ""));
+    return Number.isFinite(n) ? Math.max(max, n) : max;
+  }, 0) + 1;
+
+  for (const rows of additionsByCandidate) {
+    for (const source of rows) {
+      if (seen.has(source.url) || addedUrls.has(source.url)) continue;
+      addedUrls.add(source.url);
+      combined.push({
+        id: `S${nextId++}`,
+        title: source.title,
+        url: source.url,
+        snippet: source.snippet
+      });
+    }
+  }
+
+  return combined.slice(0, MAX_TOTAL_SOURCES);
 }
 
 /* ---------------------------- MAIN SEARCH ---------------------------- */
@@ -1368,7 +1576,8 @@ async function buildCars(input) {
     throw new HttpError("AI nevrátila presne tri kompletné vozidlá.", 502, "INVALID_CAR_RESULTS");
   }
 
-  const cars = finalResult.cars.map(raw => normalizeCar(raw, relevantSources, input.filters));
+  const verifiedSources = await supplementIdentitySources(candidates, finalResult.cars, relevantSources);
+  const cars = finalResult.cars.map(raw => normalizeCar(raw, verifiedSources, input.filters));
   const identities = new Set(cars.map(car => normalized(`${car.brand} ${car.model}`)));
   if (identities.size !== 3) throw new HttpError("Výsledok obsahuje duplicitné modely.", 502, "DUPLICATE_CARS");
 
@@ -1384,7 +1593,7 @@ async function buildCars(input) {
   if (withPhotos.length !== 3 || withPhotos.some(car => !car.image || !car.photoSource)) {
     throw new HttpError("Nepodarilo sa zabezpečiť overiteľnú fotografiu pre všetky tri vozidlá.", 502, "THREE_PHOTOS_REQUIRED");
   }
-  return { cars: withPhotos, sources: relevantSources };
+  return { cars: withPhotos, sources: verifiedSources };
 }
 
 /* ---------------------------- REQUEST HANDLER ---------------------------- */
