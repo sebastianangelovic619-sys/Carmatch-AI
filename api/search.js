@@ -735,6 +735,7 @@ async function generateAI(prompt, options = {}) {
         const message = `Groq ${model}: ${error.message}`;
         errors.push(message);
         console.error(`CARMATCH AI: ${message}`);
+        // Pri 429 sa nečaká vo Vercel funkcii; pokračujeme na druhý model/záložného poskytovateľa.
       }
     }
   }
@@ -798,6 +799,8 @@ function modelResearchQueries(candidate) {
   const currentYear = new Date().getUTCFullYear();
   const nextYear = currentYear + 1;
 
+  // Oddelené otázky hľadajú generáciu, modelový/produkčný rok a konkrétny
+  // typový kód. Vyhľadávač tak nedostáva iba všeobecné otázky na špecifikácie.
   const aliases = brandAliases(brand);
   const shortBrand = aliases.length > 1 ? aliases[1] : brand;
   return [
@@ -845,22 +848,6 @@ function vehicleMatchesSource(car, source) {
 }
 
 function sourceIdentityScore(car, source) {
-  const title = `${source.title || ""}`;
-  const body = `${source.title || ""} ${source.snippet || ""}`;
-  const titleNorm = normalized(title);
-  const bodyNorm = normalized(body);
-  let score = 0;
-  if (brandMatchesText(car.brand, title)) score += 5;
-  else if (brandMatchesText(car.brand, body)) score += 2;
-  for (const token of tokens(car.model)) {
-    if (titleNorm.includes(token)) score += 5;
-    else if (bodyNorm.includes(token)) score += 2;
-  }
-  return score;
-}
-**Skutočná časť 3/4 – pokračovanie:**
-
-```javascript
   const title = `${source.title || ""}`;
   const body = `${source.title || ""} ${source.snippet || ""}`;
   const titleNorm = normalized(title);
@@ -1011,7 +998,7 @@ function verifyPrice(value, evidence) {
   if (!value || !evidence || !/(?:€|\bEUR\b)/i.test(String(value))) return false;
   const requested = numberList(value).filter(n => n >= 1000);
   if (!requested.length) return false;
-  const regex = /(?:€\s*|EUR\s*)(\d[\d\s.,]{2,})|(\d[\d\s.,]{2,})\s*(?:€|EUR)(?![A-Za-z])/gi;
+  const regex = /(?:€\s*|\bEUR\s*)(\d[\d\s.,]{2,})|(\d[\d\s.,]{2,})\s*(?:€|EUR)(?![A-Za-z])/gi;
   const found = [];
   for (const match of evidence.matchAll(regex)) found.push(...numberList(match[1] || match[2]).filter(n => n >= 1000));
   return requested.some(n => found.some(v => approximatelyEqual(n, v, 0.025, 100)));
@@ -1032,6 +1019,7 @@ function verifyGeneration(value, evidence) {
   const evidenceNorm = normalized(evidence);
   if (candidateNorm && evidenceNorm.includes(candidateNorm)) return true;
 
+  // Konkrétne typové/chassis kódy musia byť v dôkaze doslova.
   const codes = candidate.match(/\b[A-Z]{1,3}\d{2,4}\b/gi) || [];
   if (codes.length) return codes.every(code => evidenceNorm.includes(normalized(code)));
 
@@ -1062,6 +1050,7 @@ function sourceModelYearFact(car, source) {
   const text = `${source.title || ""} ${source.snippet || ""} ${source.url || ""}`;
   const norm = normalized(text);
 
+  // 1. Najvyššia istota: zdroj výslovne označuje modelový rok.
   const explicitPatterns = [
     /\bmodel\s*year\s*(20\d{2})\b/i,
     /\bmodel\s*yr\s*(20\d{2})\b/i,
@@ -1076,6 +1065,9 @@ function sourceModelYearFact(car, source) {
     if (match) return { year: Number(match[1]), kind: "explicit_model_year" };
   }
 
+  // 2. Ak stránka výslovne uvádza obdobie výroby/produkcie, rok začiatku
+  //    je možné použiť ako prvý výrobný/modelový rok generácie. Samotný
+  //    dátum publikovania článku sa nikdy nepovažuje za modelový rok.
   const productionContext = /production|productie|bouwjaar|bouwperiode|looptijd|model years?/i.test(norm);
   if (productionContext) {
     const patterns = [
@@ -1120,16 +1112,23 @@ function inferGenerationFromSources(car, sources) {
   for (const source of relevant) {
     const title = cleanString(source.title, 350);
     const text = `${title} ${source.snippet || ""}`;
+    // Titulok typu „Mercedes GLB-Klasse II (X248)“ priamo zväzuje
+    // rímske číslo generácie s typovým kódom.
     const romanCode = title.match(/\b(II|III|IV|I)\s*\(\s*([A-Z]{1,3}\d{2,4})\s*\)/i);
     if (romanCode) {
       const roman = romanCode[1].toUpperCase();
       const number = { I: 1, II: 2, III: 3, IV: 4 }[roman];
+      // Pri modelovom rade môže mať rovnaká generácia viac interných kódov
+      // podľa pohonu (napr. GLB elektrický/hybrid). Do názvu generácie preto
+      // uvádzame bezpečné poradové označenie, nie variantový chassis kód.
       return `${number}. generácia`;
     }
 
     const phraseMatch = text.match(/\b(first|second|third|fourth|1st|2nd|3rd|4th|prv[aáy]?|druh[aáy]?|tret[ií]a?|štvrt[aáy]?)\s*(?:generation|gen\.?|generácia|generacia|generatie)\b/i);
     if (phraseMatch) return phraseMatch[0];
 
+    // Typový kód prijímame iba v titulku konkrétneho vozidla, nie z náhodného
+    // čísla motora alebo výbavy v tele stránky.
     const code = title.match(/\b([A-Z]{1,3}\d{2,4})\b/i);
     if (code) return code[1].toUpperCase();
   }
@@ -1180,6 +1179,9 @@ function normalizeCar(rawCar, allSources, filters) {
 
   const rawGeneration = cleanString(raw.generation, 120);
   const rawYear = parseNumeric(raw.modelYear ?? raw.year);
+
+  // AI môže vrátiť null, aj keď samotný zdroj obsahuje identifikáciu.
+  // V takom prípade generáciu/rok vyberie deterministicky backend zo zdrojov.
   const inferredGeneration = inferGenerationFromSources(identity, carSources);
   const generation = rawGeneration && verifyGeneration(rawGeneration, evidence)
     ? rawGeneration
@@ -1277,6 +1279,7 @@ function normalizeCar(rawCar, allSources, filters) {
     sourceIds
   };
 }
+
 function validateFilters(cars, filters) {
   for (const car of cars) {
     if (filters.seats && (car.seats === null || car.seats < filters.seats)) {
@@ -1352,6 +1355,8 @@ function photoMetadataMatches(item, car) {
   if (!brandMatchesText(car.brand, `${title} ${sourceUrl}`)) return false;
   if (!modelTokens.every(token => haystack.includes(token))) return false;
 
+  // Rok je povinný, pretože fotografia musí zodpovedať konkrétnemu ročníku.
+  // Interný chassis kód v názve fotografie nie je povinný: bežné titulky ho neuvádzajú.
   return new RegExp(`\\b${car.modelYear}\\b`).test(haystack);
 }
 
@@ -1458,6 +1463,8 @@ async function findPhotosForCar(car) {
 async function supplementIdentitySources(candidates, rawCars, existingSources) {
   const seen = new Set(existingSources.map(source => source.url));
 
+  // Doplňujúce vyhľadávania pre všetky chýbajúce autá prebiehajú paralelne.
+  // Tak sa čas požiadavky nezvyšuje o 2 × timeout pre každé auto postupne.
   const additionsByCandidate = await Promise.all(candidates.map(async candidate => {
     const raw = rawCars.find(item =>
       normalized(`${item?.brand || ""} ${item?.model || ""}`) ===
@@ -1538,6 +1545,8 @@ function canonicalizeFinalCars(candidates, rawCars) {
     const rawModel = cleanString(raw?.model, 100);
     const modelKey = normalized(rawModel);
 
+    // Značky môžu mať oficiálne skrátené zápisy (napr. Mercedes-Benz/Mercedes).
+    // Model však musí byť rovnaký; nepoužívame voľnú fuzzy zhodu.
     const matches = candidates
       .map((candidate, candidateIndex) => ({ candidate, candidateIndex }))
       .filter(({ candidate, candidateIndex }) =>
@@ -1565,6 +1574,7 @@ function canonicalizeFinalCars(candidates, rawCars) {
     used.add(candidateIndex);
     return {
       ...raw,
+      // Do ďalšieho spracovania posúvame vždy kanonickú identitu z výberu.
       brand: candidate.brand,
       model: candidate.model,
       name: `${candidate.brand} ${candidate.model}`
@@ -1614,6 +1624,8 @@ async function buildCars(input) {
     throw new HttpError("AI nevrátila presne tri kompletné vozidlá.", 502, "INVALID_CAR_RESULTS");
   }
 
+  // Najprv bezpečne priradíme každý výsledok ku kandidátovi. Alias značky
+  // akceptujeme, ale názov modelu musí byť presný a každý kandidát sa použije raz.
   const canonicalFinalCars = canonicalizeFinalCars(candidates, finalResult.cars);
   const verifiedSources = await supplementIdentitySources(candidates, canonicalFinalCars, relevantSources);
   const cars = canonicalFinalCars.map(raw => normalizeCar(raw, verifiedSources, input.filters));
@@ -1629,10 +1641,6 @@ async function buildCars(input) {
 }
 
 /* ---------------------------- REQUEST HANDLER ---------------------------- */
-
-function json(res, statusCode, payload) {
-  return res.status(statusCode).json(payload);
-}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
