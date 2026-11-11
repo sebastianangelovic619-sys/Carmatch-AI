@@ -2413,7 +2413,10 @@ function validateFilters(cars, filters) {
   }
 }
 
-/* ---------------------------- PHOTO SEARCH ---------------------------- */
+/* ---------------------------- PHOTO SEARCH
+---------------------------- */
+
+/* ---------------------------- PHOTO SEARCH v35 ---------------------------- */
 
 function rejectedPhotoText(value) {
   return /\b(logo|emblem|badge|interior|dashboard|cockpit|steering|brochure|manual|diagram|drawing|illustration|render|toy|model kit|scale model|miniature|poster|screenshot|crash|accident|spare part|technical drawing|wallpaper)\b/i.test(
@@ -2422,10 +2425,7 @@ function rejectedPhotoText(value) {
 }
 
 function generationPhotoMatch(haystack, car) {
-  const generation = cleanString(
-    car.generation,
-    100
-  );
+  const generation = cleanString(car.generation, 100);
 
   if (!generation) return false;
 
@@ -2442,10 +2442,7 @@ function generationPhotoMatch(haystack, car) {
 
   const gen = normalized(generation);
 
-  if (
-    gen.length >= 6 &&
-    hay.includes(gen)
-  ) {
+  if (gen.length >= 6 && hay.includes(gen)) {
     return true;
   }
 
@@ -2461,15 +2458,12 @@ function generationPhotoMatch(haystack, car) {
     "1": ["first generation", "1st generation", "1st gen"],
     first: ["first generation", "1st generation", "1st gen"],
     "1st": ["first generation", "1st generation", "1st gen"],
-
     "2": ["second generation", "2nd generation", "2nd gen"],
     second: ["second generation", "2nd generation", "2nd gen"],
     "2nd": ["second generation", "2nd generation", "2nd gen"],
-
     "3": ["third generation", "3rd generation", "3rd gen"],
     third: ["third generation", "3rd generation", "3rd gen"],
     "3rd": ["third generation", "3rd generation", "3rd gen"],
-
     "4": ["fourth generation", "4th generation", "4th gen"],
     fourth: ["fourth generation", "4th generation", "4th gen"],
     "4th": ["fourth generation", "4th generation", "4th gen"]
@@ -2481,32 +2475,79 @@ function generationPhotoMatch(haystack, car) {
 }
 
 /*
- * Nová kontrola fotografií:
+ * Rozpozná rôzne formáty obrázkových výsledkov.
+ * Dôležité: neskončí pri prvom HTTP/neplatnom URL.
+ */
+function getPhotoImageUrl(item) {
+  const possibleUrls = [
+    item?.imageUrl,
+    item?.thumbnailUrl,
+    item?.image?.url,
+    item?.originalImageUrl,
+    item?.original_image?.src,
+    item?.thumbnail?.url
+  ];
+
+  for (const value of possibleUrls) {
+    const url = safeHttpsUrl(value);
+
+    if (url) return url;
+  }
+
+  return "";
+}
+
+function getPhotoSourceUrl(item, imageUrl) {
+  const possibleUrls = [
+    item?.link,
+    item?.sourceUrl,
+    item?.pageUrl,
+    item?.url,
+    imageUrl
+  ];
+
+  for (const value of possibleUrls) {
+    const url = safeHttpsUrl(value);
+
+    if (url) return url;
+  }
+
+  return "";
+}
+
+/*
+ * Univerzálna kontrola identity.
  *
- * Značka a model sa musia zhodovať.
- * Ak metadáta obsahujú kód generácie, použijeme ho.
- * Ak obsahujú rok, môžeme ho použiť ako ďalšie potvrdenie.
- * Ak rok ani generácia v metadátach nie sú, nevylúčime
- * automaticky fotografiu, ktorú vyhľadávač našiel pomocou
- * dopytu obsahujúceho presnú generáciu.
+ * Požadujeme zhodu značky a modelu.
+ * Ak výsledok obsahuje chassis kód generácie,
+ * nesmie odporovať očakávanému kódu.
+ *
+ * Generácia a rok sa nepovažujú za potvrdené,
+ * keď ich metadáta fotografie neobsahujú.
  */
 function photoMetadataMatches(item, car) {
   const title = cleanString(
-    item.title,
-    350
+    item?.title || item?.alt || "",
+    500
   );
 
-  const sourceUrl = safeHttpsUrl(
-    item.link ||
-    item.source ||
-    item.descriptionurl
+  const sourceUrl = cleanString(
+    item?.link ||
+    item?.sourceUrl ||
+    item?.pageUrl ||
+    "",
+    1000
   );
 
-  const rawHaystack = `${title} ${sourceUrl}`;
-  const haystack = normalized(rawHaystack);
+  const metadataText = [
+    title,
+    sourceUrl,
+    cleanString(item?.source, 150),
+    cleanString(item?.domain, 150)
+  ].join(" ");
 
   if (
-    !haystack ||
+    !metadataText.trim() ||
     rejectedPhotoText(title)
   ) {
     return false;
@@ -2518,9 +2559,11 @@ function photoMetadataMatches(item, car) {
     return false;
   }
 
-  if (!brandMatchesText(car.brand, rawHaystack)) {
+  if (!brandMatchesText(car.brand, metadataText)) {
     return false;
   }
+
+  const haystack = normalized(metadataText);
 
   if (
     !modelTokens.every(token =>
@@ -2530,57 +2573,122 @@ function photoMetadataMatches(item, car) {
     return false;
   }
 
-  const modelYear = Number(car.modelYear);
-
-  const yearMatch =
-    Number.isInteger(modelYear) &&
-    new RegExp(`\\b${modelYear}\\b`).test(haystack);
-
-  const generationMatch = generationPhotoMatch(
-    rawHaystack,
-    car
-  );
-
   /*
-   * Presná zhoda roku alebo generácie je najlepšia.
-   * Ak tieto údaje v metadátach chýbajú, ponecháme
-   * výsledok, pretože samotný vyhľadávací dopyt už
-   * obsahuje značku, model a generáciu vozidla.
+   * Ak názov fotografie uvádza konkrétny chassis kód,
+   * nesmie ísť o inú jasne označenú generáciu.
    */
-  return (
-    yearMatch ||
-    generationMatch ||
-    true
-  );
+  const expectedCodes =
+    String(car.generation || "")
+      .match(/\b[A-Z]{1,3}\d{2,4}\b/gi) || [];
+
+  const titleCodes =
+    title.match(/\b[A-Z]{1,3}\d{2,4}\b/gi) || [];
+
+  if (
+    expectedCodes.length &&
+    titleCodes.length
+  ) {
+    const expected = expectedCodes.map(normalized);
+    const found = titleCodes.map(normalized);
+
+    if (!expected.some(code => found.includes(code))) {
+      return false;
+    }
+  }
+
+  return true;
 }
+
+/*
+ * Dva odlišné dopyty:
+ * - presná generácia
+ * - všeobecná exteriérová fotografia modelu
+ *
+ * Nepoužívame iba jeden príliš úzky dopyt.
+ */
+function buildPhotoQueries(car) {
+  const brand = cleanString(car.brand, 100);
+  const model = cleanString(car.model, 120);
+  const generation = cleanString(car.generation, 100);
+
+  const aliases = brandAliases(brand);
+
+  const alternativeBrand =
+    aliases.find(alias =>
+      normalized(alias) !== normalized(brand)
+    ) || brand;
+
+  const queries = [
+    `${brand} ${model} ${generation} exterior car`,
+    `${brand} ${model} SUV exterior`,
+    `${alternativeBrand} ${model} car exterior`
+  ];
+
+  return [
+    ...new Set(
+      queries
+        .map(query => cleanString(query, 300))
+        .filter(Boolean)
+    )
+  ];
+}
+
+/* ---------------------------- SERPER PHOTOS ---------------------------- */
 
 async function searchSerperPhotos(car) {
   if (!SERPER_API_KEY) return [];
 
-  const query =
-    `"${car.brand} ${car.model}" "${car.generation}" exterior real production car`;
+  const queries = buildPhotoQueries(car);
 
-  const rows = await serperSearch(
-    query,
-    "images",
-    20
+  /*
+   * Všetky dopyty sa vykonajú paralelne.
+   * Zlyhanie jedného dopytu nezruší ostatné.
+   */
+  const results = await Promise.all(
+    queries.map(async query => {
+      try {
+        return await serperSearch(
+          query,
+          "images",
+          20
+        );
+      } catch (error) {
+        console.warn(
+          `CARMATCH AI: Serper image query failed for ${car.name}:`,
+          error.message
+        );
+
+        return [];
+      }
+    })
   );
 
   const output = [];
   const seen = new Set();
 
-  for (const item of rows) {
+  const allItems = results.flat();
+
+  for (const item of allItems) {
     if (!photoMetadataMatches(item, car)) {
       continue;
     }
 
-    const url = safeHttpsUrl(
-      item.imageUrl || item.thumbnailUrl
+    /*
+     * OPRAVA:
+     * Keď imageUrl nie je HTTPS, stále skúšame thumbnailUrl.
+     */
+    const url = getPhotoImageUrl(item);
+
+    if (!url || seen.has(url)) {
+      continue;
+    }
+
+    const source = getPhotoSourceUrl(
+      item,
+      url
     );
 
-    const source = safeHttpsUrl(item.link);
-
-    if (!url || !source || seen.has(url)) {
+    if (!source) {
       continue;
     }
 
@@ -2589,9 +2697,18 @@ async function searchSerperPhotos(car) {
     output.push({
       url,
       source,
-      title: cleanString(item.title, 250),
-      width: Number(item.imageWidth) || null,
-      height: Number(item.imageHeight) || null
+      title: cleanString(item?.title, 350),
+      width:
+        Number(item?.imageWidth || item?.thumbnailWidth) ||
+        null,
+      height:
+        Number(item?.imageHeight || item?.thumbnailHeight) ||
+        null,
+      generationMatched:
+        generationPhotoMatch(
+          `${item?.title || ""} ${item?.link || ""}`,
+          car
+        )
     });
 
     if (output.length >= MAX_PHOTOS_PER_CAR) {
@@ -2599,76 +2716,151 @@ async function searchSerperPhotos(car) {
     }
   }
 
+  console.info(
+    "CARMATCH AI: Serper photo search",
+    {
+      car: car.name,
+      queries: queries.length,
+      received: allItems.length,
+      accepted: output.length
+    }
+  );
+
   return output;
 }
 
+/* ---------------------------- WIKIMEDIA PHOTOS ---------------------------- */
+
 async function searchCommonsPhotos(car) {
-  const query =
-    `"${car.brand} ${car.model}" "${car.generation}" exterior`;
+  const queries = buildPhotoQueries(car);
 
-  const params = new URLSearchParams({
-    action: "query",
-    generator: "search",
-    gsrsearch: query,
-    gsrnamespace: "6",
-    gsrlimit: "30",
-    prop: "imageinfo",
-    iiprop: "url|extmetadata",
-    iiurlwidth: "1400",
-    format: "json",
-    origin: "*"
-  });
+  async function searchOneCommonsQuery(query) {
+    const params = new URLSearchParams({
+      action: "query",
+      generator: "search",
+      gsrsearch: query,
+      gsrnamespace: "6",
+      gsrlimit: "30",
+      prop: "imageinfo",
+      iiprop: "url|extmetadata",
+      iiurlwidth: "1400",
+      format: "json",
+      origin: "*"
+    });
 
-  const response = await fetchWithTimeout(
-    `https://commons.wikimedia.org/w/api.php?${params.toString()}`,
-    {
-      method: "GET",
-      headers: {
-        Accept: "application/json"
-      }
-    },
-    IMAGE_TIMEOUT_MS
-  );
+    const response = await fetchWithTimeout(
+      `https://commons.wikimedia.org/w/api.php?${params.toString()}`,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json"
+        }
+      },
+      IMAGE_TIMEOUT_MS
+    );
 
-  if (!response.ok) {
-    return [];
+    if (!response.ok) {
+      console.warn(
+        `CARMATCH AI: Wikimedia HTTP ${response.status} for ${car.name}`
+      );
+
+      return [];
+    }
+
+    const data = await responseJson(response);
+
+    if (data?.error) {
+      console.warn(
+        "CARMATCH AI: Wikimedia API error:",
+        data.error
+      );
+
+      return [];
+    }
+
+    return Object.values(
+      data?.query?.pages || {}
+    );
   }
 
-  const data = await responseJson(response);
+  const groups = await Promise.all(
+    queries.map(async query => {
+      try {
+        return await searchOneCommonsQuery(query);
+      } catch (error) {
+        console.warn(
+          `CARMATCH AI: Wikimedia query failed for ${car.name}:`,
+          error.message
+        );
 
-  const pages = Object.values(
-    data?.query?.pages || {}
+        return [];
+      }
+    })
   );
 
+  const pagesByTitle = new Map();
+
+  for (const page of groups.flat()) {
+    const titleKey = normalized(page?.title);
+
+    if (!titleKey) continue;
+
+    if (!pagesByTitle.has(titleKey)) {
+      pagesByTitle.set(titleKey, page);
+    }
+  }
+
+  const pages = [...pagesByTitle.values()];
   const output = [];
   const seen = new Set();
 
   for (const page of pages) {
     const title = cleanString(
       page?.title,
-      300
+      350
     ).replace(/^File:/i, "");
 
     const info = page?.imageinfo?.[0] || {};
 
+    if (
+      info.mime &&
+      !String(info.mime).startsWith("image/")
+    ) {
+      continue;
+    }
+
     const item = {
       title,
-      link: info.descriptionurl || page?.canonicalurl
+      link:
+        info.descriptionurl ||
+        page?.canonicalurl ||
+        "",
+      source: "Wikimedia Commons"
     };
 
     if (!photoMetadataMatches(item, car)) {
       continue;
     }
 
-    const url = safeHttpsUrl(
-      info.thumburl || info.url
-    );
+    /*
+     * Každé URL sa skúša samostatne.
+     * Nepoužívame info.thumburl || info.url,
+     * pretože prvá možnosť môže byť neplatná.
+     */
+    const url =
+      safeHttpsUrl(info.thumburl) ||
+      safeHttpsUrl(info.url);
 
-    const source = safeHttpsUrl(
-      info.descriptionurl || page?.canonicalurl
-    );
+    if (!url || seen.has(url)) {
+      continue;
+    }
 
-    if (!url || !source || seen.has(url)) {
+    const source =
+      safeHttpsUrl(info.descriptionurl) ||
+      safeHttpsUrl(page?.canonicalurl) ||
+      url;
+
+    if (!source) {
       continue;
     }
 
@@ -2679,7 +2871,12 @@ async function searchCommonsPhotos(car) {
       source,
       title,
       width: Number(info.width) || null,
-      height: Number(info.height) || null
+      height: Number(info.height) || null,
+      generationMatched:
+        generationPhotoMatch(
+          `${title} ${item.link}`,
+          car
+        )
     });
 
     if (output.length >= MAX_PHOTOS_PER_CAR) {
@@ -2687,29 +2884,51 @@ async function searchCommonsPhotos(car) {
     }
   }
 
+  console.info(
+    "CARMATCH AI: Wikimedia photo search",
+    {
+      car: car.name,
+      queries: queries.length,
+      received: pages.length,
+      accepted: output.length
+    }
+  );
+
   return output;
 }
 
+/* ---------------------------- PHOTO FALLBACK ---------------------------- */
+
 async function findPhotosForCar(car) {
   let photos = [];
+  let serperError = null;
+  let commonsError = null;
 
   if (SERPER_API_KEY) {
     try {
       photos = await searchSerperPhotos(car);
     } catch (error) {
+      serperError = cleanString(error.message, 250);
+
       console.warn(
-        `CARMATCH AI: Serper image search failed for ${car.name}:`,
+        `CARMATCH AI: Serper photo search failed for ${car.name}:`,
         error.message
       );
     }
   }
 
+  /*
+   * Wikimedia sa použije aj vtedy, keď Serper nevráti
+   * ani jeden použiteľný obrázok.
+   */
   if (!photos.length) {
     try {
       photos = await searchCommonsPhotos(car);
     } catch (error) {
+      commonsError = cleanString(error.message, 250);
+
       console.warn(
-        `CARMATCH AI: Wikimedia image search failed for ${car.name}:`,
+        `CARMATCH AI: Wikimedia photo search failed for ${car.name}:`,
         error.message
       );
     }
@@ -2717,11 +2936,30 @@ async function findPhotosForCar(car) {
 
   if (!photos.length) {
     throw new HttpError(
-      `Pre ${car.name} sa nepodarilo nájsť vhodnú fotografiu. Výsledok bez fotografie nezobrazíme.`,
+      `Pre ${car.name} sa nepodarilo získať použiteľnú fotografiu. Vyhľadávanie skontrolovalo viacero dopytov a dostupné obrazové zdroje.`,
       502,
-      "PHOTO_VERIFICATION_FAILED"
+      "PHOTO_VERIFICATION_FAILED",
+      {
+        brand: car.brand,
+        model: car.model,
+        generation: car.generation,
+        modelYear: car.modelYear,
+        serperConfigured: Boolean(SERPER_API_KEY),
+        serperError,
+        commonsError,
+        attemptedQueries: buildPhotoQueries(car)
+      }
     );
   }
+
+  /*
+   * Uprednostníme fotografie, ktorých metadáta
+   * obsahujú aj kód generácie.
+   */
+  photos.sort((a, b) =>
+    Number(Boolean(b.generationMatched)) -
+    Number(Boolean(a.generationMatched))
+  );
 
   return {
     ...car,
@@ -2732,7 +2970,6 @@ async function findPhotosForCar(car) {
     images: photos
   };
 }
-
 /* ---------------------------- IDENTITY RESEARCH ---------------------------- */
 
 async function supplementIdentitySources(
