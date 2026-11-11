@@ -2,14 +2,15 @@
 "use strict";
 
 /* ============================================================
-   CARMATCH AI - FRONTEND v20
-   - Kompatibilita s api/search.js v22
+   CARMATCH AI - FRONTEND v21
+   - Kompatibilita s api/search.js v29
    - Bez falošného skóre zhody
    - Presné názvy značiek a modelov
    - Prísnejšie vyhľadávanie fotografií
    - Kontrola karosérie a interiérových fotografií
    - Slovenské zobrazovanie technických údajov
    - Supabase anonymná autentifikácia
+   - Povinná fotografia a zdroj pre každé z 3 vozidiel
    ============================================================ */
 
 const CONFIG = window.CARMATCH_CONFIG || {};
@@ -1031,6 +1032,26 @@ async function postSearch(payload, authRetry = false) {
     );
   }
 
+  /* ==========================================================
+     NOVÉ: POVINNÁ FOTOGRAFIA A ZDROJ PRE VŠETKY 3 AUTÁ
+     ========================================================== */
+
+  const missingPhoto = result.cars.findIndex(car => {
+    return imageUrls(car).length === 0 || !sourceUrl(car);
+  });
+
+  if (missingPhoto !== -1) {
+    throw Object.assign(
+      new Error(
+        `Server nevrátil fotografiu so zdrojom pre vozidlo č. ${missingPhoto + 1}. Výsledky bez troch fotografií sa nezobrazia.`
+      ),
+      {
+        code: "MISSING_PHOTO",
+        payload: data
+      }
+    );
+  }
+
   return result;
 }
 
@@ -1368,7 +1389,6 @@ function scoreImageTitle(title, car) {
     normalizedTitle.split(" ")
   );
 
-  // Aspoň jedna časť značky musí byť presne v názve súboru.
   const brandHits = brandTokens.filter(
     token => titleTokens.has(token)
   ).length;
@@ -1377,7 +1397,6 @@ function scoreImageTitle(title, car) {
     return -1;
   }
 
-  // Všetky významné časti modelu musia byť v názve súboru.
   const modelHits = tokens.filter(
     token => titleTokens.has(token)
   ).length;
