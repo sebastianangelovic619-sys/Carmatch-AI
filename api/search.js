@@ -1,12 +1,12 @@
 "use strict";
 
 /* ============================================================
-   CARMATCH AI — BACKEND v34
+   CARMATCH AI — BACKEND v35
    Kompatibilita: frontend app.js v20
    Endpoint: POST /api/search
    package.json: { "type": "module" }
 
-   OPRAVY v34:
+   OPRAVY v35:
    - Groq GPT-OSS používa prísny JSON Schema režim (strict: true).
    - Kandidátsky a finálny výstup majú samostatné validné schémy.
    - GPT-OSS používa reasoning_effort low; pri Groq 429 sa preskočí druhý model v rovnakej organizácii a použije OpenRouter.
@@ -20,15 +20,19 @@
    - Zdroje, generácia, modelový rok a fotografie sa kontrolujú oddelene.
    - Fotografia sa kontroluje podľa značky a modelu; ak metadata obsahujú rok alebo kód generácie, nesmú si odporovať.
    - Wikimedia dopyty prebiehajú postupne, s identifikujúcim User-Agent a obmedzeným opakovaním HTTP 429.
-   - Znížený objem zdrojov znižuje spotrebu TPM.
+   - Ešte menší objem rešeršných zdrojov a kratšie úryvky znižujú spotrebu TPM.
+   - Groq 429 rešpektuje krátky Retry-After / čas z chybovej správy a raz opakuje požiadavku.
+   - Skrátený AI výstup (finish_reason=length) dostane jeden kontrolovaný pokus s vyšším limitom tokenov.
+   - Kandidátska JSON odpoveď má väčší výstupný limit; prázdny výstup sa diagnostikuje podľa finish_reason.
+   - Serper obrázky skúšajú viacero postupných dotazov; stav kľúča sa vypisuje iba ako boolean, nikdy samotný kľúč.
    - Zachováva Supabase kvótu/refund, presne 3 autá, filtre a zdroje.
    ============================================================ */
 
 const DAILY_LIMIT = 5;
 const MAX_QUERY_LENGTH = 1000;
-const MAX_SOURCES_PER_CAR = 4;
-const MAX_TOTAL_SOURCES = 18;
-const MAX_SOURCE_SNIPPET = 450;
+const MAX_SOURCES_PER_CAR = 3;
+const MAX_TOTAL_SOURCES = 12;
+const MAX_SOURCE_SNIPPET = 360;
 const MAX_IDENTITY_RESEARCH_SOURCES_PER_CAR = 2;
 const AUTH_TIMEOUT_MS = 8000;
 const RPC_TIMEOUT_MS = 8000;
@@ -691,6 +695,7 @@ async function callChat(provider, apiKey, model, prompt, maxOutputTokens, schema
     );
     const error = new Error(`${provider} ${model} vrátil prázdny textový výstup (${reason}).`);
     error.statusCode = 502;
+    if (choice?.finish_reason === "length") error.code = "AI_OUTPUT_TRUNCATED";
     error.provider = provider;
     error.model = model;
     throw error;
@@ -699,12 +704,54 @@ async function callChat(provider, apiKey, model, prompt, maxOutputTokens, schema
   if (choice?.finish_reason === "length") {
     const error = new Error(`${provider} ${model} skrátil výstup pre nedostatok max tokenov.`);
     error.statusCode = 502;
+    error.code = "AI_OUTPUT_TRUNCATED";
     error.provider = provider;
     error.model = model;
     throw error;
   }
 
   return extractJson(content);
+}
+
+function groqRetryDelayMs(error) {
+  if (Number(error?.retryAfter) > 0) {
+    return Math.min(3000, Math.max(250, Number(error.retryAfter) * 1000));
+  }
+  const message = String(error?.message || "");
+  const match = message.match(/try again in\s+([0-9]+(?:\.[0-9]+)?)\s*s/i);
+  if (match) return Math.min(3000, Math.max(250, Math.ceil(Number(match[1]) * 1000)));
+  return 0;
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function callChatWithRecovery(provider, apiKey, model, prompt, maxOutputTokens, schema, schemaName) {
+  try {
+    return await callChat(provider, apiKey, model, prompt, maxOutputTokens, schema, schemaName);
+  } catch (error) {
+    // Groq limit is organization-wide. Retry only when the provider gives
+    // a short reset time; never spin or retry indefinitely.
+    if (provider === "groq" && isRateLimitError(error)) {
+      const delay = groqRetryDelayMs(error);
+      if (delay > 0 && delay <= 3000) {
+        console.warn(`CARMATCH AI: Groq rate limit; one retry after ${delay} ms.`);
+        await sleep(delay);
+        return await callChat(provider, apiKey, model, prompt, maxOutputTokens, schema, schemaName);
+      }
+    }
+
+    // "finish_reason=length" is not a valid empty response: retry once with
+    // a larger bounded output budget, especially important for JSON schemas
+    // and reasoning models. Never exceed 4,000 output tokens.
+    if (error?.code === "AI_OUTPUT_TRUNCATED" && maxOutputTokens < 4000) {
+      const increased = Math.min(4000, Math.max(maxOutputTokens + 500, Math.ceil(maxOutputTokens * 1.8)));
+      console.warn(`CARMATCH AI: ${provider} ${model} output was truncated; one retry with ${increased} tokens.`);
+      return await callChat(provider, apiKey, model, prompt, increased, schema, schemaName);
+    }
+    throw error;
+  }
 }
 
 function allowedOpenRouterModels() {
@@ -730,7 +777,7 @@ async function generateAI(prompt, options = {}) {
 
     for (const model of models) {
       try {
-        return await callChat("groq", GROQ_API_KEY, model, prompt, maxOutputTokens, schema, schemaName);
+        return await callChatWithRecovery("groq", GROQ_API_KEY, model, prompt, maxOutputTokens, schema, schemaName);
       } catch (error) {
         const limited = isRateLimitError(error);
         if (limited) groqRateLimited = true;
@@ -747,7 +794,7 @@ async function generateAI(prompt, options = {}) {
   if (OPENROUTER_API_KEY) {
     for (const model of allowedOpenRouterModels()) {
       try {
-        return await callChat("openrouter", OPENROUTER_API_KEY, model, prompt, maxOutputTokens, schema, schemaName);
+        return await callChatWithRecovery("openrouter", OPENROUTER_API_KEY, model, prompt, maxOutputTokens, schema, schemaName);
       } catch (error) {
         const message = `OpenRouter ${model}: ${error.message}`;
         errors.push(message);
@@ -1383,30 +1430,57 @@ function photoMetadataMatches(item, car) {
 
 async function searchSerperPhotos(car) {
   if (!SERPER_API_KEY) return [];
-  const query = `"${car.brand} ${car.model}" "${car.generation}" exterior production vehicle`;
-  const rows = await serperSearch(query, "images", 20);
+
+  const queries = [
+    `"${car.brand} ${car.model}" "${car.generation}" exterior production vehicle`,
+    `"${car.brand} ${car.model}" SUV exterior official`,
+    `"${car.brand} ${car.model}" exterior car`
+  ];
   const output = [];
   const seen = new Set();
+  let lastError = null;
 
-  for (const item of rows) {
-    if (!photoMetadataMatches(item, car)) continue;
-    const url = safeHttpsUrl(item.imageUrl || item.thumbnailUrl);
-    const source = safeHttpsUrl(item.link);
-    if (!url || !source || seen.has(url)) continue;
-    seen.add(url);
-    const photoTitle = cleanString(item.title, 250);
-    const photoYears = [...normalized(photoTitle).matchAll(/\b(20\d{2})\b/g)].map(match => Number(match[1]));
-    output.push({
-      url,
-      source,
-      title: photoTitle,
-      width: Number(item.imageWidth) || null,
-      height: Number(item.imageHeight) || null,
-      modelYearMatched: photoYears.includes(Number(car.modelYear)),
-      generationMatched: generationPhotoMatch(photoTitle, car)
-    });
-    if (output.length >= MAX_PHOTOS_PER_CAR) break;
+  for (const query of queries) {
+    let rows = [];
+    try {
+      rows = await serperSearch(query, "images", 12);
+    } catch (error) {
+      lastError = error;
+      console.warn(`CARMATCH AI: Serper image query failed for ${car.name}:`, error.message);
+      continue;
+    }
+
+    for (const item of rows) {
+      if (!photoMetadataMatches(item, car)) continue;
+      const url = safeHttpsUrl(item.imageUrl || item.thumbnailUrl);
+      const source = safeHttpsUrl(item.link);
+      if (!url || !source || seen.has(url)) continue;
+      seen.add(url);
+      const photoTitle = cleanString(item.title, 250);
+      const photoYears = [...normalized(photoTitle).matchAll(/\b(20\d{2})\b/g)].map(match => Number(match[1]));
+      output.push({
+        url,
+        source,
+        title: photoTitle,
+        width: Number(item.imageWidth) || null,
+        height: Number(item.imageHeight) || null,
+        modelYearMatched: photoYears.includes(Number(car.modelYear)),
+        generationMatched: generationPhotoMatch(photoTitle, car)
+      });
+      if (output.length >= MAX_PHOTOS_PER_CAR) break;
+    }
+    if (output.length > 0) break;
   }
+
+  if (!output.length && lastError) {
+    console.warn(`CARMATCH AI: Serper returned no usable photos for ${car.name}; last error:`, lastError.message);
+  }
+  console.info("CARMATCH AI: Serper photo search", {
+    car: car.name,
+    queries: queries.length,
+    accepted: output.length,
+    configured: true
+  });
   return output;
 }
 
@@ -1686,7 +1760,7 @@ async function buildCars(input) {
   const generalSources = assignSourceIds(generalRows, 1, 4);
 
   const candidateResult = await generateAI(candidatePrompt(input, generalSources), {
-    maxOutputTokens: 350,
+    maxOutputTokens: 900,
     schema: CANDIDATE_SCHEMA,
     schemaName: "carmatch_candidates"
   });
@@ -1712,7 +1786,7 @@ async function buildCars(input) {
   const relevantSources = [...generalSources, ...modelSources].slice(0, MAX_TOTAL_SOURCES);
 
   const finalResult = await generateAI(detailedPrompt(input, candidates, sourceGroups), {
-    maxOutputTokens: 2600,
+    maxOutputTokens: 3200,
     schema: FINAL_SCHEMA,
     schemaName: "carmatch_vehicle_results"
   });
@@ -1751,6 +1825,16 @@ export default async function handler(req, res) {
   let consumed = false;
   let remaining = null;
 
+  console.info("CARMATCH AI: runtime provider configuration", {
+    supabaseUrlConfigured: Boolean(SUPABASE_URL),
+    supabaseKeyConfigured: Boolean(SUPABASE_API_KEY),
+    groqConfigured: Boolean(GROQ_API_KEY),
+    openrouterConfigured: Boolean(OPENROUTER_API_KEY),
+    serperConfigured: Boolean(SERPER_API_KEY),
+    tavilyConfigured: Boolean(TAVILY_API_KEY),
+    deploymentEnvironment: cleanString(process.env.VERCEL_ENV || "unknown", 30)
+  });
+
   try {
     const input = normalizeInput(parseBody(req.body));
 
@@ -1762,6 +1846,9 @@ export default async function handler(req, res) {
     }
     if (!SERPER_API_KEY && !TAVILY_API_KEY) {
       throw new HttpError("Chýba SERPER_API_KEY alebo TAVILY_API_KEY. Bez webového vyhľadávania nie je možné overovať aktuálne údaje.", 500, "WEB_SEARCH_CONFIG");
+    }
+    if (!SERPER_API_KEY) {
+      console.warn("CARMATCH AI: SERPER_API_KEY is not available in this deployment; image search will use Wikimedia fallback only.");
     }
 
     token = bearerToken(req);
