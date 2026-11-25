@@ -1,10 +1,16 @@
 "use strict";
 
 /* ============================================================
-   CARMATCH AI — BACKEND v36
+   CARMATCH AI — BACKEND v37
    Kompatibilita: frontend app.js v21
    Endpoint: POST /api/search
    package.json: { "type": "module" }
+
+   OPRAVY v37:
+   - Serper Images používa bežné nequoted dopyty a najviac 10 výsledkov; kompatibilita s bezplatným účtom.
+   - Wikimedia Commons dopyt už nevyžaduje chybnú generáciu ani presnú frázu v úvodzovkách.
+   - Diagnostika fotografií zaznamenáva aj počet prijatých výsledkov pred filtrom.
+   - Tiguan Allspace: dôkazy o generácii a prvom roku sa viažu na variant Allspace; rok 2016 a tretia generácia sa nesmú preniesť zo štandardného Tiguanu.
 
    OPRAVY v36:
    - Vyhľadávacie chyby Serper/Tavily sa už nepotláčajú; vracajú diagnostický kód a bezpečné detaily.
@@ -980,6 +986,21 @@ function vehicleMatchesSource(car, source) {
     modelTokens.every(token => normalized(haystack).includes(token));
 }
 
+function isVolkswagenTiguanAllspace(car) {
+  return normalized(car?.brand) === "volkswagen" &&
+    normalized(car?.model).includes("tiguan allspace");
+}
+
+function isOfficialVolkswagenSource(source) {
+  try {
+    const host = new URL(source?.url || "").hostname.toLowerCase().replace(/^www\./, "");
+    return host === "volkswagen.at" || host.endsWith(".volkswagen.at") ||
+      host === "volkswagen-newsroom.com" || host.endsWith(".volkswagen-newsroom.com");
+  } catch (_) {
+    return false;
+  }
+}
+
 function sourceIdentityScore(car, source) {
   const title = `${source.title || ""}`;
   const body = `${source.title || ""} ${source.snippet || ""}`;
@@ -1237,6 +1258,38 @@ function sourceModelYearFact(car, source) {
     if (match) return { year: Number(match[1]), kind: "explicit_model_year" };
   }
 
+  // Tiguan Allspace je samostatná dlhá verzia uvedená až v roku 2017.
+  // Nepreberáme preto dátum 2016 zo štandardného Tiguanu, aj keď je na tej
+  // istej stránke. Rok musí byť výslovne priradený k Allspace / dlhej verzii.
+  if (isVolkswagenTiguanAllspace(car)) {
+    const rawText = `${source.title || ""} ${source.snippet || ""} ${source.url || ""}`;
+    const allspaceRange = rawText.match(/\b(?:tiguan\s+)?allspace(?:\s+facelift)?\b[^\n]{0,100}?\b(20\d{2})\s*[-–—]\s*(20\d{2})\b/i);
+    if (allspaceRange) {
+      const start = Number(allspaceRange[1]);
+      const end = Number(allspaceRange[2]);
+      if (start >= 2017 && end >= start && end <= 2035) {
+        return { year: start, endYear: end, kind: "variant_production_range_start" };
+      }
+    }
+
+    const launchPatterns = [
+      /\btiguan\s+allspace\b.{0,220}\b(?:joined|introduced|launched|debuted)\b.{0,70}\b(20\d{2})\b/i,
+      /\b(?:start of production|production start)\b.{0,100}\b(?:long[- ]wheelbase version|long version|allspace)\b.{0,70}\b(20\d{2})\b/i,
+      /\b(?:since|from)\s+(?:its\s+)?(?:market\s+)?launch\s+in\s+(20\d{2})\b.{0,180}\ballspace\b/i
+    ];
+    for (const pattern of launchPatterns) {
+      const match = rawText.match(pattern);
+      if (match) {
+        const year = Number(match[1]);
+        if (year >= 2017 && year <= 2035) {
+          return { year, kind: "variant_introduction_year" };
+        }
+      }
+    }
+    // Žiadny všeobecný rok štandardného Tiguanu sa nesmie použiť pre Allspace.
+    return null;
+  }
+
   // 2. Ak stránka výslovne uvádza obdobie výroby/produkcie, rok začiatku
   //    je možné použiť ako prvý výrobný/modelový rok generácie. Samotný
   //    dátum publikovania článku sa nikdy nepovažuje za modelový rok.
@@ -1276,6 +1329,7 @@ function sourceModelYearFact(car, source) {
 function verifyModelYear(value, car, sources) {
   const year = parseNumeric(value);
   if (!Number.isInteger(year) || year < 1990 || year > 2035) return false;
+  if (isVolkswagenTiguanAllspace(car) && year < 2017) return false;
   return sources.some(source => sourceModelYearFact(car, source)?.year === year);
 }
 
@@ -1298,6 +1352,21 @@ function inferGenerationFromSources(car, sources) {
   const relevant = sources
     .filter(source => vehicleMatchesSource(car, source))
     .sort((a, b) => sourceIdentityScore(car, b) - sourceIdentityScore(car, a));
+
+  // Oficiálne podklady VW spájajú druhú generáciu Tiguanu (2016) s príchodom
+  // Tiguan Allspace do ponuky v roku 2017. Ak jeden oficiálny zdroj potvrdzuje
+  // Allspace aj druhú generáciu, nepoužijeme tretiu generáciu štandardného Tiguan.
+  if (isVolkswagenTiguanAllspace(car)) {
+    const officialVariantSource = relevant.find(source => {
+      if (!isOfficialVolkswagenSource(source)) return false;
+      const text = normalized(`${source.title || ""} ${source.snippet || ""}`);
+      return text.includes("allspace") &&
+        (/second generation|2nd generation|ii generation|druha generacia/.test(text));
+    });
+    if (officialVariantSource) return "2. generácia";
+    // Bez priameho oficiálneho dôkazu necháme generáciu neoverenú.
+    return null;
+  }
 
   for (const source of relevant) {
     const title = cleanString(source.title, 350);
@@ -1373,9 +1442,9 @@ function normalizeCar(rawCar, allSources, filters) {
   // AI môže vrátiť null, aj keď samotný zdroj obsahuje identifikáciu.
   // V takom prípade generáciu/rok vyberie deterministicky backend zo zdrojov.
   const inferredGeneration = inferGenerationFromSources(identity, carSources);
-  const generation = rawGeneration && verifyGeneration(rawGeneration, evidence)
-    ? rawGeneration
-    : inferredGeneration;
+  const generation = isVolkswagenTiguanAllspace(identity)
+    ? inferredGeneration
+    : (rawGeneration && verifyGeneration(rawGeneration, evidence) ? rawGeneration : inferredGeneration);
 
   const inferredYear = inferModelYearFromSources(identity, carSources);
   const modelYear = rawYear !== null && verifyModelYear(rawYear, identity, carSources)
@@ -1570,18 +1639,23 @@ function photoMetadataMatches(item, car) {
 async function searchSerperPhotos(car, searchState = null) {
   if (!SERPER_API_KEY) return [];
 
+  // Bezplatný Serper účet odmieta presné frázy v úvodzovkách. Dopyty preto
+  // používajú obyčajné slová bez operátorov a maximálne 10 obrázkov na stránku.
+  // Generáciu zámerne nepridávame: AI ju môže mať ešte nepresne overenú.
   const queries = [
-    `"${car.brand} ${car.model}" "${car.generation}" exterior production vehicle`,
-    `"${car.brand} ${car.model}" exterior production vehicle`
+    `${car.brand} ${car.model} exterior`,
+    `${car.brand} ${car.model} SUV photo`
   ];
   const output = [];
   const seen = new Set();
   let lastError = null;
+  let received = 0;
 
   for (const query of queries) {
     let rows = [];
     try {
-      rows = await serperSearch(query, "images", 12);
+      rows = await serperSearch(query, "images", 10);
+      received += rows.length;
     } catch (error) {
       lastError = error;
       recordSearchFailure(searchState, "serper", error);
@@ -1621,6 +1695,7 @@ async function searchSerperPhotos(car, searchState = null) {
   console.info("CARMATCH AI: Serper photo search", {
     car: car.name,
     queries: queries.length,
+    received,
     accepted: output.length,
     configured: true
   });
@@ -1665,9 +1740,10 @@ async function fetchCommonsWithRetry(url) {
 }
 
 async function searchCommonsPhotos(car) {
-  // Jeden široký dopyt na auto. Viac paralelných Wikimedia dopytov
-  // spôsobovalo HTTP 429 pri troch odporúčaných vozidlách.
-  const query = `"${car.brand} ${car.model}" ${car.generation} exterior vehicle`;
+  // Jeden široký dopyt na presnú značku a model. Nepridávame generáciu,
+  // pretože názvy súborov na Commons ju zvyčajne neuvádzajú a AI ju môže
+  // mať ešte nepresne overenú. Dopyt bez úvodzoviek lepšie pokryje názvy súborov.
+  const query = `${car.brand} ${car.model}`;
   const params = new URLSearchParams({
     action: "query",
     generator: "search",
