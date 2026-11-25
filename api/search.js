@@ -1,12 +1,23 @@
 "use strict";
 
 /* ============================================================
-   CARMATCH AI — BACKEND v35
-   Kompatibilita: frontend app.js v20
+   CARMATCH AI — BACKEND v36
+   Kompatibilita: frontend app.js v21
    Endpoint: POST /api/search
    package.json: { "type": "module" }
 
-   OPRAVY v35:
+   OPRAVY v36:
+   - Vyhľadávacie chyby Serper/Tavily sa už nepotláčajú; vracajú diagnostický kód a bezpečné detaily.
+   - Neplatné alebo rate-limitované vyhľadávacie kľúče sa vypnú pre aktuálnu požiadavku, aby sa zbytočne neopakovali.
+   - Počet rešeršných dotazov na jeden model znížený zo štyroch na tri.
+   - Opravené odvodzovanie začiatku obdobia výroby z rozsahu rokov (napr. 2017–2024).
+   - Opravená kontrola rímskeho označenia generácie v názve zdroja.
+   - Doplňujúce zdroje sa neodstrihnú na pôvodnom limite 12.
+   - Fotografia sa neodmietne iba preto, že jej názov obsahuje bežný rok fotografie; kontroluje sa explicitný modelový rok.
+   - Diagnostické logy obsahujú čitateľný JSON detail bez API kľúčov.
+   - OpenRouter Nemotron používa nízku úroveň reasoning; pri neplatnom kľúči sa neopakujú modely s rovnakým kľúčom.
+
+   PÔVODNÉ OPRAVY v35:
    - Groq GPT-OSS používa prísny JSON Schema režim (strict: true).
    - Kandidátsky a finálny výstup majú samostatné validné schémy.
    - GPT-OSS používa reasoning_effort low; pri Groq 429 sa preskočí druhý model v rovnakej organizácii a použije OpenRouter.
@@ -31,7 +42,7 @@
 const DAILY_LIMIT = 5;
 const MAX_QUERY_LENGTH = 1000;
 const MAX_SOURCES_PER_CAR = 3;
-const MAX_TOTAL_SOURCES = 12;
+const MAX_TOTAL_SOURCES = 20;
 const MAX_SOURCE_SNIPPET = 360;
 const MAX_IDENTITY_RESEARCH_SOURCES_PER_CAR = 2;
 const AUTH_TIMEOUT_MS = 8000;
@@ -61,6 +72,35 @@ class HttpError extends Error {
     this.code = code;
     this.details = details;
   }
+}
+
+function createSearchState() {
+  return {
+    disabled: { serper: false, tavily: false },
+    failures: []
+  };
+}
+
+function recordSearchFailure(state, provider, error) {
+  if (!state || !state.disabled || !state.failures) return;
+  const statusCode = Number(error?.statusCode) || null;
+  const message = cleanString(error?.message || "Neznáma chyba", 260);
+  const failure = { provider, statusCode, message };
+  state.failures.push(failure);
+  if (state.failures.length > 12) state.failures.shift();
+  // Authentication failures and provider rate limits will not recover
+  // during this single search request. Do not repeatedly call the same key.
+  if ([401, 403, 429].includes(statusCode)) {
+    state.disabled[provider] = true;
+  }
+}
+
+function searchFailureSummary(state) {
+  return (state?.failures || []).slice(-8).map(item => ({
+    provider: item.provider,
+    statusCode: item.statusCode,
+    message: item.message
+  }));
 }
 
 function json(res, statusCode, payload) {
@@ -405,7 +445,12 @@ async function serperSearch(query, type = "search", num = 8) {
     type === "images" ? IMAGE_TIMEOUT_MS : SEARCH_TIMEOUT_MS
   );
   const data = await responseJson(response);
-  if (!response.ok) throw new Error(data?.message || data?.error || `Serper ${endpoint} HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(cleanString(data?.message || data?.error || `Serper ${endpoint} HTTP ${response.status}`, 400));
+    error.statusCode = response.status;
+    error.provider = "serper";
+    throw error;
+  }
   return type === "images" ? (data.images || []) : (data.organic || []);
 }
 
@@ -429,7 +474,12 @@ async function tavilySearch(query) {
     SEARCH_TIMEOUT_MS
   );
   const data = await responseJson(response);
-  if (!response.ok) throw new Error(data?.message || `Tavily HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(cleanString(data?.message || `Tavily HTTP ${response.status}`, 400));
+    error.statusCode = response.status;
+    error.provider = "tavily";
+    throw error;
+  }
   return (data.results || []).map(item => ({ title: item.title, link: item.url, snippet: item.content }));
 }
 
@@ -442,29 +492,56 @@ function normalizeSource(item) {
   return { title, url, snippet };
 }
 
-async function searchSources(query) {
+async function searchSources(query, state = createSearchState()) {
   let rows = [];
-  let primaryError = null;
+  let providerSucceeded = false;
+  let attempted = 0;
 
-  if (SERPER_API_KEY) {
+  if (SERPER_API_KEY && !state.disabled.serper) {
+    attempted++;
     try {
       rows = await serperSearch(query, "search", 8);
+      providerSucceeded = true;
     } catch (error) {
-      primaryError = error;
-      console.warn("CARMATCH AI: Serper search failed; trying Tavily:", error.message);
+      recordSearchFailure(state, "serper", error);
+      console.warn("CARMATCH AI: Serper search failed", {
+        statusCode: Number(error?.statusCode) || null,
+        message: cleanString(error?.message, 300)
+      });
     }
   }
 
-  if ((!rows || !rows.length) && TAVILY_API_KEY) {
+  if ((!rows || !rows.length) && TAVILY_API_KEY && !state.disabled.tavily) {
+    attempted++;
     try {
       rows = await tavilySearch(query);
+      providerSucceeded = true;
     } catch (error) {
-      console.warn("CARMATCH AI: Tavily search failed:", error.message);
-      if (!primaryError) primaryError = error;
+      recordSearchFailure(state, "tavily", error);
+      console.warn("CARMATCH AI: Tavily search failed", {
+        statusCode: Number(error?.statusCode) || null,
+        message: cleanString(error?.message, 300)
+      });
     }
   }
 
-  if ((!rows || !rows.length) && primaryError && !TAVILY_API_KEY) throw primaryError;
+  const noProviderAvailable =
+    (!SERPER_API_KEY || state.disabled.serper) &&
+    (!TAVILY_API_KEY || state.disabled.tavily);
+
+  if (!providerSucceeded && (attempted > 0 || noProviderAvailable)) {
+    throw new HttpError(
+      "Webové vyhľadávanie nie je momentálne dostupné. Skontroluj API kľúče Serper a Tavily vo Verceli.",
+      503,
+      "WEB_SEARCH_UNAVAILABLE",
+      {
+        attemptedProviders: attempted,
+        disabledProviders: { ...state.disabled },
+        providerFailures: searchFailureSummary(state),
+        query: cleanString(query, 220)
+      }
+    );
+  }
 
   const unique = [];
   const seen = new Set();
@@ -664,6 +741,11 @@ async function callChat(provider, apiKey, model, prompt, maxOutputTokens, schema
     body.max_tokens = maxOutputTokens;
     body.provider = { require_parameters: true };
     body.plugins = [{ id: "response-healing" }];
+    // Nemotron 3.5 has reasoning enabled by default. Keep it low so the
+    // completion budget remains available for the required JSON response.
+    if (/nvidia\/nemotron-3\.5-super-vl/i.test(model)) {
+      body.reasoning = { effort: "low" };
+    }
   } else {
     body.max_completion_tokens = maxOutputTokens;
     if (isGroqStrictModel(model)) body.reasoning_effort = "low";
@@ -784,9 +866,9 @@ async function generateAI(prompt, options = {}) {
         const message = `Groq ${model}: ${error.message}`;
         errors.push(message);
         console.error(`CARMATCH AI: ${message}`);
-        // Pri TPM/RPM limite ďalší model v rovnakej organizácii zvyčajne
-        // zdieľa ten istý limit. Preskočíme Groq fallback a prejdeme na OpenRouter.
-        if (limited) break;
+        // Pri TPM/RPM limite alebo neplatnom kľúči ďalší model používa
+        // rovnaký účet a problém by iba zopakoval.
+        if (limited || [401, 403].includes(Number(error?.statusCode))) break;
       }
     }
   }
@@ -799,6 +881,7 @@ async function generateAI(prompt, options = {}) {
         const message = `OpenRouter ${model}: ${error.message}`;
         errors.push(message);
         console.error(`CARMATCH AI: ${message}`);
+        if ([401, 403].includes(Number(error?.statusCode))) break;
       }
     }
   }
@@ -856,9 +939,8 @@ function modelResearchQueries(candidate) {
   const shortBrand = aliases.length > 1 ? aliases[1] : brand;
   return [
     `"${brand}" "${model}" current generation generation code chassis code Europe`,
-    `"${shortBrand}" "${model}" generation code chassis code production period ${currentYear}`,
-    `"${brand}" "${model}" "${currentYear}" "${nextYear}" model years production period`,
-    `"${brand}" "${model}" model year ${currentYear} manufacturer Europe specifications`
+    `"${shortBrand}" "${model}" generation code production period first year Europe`,
+    `"${brand}" "${model}" model year model years production years ${currentYear} ${nextYear}`
   ];
 }
 
@@ -920,11 +1002,13 @@ function sourceIdentityScore(car, source) {
   return score;
 }
 
-async function collectModelSources(candidates, firstSourceId = 1) {
+async function collectModelSources(candidates, firstSourceId = 1, searchState = createSearchState()) {
   const results = await Promise.all(candidates.map(async candidate => {
     const queries = modelResearchQueries(candidate);
+    const queryErrors = [];
     const groups = await Promise.all(queries.map(query =>
-      searchSources(query).catch(error => {
+      searchSources(query, searchState).catch(error => {
+        queryErrors.push({ code: error?.code || "SEARCH_ERROR", message: cleanString(error?.message, 240) });
         console.warn(`CARMATCH AI: model source search failed for ${candidate.brand} ${candidate.model}:`, error.message);
         return [];
       })
@@ -937,10 +1021,30 @@ async function collectModelSources(candidates, firstSourceId = 1) {
       if (!old || (item.snippet || "").length > (old.snippet || "").length) byUrl.set(item.url, item);
     }
 
-    return [...byUrl.values()]
+    const matched = [...byUrl.values()]
       .filter(item => vehicleMatchesSource(candidate, item))
       .sort((a, b) => sourceIdentityScore(candidate, b) - sourceIdentityScore(candidate, a))
       .slice(0, MAX_SOURCES_PER_CAR);
+
+    if (!matched.length) {
+      const providerFailures = searchFailureSummary(searchState);
+      const unavailable = queryErrors.some(item => item.code === "WEB_SEARCH_UNAVAILABLE") ||
+        (providerFailures.length > 0 && searchState.disabled.serper && searchState.disabled.tavily);
+      throw new HttpError(
+        `Pre model ${candidate.brand} ${candidate.model} sa nepodarilo získať použiteľné zdroje.`,
+        unavailable ? 503 : 502,
+        unavailable ? "WEB_SEARCH_UNAVAILABLE" : "MODEL_SOURCES_MISSING",
+        {
+          brand: candidate.brand,
+          model: candidate.model,
+          queryErrors,
+          providerFailures,
+          disabledProviders: { ...searchState.disabled }
+        }
+      );
+    }
+
+    return matched;
   }));
 
   const all = [];
@@ -1091,7 +1195,24 @@ function verifyGeneration(value, evidence) {
       fourth: ["fourth generation", "4th generation", "4 generacia", "stvrta generacia", "iv generation", "klasse iv"],
       "4th": ["fourth generation", "4th generation", "4 generacia", "stvrta generacia", "iv generation", "klasse iv"]
     };
-    return (variants[ordinal] || []).some(variant => evidenceNorm.includes(normalized(variant)));
+    if ((variants[ordinal] || []).some(variant => evidenceNorm.includes(normalized(variant)))) {
+      return true;
+    }
+
+    // Sources sometimes express the generation as a Roman numeral tied to
+    // a chassis/type code, e.g. "Tiguan Allspace II (X123)". Accept that
+    // only when the numeral is explicitly attached to a model code.
+    const romanByOrdinal = {
+      "1": "I", first: "I", "1st": "I",
+      "2": "II", second: "II", "2nd": "II",
+      "3": "III", third: "III", "3rd": "III",
+      "4": "IV", fourth: "IV", "4th": "IV"
+    };
+    const roman = romanByOrdinal[ordinal];
+    if (roman) {
+      const romanCodePattern = new RegExp(`\\b${roman}\\s*\\(\\s*[A-Z]{1,3}\\d{2,4}\\s*\\)`, "i");
+      if (romanCodePattern.test(evidence)) return true;
+    }
   }
   return verifyText(candidate, evidence, 1);
 }
@@ -1119,8 +1240,26 @@ function sourceModelYearFact(car, source) {
   // 2. Ak stránka výslovne uvádza obdobie výroby/produkcie, rok začiatku
   //    je možné použiť ako prvý výrobný/modelový rok generácie. Samotný
   //    dátum publikovania článku sa nikdy nepovažuje za modelový rok.
-  const productionContext = /production|productie|bouwjaar|bouwperiode|looptijd|model years?/i.test(norm);
+  const productionContext = /production|produced|manufactured|built|productie|bouwjaar|bouwperiode|looptijd|model years?/i.test(norm);
   if (productionContext) {
+    // A normalized range such as "production period 2017-2024" becomes
+    // "production period 2017 2024". Capture the first year as the start
+    // year; do not confuse a page publication date with a vehicle year.
+    const rangePatterns = [
+      /(?:production(?:\s*period)?|produced|manufactured|built|productie(?:periode|\s*periode)?|bouwperiode|looptijd|model years?)\b.{0,55}?\b(20\d{2})\s+(?:(?:to|until|through)\s+)?(20\d{2})\b/i,
+      /\b(20\d{2})\s+(?:(?:to|until|through)\s+)?(20\d{2})\b.{0,55}\b(?:production|produced|manufactured|built|productie|bouwperiode|looptijd|model years?)\b/i
+    ];
+    for (const pattern of rangePatterns) {
+      const match = norm.match(pattern);
+      if (match) {
+        const first = Number(match[1]);
+        const last = Number(match[2]);
+        if (first >= 1990 && last >= first && last <= 2035 && last - first <= 25) {
+          return { year: first, endYear: last, kind: "production_range_start" };
+        }
+      }
+    }
+
     const patterns = [
       /(?:production\s*period|production|productieperiode|productie\s*periode|bouwperiode|looptijd)\s*(20\d{2})\s*(?:present|current|heden|now|ongoing)/i,
       /(?:model years?|modeljaar|modeljaren)\s*[:\-]?\s*(20\d{2})\s*(?:-|–|—|to)?/i,
@@ -1409,9 +1548,9 @@ function photoMetadataMatches(item, car) {
 
   // Modelový rok nebýva v titulkoch fotografií uvedený. Ak je v metadátach
   // uvedený, musí sedieť; ak chýba, neblokujeme správny model len pre chýbajúci rok.
-  const titleYears = [...normalized(title).matchAll(/\b(20\d{2})\b/g)].map(match => Number(match[1]));
-  if (titleYears.length && titleYears.some(year => year >= 1990 && year <= 2035) &&
-      !titleYears.includes(Number(car.modelYear))) {
+  const titleNorm = normalized(title);
+  const explicitPhotoModelYear = titleNorm.match(/\b(?:my|model year)\s*(20\d{2})\b/i);
+  if (explicitPhotoModelYear && Number(explicitPhotoModelYear[1]) !== Number(car.modelYear)) {
     return false;
   }
 
@@ -1428,13 +1567,12 @@ function photoMetadataMatches(item, car) {
   return true;
 }
 
-async function searchSerperPhotos(car) {
+async function searchSerperPhotos(car, searchState = null) {
   if (!SERPER_API_KEY) return [];
 
   const queries = [
     `"${car.brand} ${car.model}" "${car.generation}" exterior production vehicle`,
-    `"${car.brand} ${car.model}" SUV exterior official`,
-    `"${car.brand} ${car.model}" exterior car`
+    `"${car.brand} ${car.model}" exterior production vehicle`
   ];
   const output = [];
   const seen = new Set();
@@ -1446,7 +1584,12 @@ async function searchSerperPhotos(car) {
       rows = await serperSearch(query, "images", 12);
     } catch (error) {
       lastError = error;
-      console.warn(`CARMATCH AI: Serper image query failed for ${car.name}:`, error.message);
+      recordSearchFailure(searchState, "serper", error);
+      console.warn(`CARMATCH AI: Serper image query failed for ${car.name}:`, {
+        statusCode: Number(error?.statusCode) || null,
+        message: cleanString(error?.message, 300)
+      });
+      if (searchState?.disabled?.serper) break;
       continue;
     }
 
@@ -1589,11 +1732,11 @@ async function searchCommonsPhotos(car) {
   return output;
 }
 
-async function findPhotosForCar(car) {
+async function findPhotosForCar(car, searchState = null) {
   let photos = [];
-  if (SERPER_API_KEY) {
+  if (SERPER_API_KEY && !searchState?.disabled?.serper) {
     try {
-      photos = await searchSerperPhotos(car);
+      photos = await searchSerperPhotos(car, searchState);
     } catch (error) {
       console.warn(`CARMATCH AI: Serper image search failed for ${car.name}:`, error.message);
     }
@@ -1630,7 +1773,7 @@ async function findPhotosForCar(car) {
   };
 }
 
-async function supplementIdentitySources(candidates, rawCars, existingSources) {
+async function supplementIdentitySources(candidates, rawCars, existingSources, searchState = createSearchState()) {
   const seen = new Set(existingSources.map(source => source.url));
 
   // Doplňujúce vyhľadávania pre všetky chýbajúce autá prebiehajú paralelne.
@@ -1659,7 +1802,7 @@ async function supplementIdentitySources(candidates, rawCars, existingSources) {
 
     const groups = await Promise.all(queries.map(async query => {
       try {
-        return await searchSources(query);
+        return await searchSources(query, searchState);
       } catch (error) {
         console.warn(`CARMATCH AI: identity follow-up search failed for ${candidate.brand} ${candidate.model}:`, error.message);
         return [];
@@ -1752,9 +1895,16 @@ function canonicalizeFinalCars(candidates, rawCars) {
   });
 }
 
-async function buildCars(input) {
-  const generalRows = await searchSources(buildGeneralQuery(input)).catch(error => {
-    console.warn("CARMATCH AI: general web search failed:", error.message);
+async function buildCars(input, searchState = createSearchState()) {
+  const generalRows = await searchSources(buildGeneralQuery(input), searchState).catch(error => {
+    console.warn("CARMATCH AI: general web search failed:", {
+      code: error?.code || "SEARCH_ERROR",
+      statusCode: Number(error?.statusCode) || null,
+      message: cleanString(error?.message, 300)
+    });
+    // If all configured search providers are unusable, stop before spending
+    // AI tokens on candidate selection that cannot be verified afterwards.
+    if (error?.code === "WEB_SEARCH_UNAVAILABLE") throw error;
     return [];
   });
   const generalSources = assignSourceIds(generalRows, 1, 4);
@@ -1782,7 +1932,7 @@ async function buildCars(input) {
     throw new HttpError("AI vybrala duplicitné modely namiesto troch odlišných vozidiel.", 502, "DUPLICATE_CARS");
   }
 
-  const { all: modelSources, perCar: sourceGroups } = await collectModelSources(candidates, generalSources.length + 1);
+  const { all: modelSources, perCar: sourceGroups } = await collectModelSources(candidates, generalSources.length + 1, searchState);
   const relevantSources = [...generalSources, ...modelSources].slice(0, MAX_TOTAL_SOURCES);
 
   const finalResult = await generateAI(detailedPrompt(input, candidates, sourceGroups), {
@@ -1797,15 +1947,31 @@ async function buildCars(input) {
   // Najprv bezpečne priradíme každý výsledok ku kandidátovi. Alias značky
   // akceptujeme, ale názov modelu musí byť presný a každý kandidát sa použije raz.
   const canonicalFinalCars = canonicalizeFinalCars(candidates, finalResult.cars);
-  const verifiedSources = await supplementIdentitySources(candidates, canonicalFinalCars, relevantSources);
-  const cars = canonicalFinalCars.map(raw => normalizeCar(raw, verifiedSources, input.filters));
+  const verifiedSources = await supplementIdentitySources(candidates, canonicalFinalCars, relevantSources, searchState);
+  const cars = canonicalFinalCars.map(raw => {
+    try {
+      return normalizeCar(raw, verifiedSources, input.filters);
+    } catch (error) {
+      if (error instanceof HttpError) {
+        const prior = error.details && typeof error.details === "object" && !Array.isArray(error.details)
+          ? error.details
+          : { originalDetails: error.details };
+        error.details = {
+          ...prior,
+          searchProviderFailures: searchFailureSummary(searchState),
+          disabledSearchProviders: { ...searchState.disabled }
+        };
+      }
+      throw error;
+    }
+  });
   const identities = new Set(cars.map(car => normalized(`${car.brand} ${car.model}`)));
   if (identities.size !== 3) throw new HttpError("Výsledok obsahuje duplicitné modely.", 502, "DUPLICATE_CARS");
 
   validateFilters(cars, input.filters);
   const withPhotos = [];
   for (const car of cars) {
-    withPhotos.push(await findPhotosForCar(car));
+    withPhotos.push(await findPhotosForCar(car, searchState));
   }
   if (withPhotos.length !== 3 || withPhotos.some(car => !car.image || !car.photoSource)) {
     throw new HttpError("Nepodarilo sa zabezpečiť overiteľnú fotografiu pre všetky tri vozidlá.", 502, "THREE_PHOTOS_REQUIRED");
@@ -1858,7 +2024,8 @@ export default async function handler(req, res) {
     consumed = quota.consumed;
     remaining = quota.remaining;
 
-    const result = await buildCars(input);
+    const searchState = createSearchState();
+    const result = await buildCars(input, searchState);
     return json(res, 200, {
       cars: result.cars,
       sources: result.sources,
@@ -1872,7 +2039,8 @@ export default async function handler(req, res) {
       message: error?.message,
       code: error?.code,
       statusCode: error?.statusCode,
-      details: error?.details
+      details: error?.details,
+      detailsJson: error?.details ? JSON.stringify(error.details).slice(0, 7000) : undefined
     });
 
     let refund = { refunded: false };
