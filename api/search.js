@@ -1,12 +1,12 @@
 "use strict";
 
 /* ============================================================
-   CARMATCH AI — BACKEND v40
+   CARMATCH AI — BACKEND v41
    Kompatibilita: frontend app.js v21
    Endpoint: POST /api/search
    package.json: { "type": "module" }
 
-   OPRAVY v40:
+   OPRAVY v41:
    - Groq 429 už neopakuje požiadavku po svojvoľných 3 sekundách;
      pri rate limite sa okamžite presunie na OpenRouter.
    - Groq retry-after a reset informácie sa zaznamenajú do diagnostiky.
@@ -28,6 +28,9 @@
    - Chýbajúca fotografia nezhodí správne overené vozidlá; vráti sa stav bez fotky.
    - Zachované: Supabase Auth, denná kvóta/refund, 3 vozidlá, fotografie,
      Serper/Tavily a kompatibilita app.js v21.
+   - Kandidáti sa kontrolujú podľa aktuálnej európskej ponuky; pri nepreukázanom modeli sa raz automaticky vyberú náhradní kandidáti.
+   - Presné označenia variantov (napr. Q5 L) sa nesmú zhodovať s obyčajným Q5.
+   - Fotografie bez potvrdenej generácie sa prijmú iba z oficiálnej stránky výrobcu aktuálneho modelu alebo s jasným dôkazom modelového roka; inak sa nezobrazia.
    ============================================================ */
 
 const DAILY_LIMIT = 5;
@@ -810,14 +813,15 @@ async function generateAI(prompt, options = {}) {
 
 /* ---------------------------- AI PROMPTS ---------------------------- */
 
-function candidatePrompt(input, sources) {
+function candidatePrompt(input, sources, excludedCandidates = []) {
   const sourceText = sources.map(s => `${s.id} | ${s.title}\n${cleanString(s.snippet, 650)}\nURL: ${s.url}`).join("\n\n");
   const currentYear = new Date().getUTCFullYear();
+  const excludedText = excludedCandidates.length ? `\nModely odmietnuté pre nedostatočný dôkaz aktuálnej európskej ponuky; NESMIEŠ ich znovu vybrať: ${excludedCandidates.join("; ")}.\n` : "";
   return `Vyber presne TRI navzájom odlišné sériové automobily, ktoré najlepšie spĺňajú zadanie a sú relevantné pre aktuálny európsky/slovenský trh. Vráť iba JSON podľa schémy.\n` +
     `Dátum: ${new Date().toISOString().slice(0, 10)} (aktuálny rok ${currentYear}).\n` +
     `Požiadavka: ${input.naturalLanguage || "Používateľ zadal iba filtre."}\nFiltre: ${JSON.stringify(input.filters)}\n` +
-    `Všeobecné webové podklady (nie sú automatickým dôkazom parametrov konkrétneho auta):\n${sourceText || "Žiadne."}\n` +
-    "Pravidlá: vyber iba reálne sériové modely, ktoré sa aktuálne predávajú alebo majú aktuálnu európsku modelovú ponuku; nerekomenduj koncepty, prototypy, ukončené modely ani iba pripravované nástupnícke generácie. Rešpektuj všetky filtre a vylúčené značky. Vyber tri rôzne značky/modely; žiadne duplicity. Zatiaľ uveď iba presnú značku a model, bez technických údajov, ceny, generácie a roku. Ak si nie si istý aktuálnou dostupnosťou modelu, zvoľ iný lepšie doložený model. Bez textu mimo JSON.";
+    `Všeobecné webové podklady (nie sú automatickým dôkazom parametrov konkrétneho auta):\n${sourceText || "Žiadne."}\n` + excludedText +
+    "Pravidlá: vyber iba reálne sériové modely s aktuálnou európskou/slovenskou ponukou. Každý model musí mať presnú zhodu s európskou verziou na oficiálnom webe výrobcu; nestačí podobný model, starý cenník, archívna stránka ani ponuka mimo Európy. Nerekomenduj koncepty, prototypy, ukončené modely, iba pripravované nástupnícke generácie ani regionálne verzie pre Čínu/USA/Austráliu, ktoré sa nepredávajú v Európe. Nezamieňaj odvodené verzie a dlhé rázvory (napr. označenie L) s bežným modelom. Rešpektuj filtre a vylúčené značky. Vyber tri rôzne modely bez duplicít. Uveď iba presnú značku a model, bez technických údajov, ceny, generácie a roku. Ak si nie si istý aktuálnou dostupnosťou v Európe, zvoľ iný lepšie doložený model. Bez textu mimo JSON.";
 }
 
 function modelResearchQueries(candidate) {
@@ -858,11 +862,23 @@ function tokens(value) {
   return normalized(value).split(" ").filter(token => token.length >= 2);
 }
 
+function modelMatchesText(model, text) {
+  const modelNorm = normalized(model);
+  const hayNorm = normalized(text);
+  if (!modelNorm || !hayNorm) return false;
+  if (phrasePresent(hayNorm, modelNorm)) return true;
+  const parts = modelNorm.split(" ").filter(Boolean);
+  if (parts.length > 1 && parts[parts.length - 1].length === 1) {
+    const compact = parts.join("");
+    return new RegExp(`\\b${compact}\\b`, "i").test(hayNorm) ||
+      new RegExp(`\\b${parts.slice(0, -1).join("\\s+")}\\s+${parts[parts.length - 1]}\\b`, "i").test(hayNorm);
+  }
+  return parts.every(token => new RegExp(`\\b${token}\\b`, "i").test(hayNorm));
+}
+
 function vehicleMatchesSource(car, source) {
   const haystack = `${source.title || ""} ${source.snippet || ""} ${source.url || ""}`;
-  const normHaystack = normalized(haystack);
-  const modelTokens = tokens(car.model);
-  return brandMatchesText(car.brand, haystack) && modelTokens.length > 0 && modelTokens.every(token => normHaystack.includes(token));
+  return brandMatchesText(car.brand, haystack) && modelMatchesText(car.model, haystack);
 }
 
 function sourceHost(source) {
@@ -917,22 +933,33 @@ function isOfficialManufacturerSource(brand, source) {
   };
   const roots = officialRoots[key] || [key];
   const firstLabel = host.split(".")[0];
-  return roots.some(root => firstLabel === root);
+  return roots.some(root => firstLabel === root || host === root || host.startsWith(`${root}.`) || host.includes(`.${root}.`));
+}
+
+function isEuropeanManufacturerSource(brand, source) {
+  if (!isOfficialManufacturerSource(brand, source)) return false;
+  const host = sourceHost(source);
+  if (!host) return false;
+  if (/\.(?:com\.my|com\.au|com\.cn|cn|co\.jp|co\.kr|co\.in)$/.test(host)) return false;
+  return /\.(?:sk|cz|de|fr|ie|co\.uk|es|it|nl|be|at|ch|pl|pt|eu)$/.test(host) || /\.(?:com|eu)$/.test(host);
 }
 
 function isCurrentModelEvidence(brand, source) {
-  if (!isTrustedVehicleSource(brand, source)) return false;
+  if (!isTrustedVehicleSource(brand, source) || !isEuropeanManufacturerSource(brand, source)) return false;
   const text = normalized(`${source?.title || ""} ${source?.snippet || ""}`);
   const hostAndUrl = `${sourceHost(source)} ${source?.url || ""}`.toLowerCase();
-  if (/\b(discontinued|no longer available|out of production|production ended|end of production|ended production)\b/.test(text)) return false;
+  if (/\b(discontinued|no longer available|out of production|production ended|end of production|ended production|replaced by its successor)\b/.test(text)) return false;
+  if (/\b20(?:0[0-9]|1[0-9]|2[0-3])\s+20(?:1[0-9]|2[0-4])\b/.test(text)) return false;
   const currentYear = new Date().getUTCFullYear();
   const nextYear = currentYear + 1;
-  const explicitCurrent = /\b(current model|current generation|currently available|currently on sale|still on sale|current lineup|current range|new car configurator)\b/.test(text);
+  const explicitCurrent = /\b(current model|current generation|currently available|currently on sale|still on sale|current lineup|current range|new car configurator|order now|available to order)\b/.test(text);
   const currentYearMention = new RegExp(`\\b(?:${currentYear}|${nextYear})\\b`).test(text);
-  const officialProductPage = isOfficialManufacturerSource(brand, source) &&
-    /\/(?:models?\/|all-models\/|vehicles?\/|passengercars\/|configurator)/.test(hostAndUrl) &&
-    !/newsroom|press|media/.test(hostAndUrl);
+  const officialProductPage = /\/(?:models?|all-models|vehicles?|passengercars|configurator)(?:\/|\?|$)/.test(hostAndUrl) && !/newsroom|press|media|\.pdf(?:$|\?)/.test(hostAndUrl);
   return explicitCurrent || currentYearMention || officialProductPage;
+}
+
+function hasCurrentEuropeanEvidence(candidate, sources) {
+  return (sources || []).some(source => vehicleMatchesSource(candidate, source) && isCurrentModelEvidence(candidate.brand, source));
 }
 
 function isTrustedVehicleSource(brand, source) {
@@ -990,11 +1017,15 @@ async function collectModelSources(candidates, firstSourceId = 1, searchState = 
     if (!matched.length) {
       const providerFailures = searchFailureSummary(searchState);
       const unavailable = queryErrors.some(item => item.code === "WEB_SEARCH_UNAVAILABLE") || (providerFailures.length > 0 && searchState.disabled.serper && searchState.disabled.tavily);
-      throw new HttpError(`Pre model ${candidate.brand} ${candidate.model} sa nenašli dostatočne dôveryhodné a nešpekulatívne zdroje.`, unavailable ? 503 : 502, unavailable ? "WEB_SEARCH_UNAVAILABLE" : "MODEL_SOURCES_MISSING", {
-        brand: candidate.brand, model: candidate.model, queryErrors, providerFailures,
-        rejectedSpeculativeSources: [...byUrl.values()].filter(isSpeculativeSource).slice(0, 4).map(source => ({ title: source.title, url: source.url })),
-        disabledProviders: { ...searchState.disabled }
+      if (unavailable) {
+        throw new HttpError(`Webové vyhľadávanie je dočasne nedostupné pri overovaní ${candidate.brand} ${candidate.model}.`, 503, "WEB_SEARCH_UNAVAILABLE", {
+          brand: candidate.brand, model: candidate.model, queryErrors, providerFailures, disabledProviders: { ...searchState.disabled }
+        });
+      }
+      console.warn("CARMATCH AI: candidate rejected because no reliable model sources were found", {
+        car: `${candidate.brand} ${candidate.model}`, queryErrors: queryErrors.length
       });
+      return [];
     }
 
     console.info("CARMATCH AI: model source coverage", {
@@ -1331,6 +1362,8 @@ function normalizeCar(rawCar, candidate, allSources, filters) {
     name: identity.name,
     generation: safeGeneration,
     generationStatus: safeGeneration ? "verified" : "unverified",
+    currentModelVerified: hasCurrentEuropeanEvidence(identity, carSources),
+    marketStatus: hasCurrentEuropeanEvidence(identity, carSources) ? "verified" : "unverified",
     modelYear: safeModelYear,
     modelYearStatus: safeModelYear ? "verified" : "unverified",
     year: safeModelYear,
@@ -1405,29 +1438,39 @@ function photoMetadataMatches(item, car) {
   const title = cleanString(item?.title, 350);
   const sourceUrl = safeHttpsUrl(item?.link || item?.source || item?.descriptionurl);
   const haystack = normalized(`${title} ${sourceUrl}`);
-  if (!haystack || rejectedPhotoText(title)) return false;
-  const modelTokens = tokens(car.model);
-  if (!modelTokens.length || !brandMatchesText(car.brand, `${title} ${sourceUrl}`)) return false;
-  if (!modelTokens.every(token => haystack.includes(token))) return false;
+  if (!haystack || rejectedPhotoText(title) || isSpeculativeSource({ title, snippet: sourceUrl })) return false;
+  if (!brandMatchesText(car.brand, `${title} ${sourceUrl}`) || !modelMatchesText(car.model, `${title} ${sourceUrl}`)) return false;
 
   const years = [...haystack.matchAll(/\b(20\d{2})\b/g)].map(match => Number(match[1]));
   const yearMatched = Number.isInteger(car.modelYear) && years.includes(car.modelYear);
   const generationMatched = Boolean(car.generation) && generationPhotoMatch(title, car);
-  // Bez potvrdenej generácie/modelového roka sa fotografia nepovažuje za presnú.
-  if (!yearMatched && !generationMatched) return false;
-  if (car.generation && !generationMatched) return false;
+  if (car.generation && !generationMatched && !yearMatched) return false;
+  if (Number.isInteger(car.modelYear) && !yearMatched && !generationMatched) return false;
   if (Number.isInteger(car.modelYear) && years.some(year => year !== car.modelYear) && !generationMatched) return false;
 
   const expectedCodes = cleanString(car.generation, 100).match(/\b[A-Z]{1,3}\d{2,4}\b/gi) || [];
   const foundCodes = title.match(/\b[A-Z]{1,3}\d{2,4}\b/gi) || [];
   if (expectedCodes.length && (!foundCodes.length || !expectedCodes.some(code => foundCodes.some(found => normalized(found) === normalized(code))))) return false;
+
+  // Pri neznámej generácii nepoužijeme náhodnú starú fotografiu z Commons.
+  // Bezpečná výnimka: oficiálna stránka výrobcu aktuálnej európskej ponuky,
+  // alebo titulok, ktorý výslovne uvádza aktuálny modelový rok.
+  if (!yearMatched && !generationMatched) {
+    const officialImagePage = isEuropeanManufacturerSource(car.brand, { url: sourceUrl });
+    const currentYear = new Date().getUTCFullYear();
+    const currentYearInTitle = years.some(year => year === currentYear || year === currentYear + 1);
+    if (car.marketStatus !== "verified" || (!officialImagePage && !currentYearInTitle)) return false;
+  }
   return true;
 }
 
 async function searchSerperPhotos(car, searchState = null) {
   if (!SERPER_API_KEY) return [];
-  const identityHint = car.generation || (car.modelYear ? `model year ${car.modelYear}` : "current model");
-  const queries = [`${car.brand} ${car.model} ${identityHint} exterior photo`];
+  const identityHint = car.generation || (car.modelYear ? `model year ${car.modelYear}` : `current European model ${new Date().getUTCFullYear()}`);
+  const queries = [
+    `${car.brand} ${car.model} ${identityHint} official press image exterior`,
+    `${car.brand} ${car.model} official manufacturer media gallery current model exterior`
+  ];
   const output = [];
   const seen = new Set();
   let lastError = null;
@@ -1499,7 +1542,8 @@ async function fetchCommonsWithRetry(url) {
 }
 
 async function searchCommonsPhotos(car) {
-  const query = `${car.brand} ${car.model}`;
+  const identityHint = car.generation || (car.modelYear ? ` ${car.modelYear}` : ` ${new Date().getUTCFullYear()}`);
+  const query = `${car.brand} ${car.model}${identityHint}`;
   const params = new URLSearchParams({
     action: "query", generator: "search", gsrsearch: query, gsrnamespace: "6", gsrlimit: "30",
     prop: "imageinfo", iiprop: "url|extmetadata", iiurlwidth: "1400", format: "json", origin: "*"
@@ -1550,6 +1594,7 @@ async function findPhotosForCar(car, searchState = null) {
   }
   const photo = photos[0];
   const photoIdentityMatched = Boolean(car.generation && generationPhotoMatch(photo.title, car));
+  const photoYearMatched = Boolean(car.modelYear && photo.modelYearMatched);
   return {
     ...car,
     image: photo.url,
@@ -1557,7 +1602,7 @@ async function findPhotosForCar(car, searchState = null) {
     photoSource: photo.source,
     imageCandidates: photos,
     images: photos,
-    photoStatus: photoIdentityMatched ? "generation_matched" : "model_year_matched"
+    photoStatus: photoIdentityMatched ? "generation_matched" : photoYearMatched ? "model_year_matched" : "official_current_model_match"
   };
 }
 
@@ -1615,27 +1660,65 @@ async function buildCars(input, searchState = createSearchState()) {
     return [];
   });
   const generalSources = assignSourceIds(generalRows, 1, 4);
-  const candidateResult = await generateAI(candidatePrompt(input, generalSources), {
-    maxOutputTokens: 700,
-    schema: CANDIDATE_SCHEMA,
-    schemaName: "carmatch_candidates"
-  });
-  if (!Array.isArray(candidateResult?.cars) || candidateResult.cars.length !== 3) throw new HttpError("AI nedokázala vybrať presne tri kandidátske vozidlá.", 502, "INVALID_CANDIDATES");
-  const candidates = candidateResult.cars.map((candidate, index) => {
-    const brand = cleanString(candidate?.brand, 80);
-    const model = cleanString(candidate?.model, 100);
-    if (!brand || !model) throw new HttpError(`Pri kandidátovi č. ${index + 1} chýba značka alebo model.`, 502, "CANDIDATE_IDENTITY_INCOMPLETE");
-    return { brand, model };
-  });
-  const unique = new Set(candidates.map(car => normalized(`${car.brand} ${car.model}`)));
-  if (unique.size !== 3) throw new HttpError("AI vybrala duplicitné modely namiesto troch odlišných vozidiel.", 502, "DUPLICATE_CARS");
+  const rejectedCandidates = [];
+  let candidates = null;
+  let modelSources = [];
+  let sourceGroups = [];
+  let currentnessPassed = false;
 
-  const { all: modelSources, perCar: sourceGroups } = await collectModelSources(candidates, generalSources.length + 1, searchState);
+  // Dva pokusy maximum: druhý vyberie náhrady, ak prvý výber nemá dôkaz
+  // aktuálnej európskej ponuky. Zastarané/regionálne modely sa nezobrazia.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const candidateResult = await generateAI(candidatePrompt(input, generalSources, rejectedCandidates), {
+      maxOutputTokens: 850,
+      schema: CANDIDATE_SCHEMA,
+      schemaName: `carmatch_candidates_v41_attempt_${attempt + 1}`
+    });
+    if (!Array.isArray(candidateResult?.cars) || candidateResult.cars.length !== 3) {
+      throw new HttpError("AI nedokázala vybrať presne tri kandidátske vozidlá.", 502, "INVALID_CANDIDATES");
+    }
+    const proposed = candidateResult.cars.map((candidate, index) => {
+      const brand = cleanString(candidate?.brand, 80);
+      const model = cleanString(candidate?.model, 100);
+      if (!brand || !model) throw new HttpError(`Pri kandidátovi č. ${index + 1} chýba značka alebo model.`, 502, "CANDIDATE_IDENTITY_INCOMPLETE");
+      return { brand, model };
+    });
+    const unique = new Set(proposed.map(car => normalized(`${car.brand} ${car.model}`)));
+    if (unique.size !== 3) throw new HttpError("AI vybrala duplicitné modely namiesto troch odlišných vozidiel.", 502, "DUPLICATE_CARS");
+
+    const research = await collectModelSources(proposed, generalSources.length + 1, searchState);
+    const invalid = proposed.filter((candidate, index) => !hasCurrentEuropeanEvidence(candidate, research.perCar[index]));
+    if (!invalid.length) {
+      candidates = proposed;
+      modelSources = research.all;
+      sourceGroups = research.perCar;
+      currentnessPassed = true;
+      break;
+    }
+    for (const candidate of invalid) {
+      const label = `${candidate.brand} ${candidate.model}`;
+      if (!rejectedCandidates.includes(label)) rejectedCandidates.push(label);
+    }
+    console.warn("CARMATCH AI: candidate set rejected; current European offer not verified", {
+      attempt: attempt + 1,
+      rejected: invalid.map(car => `${car.brand} ${car.model}`)
+    });
+  }
+
+  if (!currentnessPassed || !candidates) {
+    throw new HttpError(
+      "Nepodarilo sa spoľahlivo potvrdiť aktuálnu európsku ponuku všetkých troch vybraných áut. Aplikácia radšej nezobrazí zastarané alebo regionálne nesprávne modely.",
+      502,
+      "CURRENT_EU_MODELS_NOT_VERIFIED",
+      { rejectedCandidates }
+    );
+  }
+
   const relevantSources = [...generalSources, ...modelSources].slice(0, MAX_TOTAL_SOURCES);
   const finalResult = await generateAI(detailedPrompt(input, candidates, sourceGroups), {
     maxOutputTokens: 2400,
     schema: FINAL_SCHEMA,
-    schemaName: "carmatch_vehicle_results_v40"
+    schemaName: "carmatch_vehicle_results_v41"
   });
 
   const finalSlots = [finalResult?.vehicle1, finalResult?.vehicle2, finalResult?.vehicle3];
@@ -1667,6 +1750,7 @@ async function buildCars(input, searchState = createSearchState()) {
   console.info("CARMATCH AI: technical verification summary", cars.map(car => ({
     car: car.name,
     sourceCount: car.sourceIds.length,
+    currentModelVerified: car.currentModelVerified === true,
     generationVerified: Boolean(car.generation),
     modelYearVerified: Number.isInteger(car.modelYear),
     powerVerified: car.power !== "Neoverené",
@@ -1679,7 +1763,16 @@ async function buildCars(input, searchState = createSearchState()) {
   validateFilters(cars, input.filters);
   const firstPhoto = await findPhotosForCar(cars[0], searchState);
   const remainingPhotos = await mapWithConcurrency(cars.slice(1), 2, car => findPhotosForCar(car, searchState));
-  return { cars: [firstPhoto, ...remainingPhotos], sources: verifiedSources };
+  const finalCars = [firstPhoto, ...remainingPhotos];
+  console.info("CARMATCH AI: final photo summary", finalCars.map(car => ({
+    car: car.name,
+    photoStatus: car.photoStatus,
+    hasImage: Boolean(car.image),
+    currentModelVerified: car.currentModelVerified === true,
+    generationVerified: Boolean(car.generation),
+    modelYearVerified: Number.isInteger(car.modelYear)
+  })));
+  return { cars: finalCars, sources: verifiedSources };
 }
 
 /* ---------------------------- REQUEST HANDLER ---------------------------- */
@@ -1724,7 +1817,7 @@ export default async function handler(req, res) {
       remaining,
       dailyLimit: DAILY_LIMIT,
       warning: null,
-      message: "Vybrali sme tri vozidlá. Zobrazené údaje sú overené podľa dostupných zdrojov; neoverené hodnoty sú výslovne označené a fotografia sa zobrazí iba vtedy, keď sa podarí nájsť zhodu."
+      message: "Vybrali sme tri vozidlá s overiteľnou aktuálnou európskou ponukou. Zobrazené údaje sú overené podľa dostupných zdrojov; neoverené hodnoty sú výslovne označené a fotografia sa zobrazí iba pri dostatočnej zhode."
     });
   } catch (error) {
     console.error("CARMATCH AI backend error:", {
