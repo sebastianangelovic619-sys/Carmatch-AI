@@ -1,10 +1,18 @@
 "use strict";
 
 /* ============================================================
-   CARMATCH AI — BACKEND v37
+   CARMATCH AI — BACKEND v38
    Kompatibilita: frontend app.js v21
    Endpoint: POST /api/search
    package.json: { "type": "module" }
+
+   OPRAVY v38:
+   - Technické rešerše používajú samostatné dopyty pre špecifikácie, ceny a identitu/generáciu.
+   - Kombinovaný dopyt na technické údaje a cenu dopĺňa Tavily Advanced Search s extrahovaným obsahom stránok.
+   - Výsledky Serper a Tavily sa pri rozšírených rešeršiach kombinujú a deduplikujú podľa URL.
+   - Zväčšené úryvky zdrojov a počet zdrojov na auto, aby AI dostala viac skutočných dôkazov.
+   - Pridané diagnostické logy pokrytia zdrojov a overených technických polí.
+   - Overovanie výkonu rozpoznáva aj európske jednotky PS/CV; prepočet do kW sa kontroluje číselne.
 
    OPRAVY v37:
    - Serper Images používa bežné nequoted dopyty a najviac 10 výsledkov; kompatibilita s bezplatným účtom.
@@ -47,9 +55,9 @@
 
 const DAILY_LIMIT = 5;
 const MAX_QUERY_LENGTH = 1000;
-const MAX_SOURCES_PER_CAR = 3;
-const MAX_TOTAL_SOURCES = 20;
-const MAX_SOURCE_SNIPPET = 360;
+const MAX_SOURCES_PER_CAR = 5;
+const MAX_TOTAL_SOURCES = 26;
+const MAX_SOURCE_SNIPPET = 1400;
 const MAX_IDENTITY_RESEARCH_SOURCES_PER_CAR = 2;
 const AUTH_TIMEOUT_MS = 8000;
 const RPC_TIMEOUT_MS = 8000;
@@ -460,8 +468,9 @@ async function serperSearch(query, type = "search", num = 8) {
   return type === "images" ? (data.images || []) : (data.organic || []);
 }
 
-async function tavilySearch(query) {
+async function tavilySearch(query, options = {}) {
   if (!TAVILY_API_KEY) return [];
+  const deep = options.deep === true;
   const response = await fetchWithTimeout(
     "https://api.tavily.com/search",
     {
@@ -470,11 +479,12 @@ async function tavilySearch(query) {
       body: JSON.stringify({
         api_key: TAVILY_API_KEY,
         query,
-        search_depth: "basic",
+        search_depth: deep ? "advanced" : "basic",
         topic: "general",
-        max_results: 6,
+        max_results: deep ? 5 : 6,
         include_answer: false,
-        include_raw_content: false
+        include_raw_content: deep ? "text" : false,
+        ...(deep ? { chunks_per_source: 2 } : {})
       })
     },
     SEARCH_TIMEOUT_MS
@@ -486,49 +496,76 @@ async function tavilySearch(query) {
     error.provider = "tavily";
     throw error;
   }
-  return (data.results || []).map(item => ({ title: item.title, link: item.url, snippet: item.content }));
+  return (data.results || []).map(item => ({
+    title: item.title,
+    link: item.url,
+    snippet: item.content,
+    raw_content: item.raw_content
+  }));
 }
 
 function normalizeSource(item) {
   const url = safeHttpsUrl(item?.link || item?.url);
   if (!url) return null;
   const title = cleanString(item?.title || "Webový zdroj", 180);
-  const snippet = cleanString(item?.snippet || item?.content || item?.description || "", MAX_SOURCE_SNIPPET);
+  const primary = cleanString(item?.snippet || item?.content || item?.description || "", MAX_SOURCE_SNIPPET);
+  const raw = cleanString(item?.raw_content || item?.rawContent || "", MAX_SOURCE_SNIPPET);
+  const combined = primary && raw && !raw.includes(primary)
+    ? `${primary} ${raw}`
+    : (primary || raw);
+  const snippet = cleanString(combined, MAX_SOURCE_SNIPPET);
   if (!title && !snippet) return null;
   return { title, url, snippet };
 }
 
-async function searchSources(query, state = createSearchState()) {
-  let rows = [];
+async function searchSources(query, state = createSearchState(), options = {}) {
+  let serperRows = [];
+  let tavilyRows = [];
   let providerSucceeded = false;
   let attempted = 0;
 
-  if (SERPER_API_KEY && !state.disabled.serper) {
+  const runSerper = async () => {
+    if (!SERPER_API_KEY || state.disabled.serper) return [];
     attempted++;
     try {
-      rows = await serperSearch(query, "search", 8);
+      const rows = await serperSearch(query, "search", 8);
       providerSucceeded = true;
+      return rows || [];
     } catch (error) {
       recordSearchFailure(state, "serper", error);
       console.warn("CARMATCH AI: Serper search failed", {
         statusCode: Number(error?.statusCode) || null,
         message: cleanString(error?.message, 300)
       });
+      return [];
     }
-  }
+  };
 
-  if ((!rows || !rows.length) && TAVILY_API_KEY && !state.disabled.tavily) {
+  const runTavily = async () => {
+    if (!TAVILY_API_KEY || state.disabled.tavily) return [];
     attempted++;
     try {
-      rows = await tavilySearch(query);
+      const rows = await tavilySearch(query, options);
       providerSucceeded = true;
+      return rows || [];
     } catch (error) {
       recordSearchFailure(state, "tavily", error);
       console.warn("CARMATCH AI: Tavily search failed", {
         statusCode: Number(error?.statusCode) || null,
+        deepSearch: options.deep === true,
         message: cleanString(error?.message, 300)
       });
+      return [];
     }
+  };
+
+  if (options.deep === true) {
+    // Deep technical and price queries deliberately combine both providers.
+    [serperRows, tavilyRows] = await Promise.all([runSerper(), runTavily()]);
+  } else {
+    serperRows = await runSerper();
+    // Keep ordinary searches inexpensive; use Tavily as fallback when needed.
+    if (!serperRows.length) tavilyRows = await runTavily();
   }
 
   const noProviderAvailable =
@@ -551,13 +588,19 @@ async function searchSources(query, state = createSearchState()) {
 
   const unique = [];
   const seen = new Set();
-  for (const item of rows || []) {
+  for (const item of [...(serperRows || []), ...(tavilyRows || [])]) {
     const source = normalizeSource(item);
     if (!source || seen.has(source.url)) continue;
     seen.add(source.url);
     unique.push(source);
-    if (unique.length >= 8) break;
+    if (unique.length >= 10) break;
   }
+  console.info("CARMATCH AI: web source search", {
+    mode: options.deep === true ? "advanced-combined" : "standard-fallback",
+    serperReceived: serperRows.length,
+    tavilyReceived: tavilyRows.length,
+    accepted: unique.length
+  });
   return unique;
 }
 
@@ -939,14 +982,29 @@ function modelResearchQueries(candidate) {
   const currentYear = new Date().getUTCFullYear();
   const nextYear = currentYear + 1;
 
-  // Oddelené otázky hľadajú generáciu, modelový/produkčný rok a konkrétny
-  // typový kód. Vyhľadávač tak nedostáva iba všeobecné otázky na špecifikácie.
-  const aliases = brandAliases(brand);
-  const shortBrand = aliases.length > 1 ? aliases[1] : brand;
+  // Štyri samostatné dopyty znižujú riziko, že všeobecný výsledok prekryje
+  // dôležitý údaj. Rozšírený Tavily režim sa používa v kombinovanom dopyte na techniku a cenu.
   return [
-    `"${brand}" "${model}" current generation generation code chassis code Europe`,
-    `"${shortBrand}" "${model}" generation code production period first year Europe`,
-    `"${brand}" "${model}" model year model years production years ${currentYear} ${nextYear}`
+    {
+      type: "technical-overview",
+      deep: false,
+      query: `"${brand}" "${model}" official specifications Europe engine drivetrain dimensions luggage capacity seats`
+    },
+    {
+      type: "technical-specifications",
+      deep: true,
+      query: `"${brand}" "${model}" technical data power kW PS engine 4x4 AWD boot capacity litres WLTP seats transmission fuel official price list EUR Slovakia Europe`
+    },
+    {
+      type: "market-price",
+      deep: false,
+      query: `"${brand}" "${model}" price list EUR Slovakia Europe current model official price configurator ${currentYear} ${nextYear}`
+    },
+    {
+      type: "generation-model-year",
+      deep: false,
+      query: `"${brand}" "${model}" current generation type code chassis code production years model year ${currentYear} ${nextYear} Europe`
+    }
   ];
 }
 
@@ -1027,10 +1085,10 @@ async function collectModelSources(candidates, firstSourceId = 1, searchState = 
   const results = await Promise.all(candidates.map(async candidate => {
     const queries = modelResearchQueries(candidate);
     const queryErrors = [];
-    const groups = await Promise.all(queries.map(query =>
-      searchSources(query, searchState).catch(error => {
-        queryErrors.push({ code: error?.code || "SEARCH_ERROR", message: cleanString(error?.message, 240) });
-        console.warn(`CARMATCH AI: model source search failed for ${candidate.brand} ${candidate.model}:`, error.message);
+    const groups = await Promise.all(queries.map(item =>
+      searchSources(item.query, searchState, { deep: item.deep, type: item.type }).catch(error => {
+        queryErrors.push({ type: item.type, code: error?.code || "SEARCH_ERROR", message: cleanString(error?.message, 240) });
+        console.warn(`CARMATCH AI: model source search failed for ${candidate.brand} ${candidate.model} (${item.type}):`, error.message);
         return [];
       })
     ));
@@ -1044,7 +1102,10 @@ async function collectModelSources(candidates, firstSourceId = 1, searchState = 
 
     const matched = [...byUrl.values()]
       .filter(item => vehicleMatchesSource(candidate, item))
-      .sort((a, b) => sourceIdentityScore(candidate, b) - sourceIdentityScore(candidate, a))
+      .sort((a, b) =>
+        sourceIdentityScore(candidate, b) - sourceIdentityScore(candidate, a) ||
+        (b.snippet || "").length - (a.snippet || "").length
+      )
       .slice(0, MAX_SOURCES_PER_CAR);
 
     if (!matched.length) {
@@ -1065,6 +1126,16 @@ async function collectModelSources(candidates, firstSourceId = 1, searchState = 
       );
     }
 
+    console.info("CARMATCH AI: model source coverage", {
+      car: `${candidate.brand} ${candidate.model}`,
+      queries: queries.length,
+      accepted: matched.length,
+      sources: matched.map(source => ({
+        title: cleanString(source.title, 100),
+        host: (() => { try { return new URL(source.url).hostname; } catch (_) { return "unknown"; } })(),
+        excerptLength: (source.snippet || "").length
+      }))
+    });
     return matched;
   }));
 
@@ -1106,10 +1177,13 @@ PRAVIDLÁ:
 - Modelový rok nie je rok publikovania článku ani dátum webovej stránky. Uveď ho len vtedy, keď zdroj výslovne hovorí o modelovom roku (model year, MY, modelový rok) alebo jasne označuje konkrétnu modelovú verziu. Inak null.
 - Ak generáciu alebo modelový rok nevieš potvrdiť, použi null. Nikdy ich neodhaduj.
 - sourceIds uveď ako ID zdrojov priradených k danému autu, ktoré podporujú jeho identitu.
-- Výkon uveď iba v kW. Spotrebu iba WLTP. Kufor musí patriť konkrétnej karosérii/verzii.
-- Cenu v EUR uveď iba pri dôkaze pre konkrétnu verziu/trh; inak "Cena neoverená". Nevypočítavaj odhadom.
+- Prečítaj celé poskytnuté úryvky vrátane rozšíreného obsahu Tavily; nehľadaj údaje iba v názvoch stránok.
+- Výkon uveď iba v kW. Ak zdroj uvádza PS/CV alebo hp, môžeš ich matematicky previesť na kW; neodhaduj výkon podľa názvu motora.
+- Spotrebu uveď iba WLTP. Kufor, rozmery a hmotnosti musia patriť konkrétnej karosérii/verzii.
+- Cenu v EUR uveď iba pri dôkaze pre konkrétnu verziu a trh; uprednostni cenník alebo oficiálnu stránku výrobcu. Inak "Cena neoverená". Nevypočítavaj odhadom.
 - Nezamieňaj systémový výkon hybridu s výkonom spaľovacieho motora.
-- Motor, palivo, prevodovku, pohon, karosériu a sedadlá uveď iba pri zdroji, ktorý ich potvrdzuje.
+- Motor, palivo, prevodovku, pohon, karosériu a sedadlá uveď iba pri zdroji, ktorý ich potvrdzuje. Pri pohone rozlišuj 4x4/AWD od pohonu predných alebo zadných kolies.
+- Ak existuje viac motorizácií, vyber iba konkrétnu verziu, ktorej technické údaje zodpovedajú požiadavke; nemiešaj parametre rôznych verzií.
 - officialUrl a configurator musia byť presné URL výrobcu prítomné v zdrojoch daného modelu. priceSource musí podporovať konkrétnu cenu.
 - Neznáme textové údaje vyplň prázdnym reťazcom alebo "Neoverené" podľa významu. Neznáme čísla a generáciu/rok vyplň null.
 - Žiadne vymyslené skóre, URL, ceny, servisné sumy, poruchy ani technické údaje.
@@ -1150,8 +1224,10 @@ function verifyPower(value, evidence) {
   const amount = Number(match[1].replace(",", "."));
   const kws = [...evidence.matchAll(/(\d+(?:[.,]\d+)?)\s*kW\b/gi)].map(m => Number(m[1].replace(",", ".")));
   const hps = [...evidence.matchAll(/(\d+(?:[.,]\d+)?)\s*(?:hp|bhp)\b/gi)].map(m => Number(m[1].replace(",", ".")));
+  const metricPowers = [...evidence.matchAll(/(\d+(?:[.,]\d+)?)\s*(?:PS|CV)\b/gi)].map(m => Number(m[1].replace(",", ".")));
   return kws.some(n => approximatelyEqual(amount, n, 0.02, 2)) ||
-    hps.some(n => approximatelyEqual(amount * 1.341022, n, 0.025, 3));
+    hps.some(n => approximatelyEqual(amount * 1.341022, n, 0.025, 3)) ||
+    metricPowers.some(n => approximatelyEqual(amount * 1.35962, n, 0.025, 3));
 }
 
 function verifyUnitNumber(value, evidence, unitPattern, tolerance = 0.02, minimum = 1) {
@@ -2044,6 +2120,18 @@ async function buildCars(input, searchState = createSearchState()) {
   const identities = new Set(cars.map(car => normalized(`${car.brand} ${car.model}`)));
   if (identities.size !== 3) throw new HttpError("Výsledok obsahuje duplicitné modely.", 502, "DUPLICATE_CARS");
 
+  console.info("CARMATCH AI: technical verification summary", cars.map(car => ({
+    car: car.name,
+    sourceCount: car.sourceIds.length,
+    generationVerified: Boolean(car.generation),
+    modelYearVerified: Number.isInteger(car.modelYear),
+    powerVerified: car.power !== "Neoverené",
+    priceVerified: car.price !== "Cena neoverená",
+    drivetrainVerified: car.drivetrain !== "Neoverené",
+    trunkVerified: car.trunkLiters !== null,
+    seatsVerified: car.seats !== null
+  })));
+
   validateFilters(cars, input.filters);
   const withPhotos = [];
   for (const car of cars) {
@@ -2108,7 +2196,7 @@ export default async function handler(req, res) {
       remaining,
       dailyLimit: DAILY_LIMIT,
       warning: null,
-      message: "Vybrali sme tri vozidlá; pri každom je priradená fotografia a zdroj."
+      message: "Vybrali sme tri vozidlá; technické údaje a fotografie boli spracované podľa dostupných zdrojov."
     });
   } catch (error) {
     console.error("CARMATCH AI backend error:", {
